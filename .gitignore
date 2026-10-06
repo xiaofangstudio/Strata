@@ -13,7 +13,12 @@ pnpm-debug.log*
 src-tauri/target/
 target/
 **/*.rs.bk
-Cargo.lock
+# Strata 是应用程序（非库），Cargo.lock 需要入库以保证构建可复现
+!Cargo.lock
+
+# ---- Tauri 生成物 ----
+src-tauri/gen/schemas/
+src-tauri/.tauri/
 
 # ---- 编辑器 / 系统 ----
 .vscode/*

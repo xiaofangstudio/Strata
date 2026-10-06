@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Strata 桌面端默认权限：核心能力 + 打开外部链接 + 原生文件对话框",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default", "dialog:default"]
+}

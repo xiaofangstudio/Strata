@@ -1,0 +1,31 @@
+[package]
+name = "strata"
+version = "0.1.0"
+description = "Strata · Windows 优先、全中文、永久免费开源（MIT）的修图与绘画工具"
+authors = ["小方工作室"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+# 主入口在 src/main.rs，业务逻辑全部收在 lib 里，便于后续单元测试
+[lib]
+name = "strata_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 体积红线 ≤ 100MB：发布版优先体积
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+incremental = false

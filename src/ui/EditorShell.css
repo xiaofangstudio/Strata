@@ -1,0 +1,147 @@
+.editor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* ---------- 顶栏 ---------- */
+.editor-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-doc {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+.editor-doc-name {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-doc-meta {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-top-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.zoom-label {
+  min-width: 52px;
+  text-align: right;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.btn-sm {
+  height: 32px;
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+/* ---------- 视口 ---------- */
+.editor-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  background: var(--canvas-bg);
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 140, 0.09) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 140, 0.09) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 140, 0.09) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 140, 0.09) 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+  padding: var(--sp-4);
+}
+
+.editor-stage {
+  position: relative;
+  flex: none;
+  box-shadow: var(--shadow-md);
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d9d9de 25%, transparent 25%),
+    linear-gradient(-45deg, #d9d9de 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d9d9de 75%),
+    linear-gradient(-45deg, transparent 75%, #d9d9de 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+.editor-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
+/* ---------- 底栏 ---------- */
+.editor-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 6px var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.editor-error {
+  color: var(--danger);
+}
+
+/* ---------- 轻提示 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  padding: var(--sp-2) var(--sp-5);
+  font-size: var(--fs-sm);
+  color: #fff;
+  background: rgba(28, 28, 33, 0.92);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-md);
+  animation: toast-in var(--dur) var(--ease);
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
