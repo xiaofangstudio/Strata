@@ -55,12 +55,21 @@ input {
   color: inherit;
 }
 
+img {
+  display: block;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 :focus-visible {
   outline: 2px solid var(--accent-ring);
   outline-offset: 2px;
 }
 
-/* 滚动条：细、低对比 */
+/* 滚动条：细、低对比、悬停才显形 */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -82,6 +91,95 @@ input {
   background: transparent;
 }
 
+/* ---------- 按钮基元 ----------
+   全局共用：开始页面、编辑壳、浮层底部操作区都吃这一套，
+   避免把按钮样式挂在某个页面自己的样式表里。 */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: var(--h-ctl-lg);
+  padding: 0 var(--sp-5);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-active);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-ctl);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.5;
+}
+
+.btn-link {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  border-radius: var(--r-xs);
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.btn-link:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 尺寸修饰：工具栏用 sm，状态栏等极窄处用 xs */
+.btn-sm {
+  height: var(--h-ctl);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.btn-xs {
+  height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.badge {
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+}
+
 /* 窗口顶部拖动区（桌面端无边框时可拖，保留以适配后续自定义标题栏） */
 .drag-region {
   -webkit-app-region: drag;
@@ -89,4 +187,32 @@ input {
 
 .no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* 仅屏幕阅读器可见 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- 动效总开关 ----------
+   界面里所有过渡与关键帧都是为了「说明发生了什么」，不是装饰。
+   系统里关掉动效时（无障碍设置 / 低性能设备）一律归零：该出的状态照样出，
+   只是不再有过程 —— 绝不能因为动画让某块内容一直停在半路。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }

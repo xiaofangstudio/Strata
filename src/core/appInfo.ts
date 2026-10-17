@@ -24,3 +24,8 @@ export function platformLabel(info: AppInfo | null): string {
   const os = info.platform === "windows" ? "Windows" : info.platform;
   return `${os} · ${info.arch}`;
 }
+
+/** 退出应用。内核命令 quit_app 直接结束进程。 */
+export async function quitApp(): Promise<void> {
+  await invoke("quit_app");
+}

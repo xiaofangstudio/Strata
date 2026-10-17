@@ -1,0 +1,127 @@
+/**
+ * 命令面板样式。
+ *
+ * 居中的一块扁平浮层：一个输入框 + 一列结果 + 一行脚注提示。
+ * 不做多余装饰，键盘全程可用。
+ */
+
+.cp-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: var(--mask);
+  animation: cp-mask-in var(--dur-fast) var(--ease);
+}
+
+@keyframes cp-mask-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.cp {
+  width: min(560px, 92vw);
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  animation: cp-in var(--dur) var(--ease-out);
+}
+
+@keyframes cp-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+}
+
+.cp-input {
+  flex: none;
+  height: 52px;
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-lg);
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.cp-input:focus {
+  outline: none;
+}
+
+.cp-input::placeholder {
+  color: var(--text-3);
+}
+
+.cp-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+
+.cp-empty {
+  margin: var(--sp-5) 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.cp-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  min-height: 40px;
+  font-size: var(--fs-md);
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.cp-item.is-on {
+  background: var(--accent-soft);
+}
+
+.cp-group {
+  flex: none;
+  min-width: 44px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.cp-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-hint {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-foot {
+  flex: none;
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  border-top: 1px solid var(--border);
+}

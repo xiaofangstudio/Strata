@@ -1,18 +1,24 @@
 /**
  * Strata 设计令牌。
  *
- * 约定（见交接文档 §四）：扁平、统一圆角（8 / 12 / 999）、
- * 浅色默认 + 深色可切、品牌紫为唯一强调色。
+ * 约定（见交接文档 §四、立项规划书 §7.3）：
+ * 极度扁平、统一圆角（6 / 8 / 12 / 16 / 999）、浅色默认 + 深色可切、
+ * 全应用只有两味：中性黑（深灰 #3d3d3d 系）+ 品牌蓝（#6fc0ff 系），
+ * 品牌蓝为唯一强调色、不用重阴影与强渐变。
  * 所有组件只允许引用这里的变量，不写死颜色。
+ * 严禁引入紫色或任何第二强调色。
  */
 
 :root {
-  /* 圆角 */
+  /* 圆角：小控件 6，输入与按钮 8，面板 12，大容器 16，胶囊 999 */
+  --r-xs: 6px;
   --r-sm: 8px;
   --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
   --r-full: 999px;
 
-  /* 间距 */
+  /* 间距节奏（4 的倍数） */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -20,26 +26,36 @@
   --sp-5: 24px;
   --sp-6: 32px;
   --sp-7: 48px;
+  --sp-8: 64px;
 
-  /* 字号 */
+  /* 字号层级 */
   --fs-xs: 12px;
   --fs-sm: 13px;
   --fs-md: 14px;
   --fs-lg: 16px;
   --fs-xl: 20px;
   --fs-2xl: 26px;
+  --fs-3xl: 34px;
 
-  /* 品牌色：全应用唯一强调色 */
-  --accent: #6e56cf;
-  --accent-hover: #5b45b8;
-  --accent-active: #4d3a9e;
-  --accent-soft: rgba(110, 86, 207, 0.1);
-  --accent-ring: rgba(110, 86, 207, 0.35);
+  /* 控件尺寸 */
+  --h-ctl: 34px;
+  --h-ctl-lg: 40px;
+
+  /* 品牌蓝：全应用唯一强调色。取自 logo 外圈那抹亮蓝（rgb 111,192,255）。
+     浅色主题下用同色相压深一档，才能在白底上做文字与主按钮填充。 */
+  --accent: #0f76d6;
+  --accent-hover: #0b62b8;
+  --accent-active: #0a529c;
+  --accent-soft: rgba(15, 118, 214, 0.1);
+  --accent-ring: rgba(15, 118, 214, 0.35);
+  --accent-ink: #ffffff;
 
   /* 动效 */
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 120ms;
   --dur: 180ms;
+  --dur-slow: 280ms;
 }
 
 /* ---------- 浅色（默认） ---------- */
@@ -47,48 +63,85 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f5f5f7;
+  --bg: #f4f4f6;
+  --bg-tint: rgba(15, 118, 214, 0.05);
   --surface: #ffffff;
-  --surface-2: #f2f2f5;
-  --surface-3: #e9e9ee;
+  --surface-2: #f4f4f6;
+  --surface-3: #e8e8ec;
 
-  --border: #e3e3e9;
-  --border-strong: #d2d2da;
+  --border: #e6e6ea;
+  --border-strong: #d2d2d8;
 
-  --text: #1b1b21;
-  --text-2: #61616d;
-  --text-3: #9a9aa6;
+  --text: #17171c;
+  --text-2: #5c5c68;
+  --text-3: #8f8f9c;
 
-  --canvas-bg: #e6e6ea;
-  --danger: #d0453f;
+  --hover: rgba(20, 20, 30, 0.045);
+  --pressed: rgba(20, 20, 30, 0.09);
 
+  --canvas-bg: #ececf0;
+  --checker: #d8d8dc;
+  --danger: #cf4038;
+  /* 视图 > 网格的线色：浅色主题下用淡淡的中性黑，够看又不抢画面 */
+  --grid-line: rgba(0, 0, 0, 0.1);
+
+  /* 编辑器视口的底纹，以及轻提示（深底浅字，两套主题要反转） */
+  --editor-mat: rgba(128, 128, 140, 0.09);
+  --toast-bg: rgba(28, 28, 33, 0.92);
+  --toast-ink: #ffffff;
+
+  /* 画布纸面：无论哪套主题都是白纸，因为它如实代表画布本身 */
+  --paper: #ffffff;
+  --mask: rgba(16, 16, 22, 0.42);
+
+  --shadow-xs: 0 1px 1px rgba(20, 20, 30, 0.04);
   --shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.05);
-  --shadow-md: 0 4px 16px rgba(20, 20, 30, 0.08);
-  --shadow-lg: 0 16px 48px rgba(20, 20, 30, 0.14);
+  --shadow-md: 0 6px 20px rgba(20, 20, 30, 0.09);
+  --shadow-lg: 0 20px 56px rgba(20, 20, 30, 0.16);
 }
 
 /* ---------- 深色 ---------- */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #131317;
-  --surface: #1c1c21;
-  --surface-2: #25252c;
-  --surface-3: #2f2f38;
+  --bg: #111114;
+  --bg-tint: rgba(111, 192, 255, 0.08);
+  --surface: #1a1a1f;
+  --surface-2: #232327;
+  --surface-3: #2d2d32;
 
-  --border: #2e2e37;
-  --border-strong: #3d3d48;
+  --border: #2b2b2f;
+  --border-strong: #3c3c40;
 
-  --text: #ececf1;
-  --text-2: #a2a2ae;
-  --text-3: #6d6d79;
+  --text: #eeeef2;
+  --text-2: #a4a4b0;
+  --text-3: #70707d;
 
-  --canvas-bg: #0d0d10;
-  --danger: #e06b65;
+  --hover: rgba(255, 255, 255, 0.055);
+  --pressed: rgba(255, 255, 255, 0.1);
 
-  --accent-soft: rgba(110, 86, 207, 0.18);
+  --canvas-bg: #0c0c0f;
+  --checker: #2a2a2e;
+  --danger: #e2766f;
+  --grid-line: rgba(255, 255, 255, 0.12);
 
+  --editor-mat: rgba(255, 255, 255, 0.05);
+  --toast-bg: rgba(238, 238, 242, 0.94);
+  --toast-ink: #17171c;
+
+  --paper: #ffffff;
+  --mask: rgba(0, 0, 0, 0.6);
+
+  /* 深色下直接用 logo 里那抹亮蓝本身，配深墨字，对比 9:1 以上 */
+  --accent: #6fc0ff;
+  --accent-hover: #8ed0ff;
+  --accent-active: #57aef2;
+  --accent-soft: rgba(111, 192, 255, 0.16);
+  --accent-ring: rgba(111, 192, 255, 0.4);
+  --accent-ink: #06121f;
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.35);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.6);
 }

@@ -1,0 +1,203 @@
+/* 偏好设置：左侧竖排标签 + 右侧内容，与 PS 首选项同构。 */
+
+.pref {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: var(--sp-5);
+  min-height: 320px;
+}
+
+.pref-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: var(--sp-3);
+  border-right: 1px solid var(--border);
+}
+
+.pref-tab {
+  height: var(--h-ctl);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  text-align: left;
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pref-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pref-tab.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.pref-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.pref-sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pref-h {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pref-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* 主题卡片 */
+.pref-choice {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.pref-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.pref-card:hover {
+  border-color: var(--border-strong);
+}
+
+.pref-card.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pref-swatch {
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.pref-swatch.is-light {
+  background: #ffffff;
+}
+
+.pref-swatch.is-dark {
+  background: #1a1a1f;
+}
+
+.pref-card-name {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+/* 分段选择 */
+.pref-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  align-self: flex-start;
+}
+
+.pref-seg-btn {
+  width: 40px;
+  height: 26px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  border-radius: var(--r-xs);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pref-seg-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pref-seg-btn.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* 工具显隐 */
+.pref-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pref-tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px dashed var(--border);
+}
+
+.pref-tool-group:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.pref-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pref-tool:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.pref-tool input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* 滑杆行 */
+.pref-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.pref-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.pref-val {
+  min-width: 46px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: var(--fs-xs);
+  text-align: right;
+  color: var(--text-2);
+}

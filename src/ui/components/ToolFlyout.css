@@ -1,0 +1,117 @@
+/**
+ * 工具二级面板（再次点击已选中的工具弹出）。
+ *
+ * 面板挂在 body 上（portal），落点在工具按钮右侧，用 fixed 定位；
+ * 内部一律沿用共享控件，所以配色只用设计令牌，不写死颜色、不用紫色。
+ */
+
+.tool-flyout {
+  position: fixed;
+  z-index: 80;
+  width: 272px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: tool-fly-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes tool-fly-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+
+/* ---------- 标题 ---------- */
+.fly-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.fly-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fly-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* ---------- 笔尖预览 ---------- */
+.fly-tip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.fly-tip .opt-tip {
+  width: 64px;
+  height: 64px;
+  flex: none;
+}
+
+.fly-tip-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.fly-tip-size {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fly-hint {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* ---------- 面板里的控件：都拉满一行 ---------- */
+.tool-flyout .opt {
+  width: 100%;
+}
+
+.tool-flyout .opt-range {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-flyout .opt-label {
+  flex: none;
+  min-width: 40px;
+}
+
+.tool-flyout .opt-modes {
+  flex: 1;
+}
+
+.tool-flyout .opt-mode {
+  flex: 1;
+}
+
+/* 面板里的颜色浮层已 portal 到 body，位置由控件自己算，这里不再需要定位覆盖 */
+
+.fly-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-2);
+}

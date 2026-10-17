@@ -1,0 +1,19 @@
+{
+  "name": "strata-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Strata 图像编辑器的 MCP 服务器（零依赖、纯 Node ESM、stdio）",
+  "license": "MIT",
+  "author": "小方工作室",
+  "type": "module",
+  "bin": {
+    "strata-mcp": "./strata-mcp.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
+  }
+}

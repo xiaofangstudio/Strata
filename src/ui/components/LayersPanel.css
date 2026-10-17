@@ -1,0 +1,944 @@
+/**
+ * 右侧单列面板样式（图层 / 通道 / 路径）。
+ *
+ * 一列到底，宽 264px：顶部标签条、中部属性与列表、底部操作排。
+ * 列表用等宽数字与固定行高，避免图层名长短不一导致行跳动。
+ */
+
+.panel {
+  flex: none;
+  width: 264px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+
+/* ---------- 标签条 ---------- */
+.panel-tabs {
+  flex: none;
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-tab {
+  flex: 1;
+  height: 30px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-xs) var(--r-xs) 0 0;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.panel-tab:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 页签按下：微微下沉，像被指尖压了一下 */
+.panel-tab:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.panel-tab.is-on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.panel-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------- 属性区 ---------- */
+.ly-props {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.ly-prop {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ly-prop-label {
+  flex: none;
+  width: 56px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.ly-select {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.ly-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ly-range {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  margin: 0;
+  appearance: none;
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.ly-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.ly-opacity {
+  flex: none;
+  width: 32px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 列表 ---------- */
+.ly-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-2);
+  /* 换页签时列表是整块重挂载的，这里让新内容「落」进来而不是硬切 */
+  animation: panel-in var(--dur) var(--ease-out);
+}
+
+.ly-empty {
+  margin: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  text-align: center;
+  animation: panel-in var(--dur) var(--ease-out);
+}
+
+/* ---------- 历史页 ---------- */
+
+.hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 一步一行：左侧小圆点当进度标，当前那一步用品牌蓝点亮 */
+.hist-step {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.hist-step:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 按下即回弹：跳步是即时动作，给一点指尖反馈 */
+.hist-step:active {
+  transform: scale(0.985);
+}
+
+.hist-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  transition:
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+/* 当前步：蓝点 + 浅蓝底，一眼看出「现在站在哪」 */
+.hist-step.is-now {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.hist-step.is-now .hist-dot {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+
+/* 当前步之后的都是「重做得到」的分支：压暗，提示再动一笔就会把它冲掉 */
+.hist-step.is-future {
+  opacity: 0.45;
+}
+
+.hist-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ly-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 46px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+  /* 新建 / 粘贴出来的图层「落」进列表；老行不会重挂载，因此不会跟着抖 */
+  animation: row-in var(--dur-fast) var(--ease-out) both;
+}
+
+.ly-row:hover {
+  background: var(--hover);
+}
+
+.ly-row.is-on {
+  background: var(--accent-soft);
+}
+
+/* 树形缩进：宽度由内联 style 给出，这里只管别被压缩 */
+.ly-indent {
+  flex: none;
+}
+
+/* 组的折叠三角；普通层放一个同宽的占位，保证各列对齐 */
+.ly-caret {
+  flex: none;
+  width: 12px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.ly-caret:hover {
+  color: var(--text);
+}
+
+/* 展开态：三角转 90° 朝向下方 */
+.ly-caret[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.ly-caret svg {
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ly-caret.is-empty {
+  cursor: default;
+}
+
+.ly-eye,
+.ly-lock {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.ly-eye:hover,
+.ly-lock:hover {
+  color: var(--text);
+  background: var(--pressed);
+}
+
+.ly-eye.is-off {
+  color: var(--text-3);
+  opacity: 0.7;
+}
+
+.ly-lock {
+  color: var(--text-3);
+}
+
+.ly-lock.is-on {
+  color: var(--accent);
+}
+
+.ly-thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, var(--checker) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker) 75%);
+  background-size: 8px 8px;
+  background-position:
+    0 0,
+    0 4px,
+    4px -4px,
+    -4px 0;
+}
+
+.ly-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ly-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+}
+
+.ly-name-input:focus {
+  outline: none;
+}
+
+.ly-flag {
+  flex: none;
+  padding: 1px var(--sp-2);
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+}
+
+/* 剪贴 / 样式的标记：用品牌蓝提醒，和普通标记区分开 */
+.ly-flag.is-accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 底部操作排 ---------- */
+.ly-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.ly-foot-gap {
+  flex: 1;
+}
+
+.ly-act {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-md);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.ly-act:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ly-act:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+.ly-act:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ly-act.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 蒙版（M2） ---------- */
+
+.ly-maskbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.ly-toggle {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ly-toggle:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ly-toggle.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ly-mask-thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+.ly-mask-thumb.is-on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.ly-mask-thumb.is-off {
+  opacity: 0.45;
+}
+
+/* ---------- 调整图层（M2） ---------- */
+
+.ly-thumb-fx {
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background-image: none;
+  background: var(--accent-soft);
+}
+
+/* 图层组的徽标：不用棋盘格底，换上文件夹图标 */
+.ly-thumb-group {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background-image: none;
+  background: var(--accent-soft);
+}
+
+.ly-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.ly-adjust-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ly-adjust-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ly-mini {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.ly-mini:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+/* ---------- 调整类型菜单 ---------- */
+
+.ly-menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.ly-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 148px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  animation: ly-menu-in var(--dur-fast) var(--ease-out);
+}
+
+/* 往下弹的那一版从上方滑入，方向要和它出现的位置一致 */
+.ly-menu.is-down {
+  animation-name: ly-menu-in-down;
+}
+
+/* 菜单里的族标题（明暗 / 色彩 / 效果） */
+.ly-menu-group {
+  display: block;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.ly-menu-group:not(:first-child) {
+  margin-top: var(--sp-1);
+  border-top: 1px solid var(--border);
+}
+
+.ly-menu-item {
+  display: block;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.ly-menu-item:hover {
+  background: var(--hover);
+}
+
+/* 「添加样式」在属性区顶部，菜单要往下弹，并从右边对齐免得溢出面板 */
+.ly-menu.is-down {
+  top: calc(100% + 6px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+/* ---------- 图层样式（M2） ---------- */
+
+.ly-style-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.ly-style-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.ly-check {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.ly-check:hover {
+  background: var(--hover);
+}
+
+.ly-check.is-on {
+  color: var(--accent);
+}
+
+.ly-style-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ly-style-name:hover {
+  color: var(--accent);
+}
+
+.ly-mini.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 描边位置：三格分段控件 */
+.ly-seg {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.ly-seg-btn {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.ly-seg-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ly-seg-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 调整参数：内部分组 ---------- */
+
+.ly-group {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.ly-hint {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ---------- 曲线编辑器 ---------- */
+
+.ly-curve {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.ly-curve-canvas {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* ---------- 渐变映射编辑器 ---------- */
+
+.ly-grad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.ly-grad-bar {
+  position: relative;
+  height: 22px;
+  margin: 0 var(--sp-2) 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.ly-grad-stop {
+  position: absolute;
+  top: 100%;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  transform: translateX(-50%);
+  border: 2px solid var(--surface);
+  border-radius: var(--r-xs);
+  box-shadow: 0 0 0 1px var(--border-strong);
+  pointer-events: none;
+}
+
+.ly-grad-stop.is-on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* 图层样式 / 渐变停靠点的色块走自绘拾色器（ColorChip），
+   这里只定尺寸：比 .cchip-btn 默认值更宽一点，用双类选择器稳定压过默认样式。 */
+.cchip-btn.ly-color {
+  width: 34px;
+  height: 24px;
+}
+
+/* ---------- 通道页 ---------- */
+
+.ch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* 一行一个通道：眼睛、缩略图、名字三列，跟图层行同一套节奏 */
+.ch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 44px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease);
+  animation: row-in var(--dur-fast) var(--ease-out) both;
+}
+
+.ch-row:hover {
+  background: var(--hover);
+}
+
+/* 正在单独查看的那一行：浅蓝底点亮，与「当前图层」用同一套语言 */
+.ch-row.is-viewed {
+  background: var(--accent-soft);
+}
+
+/* 单通道缩略图改用黑底：透明区域在通道里就是纯黑，不该漏出棋盘格 */
+.ch-mono {
+  background-image: none;
+  background-color: #000;
+}
+
+.ch-name {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.ch-name:hover {
+  color: var(--text);
+  background: var(--pressed);
+}
+
+.ch-row.is-viewed .ch-name {
+  color: var(--text);
+}
+
+/* 单独查看时的说明条：用品牌蓝轻提示，不抢画面 */
+.ch-note {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-xs);
+  animation: panel-in var(--dur) var(--ease-out);
+}
+
+/* 通道页底排是文字按钮而不是图标按钮，单独给一套尺寸 */
+.ch-act {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.ch-act:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--pressed);
+}
+
+.ch-act:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ch-act:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 主操作（载入选区）用品牌蓝实心，一眼看到该点哪儿 */
+.ch-act.is-primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ch-act.is-primary:hover:not(:disabled) {
+  color: var(--accent-ink);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* ---------- 面板动效 ----------
+   一律围绕「从哪来、到哪去」：换页签是内容替换，所以新内容落进来；
+   菜单是有方向的，所以从它贴着的那一侧滑入。时长全走 tokens，不另造一套。 */
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* 往上弹的菜单（如「调整图层」）：从下方滑入 */
+@keyframes ly-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+/* 往下弹的菜单（如「添加样式」）：从上方滑入 */
+@keyframes ly-menu-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+

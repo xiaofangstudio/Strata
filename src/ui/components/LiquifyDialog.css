@@ -1,0 +1,207 @@
+/* ---------- 液化 ----------
+   左边一整块「画布」，右边一列参数。配色只用中性色 + 品牌蓝，
+   与滤镜库同一套语言：选中态 = 品牌蓝淡底 + 蓝字 + 蓝边。 */
+
+.lq {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px;
+  gap: var(--sp-4);
+}
+
+/* ---------------- 预览画布 ---------------- */
+
+.lq-stage {
+  position: relative;
+  height: 440px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.lq-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  /* 触摸设备上不要让浏览器抢走手势，否则涂一筆就滚页 */
+  touch-action: none;
+}
+
+/* 笔尖光圈：跟着指针走，尺寸 = 笔尖直径 × 当前缩放 */
+.lq-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.lq-block {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-5);
+  font-size: var(--fs-sm);
+  text-align: center;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+
+/* ---------------- 参数列 ---------------- */
+
+.lq-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.lq-hint {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.lq-legend {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.lq-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-1);
+}
+
+.lq-mode {
+  padding: 6px 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.lq-mode:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.lq-mode.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-ring);
+}
+
+.lq-mode:active {
+  transform: scale(0.98);
+}
+
+.lq-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.lq-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.lq-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.lq-field-value {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.lq-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.lq-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.lq-range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.lq-range:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.lq-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.lq-check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.lq-sub {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.lq-reset {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+.lq-note {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.lq-foot-spacer {
+  flex: 1;
+}

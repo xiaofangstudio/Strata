@@ -1,0 +1,187 @@
+/*
+ * 画笔设置面板。
+ *
+ * 结构照 PhotoCraft / PS：顶部一条真实笔画预览，下面左侧竖向分组、右侧两列参数。
+ * 这里的滑杆复用选项条的 `.opt` 骨架，所以必须把「一行挤在 42px 横条里」的尺寸
+ * 松开 —— 否则数值框会把滑杆压成一条点不动的细线。
+ */
+
+.bsp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* ---------- 预览 ---------- */
+
+.bsp-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.bsp-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.bsp-preview-title {
+  flex: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bsp-preview-hint {
+  min-width: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-3);
+  text-align: right;
+}
+
+/* 画布本身是透明的，落笔才显形；给一层浅底，浅色笔也能看清 */
+.bsp-preview-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--surface-3);
+  border-radius: var(--r-sm);
+}
+
+/* ---------- 左分组 + 右参数 ---------- */
+
+.bsp-main {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: var(--sp-4);
+  min-height: 320px;
+}
+
+.bsp-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: var(--sp-3);
+  border-right: 1px solid var(--border);
+}
+
+.bsp-tab {
+  height: var(--h-ctl);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bsp-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.bsp-tab.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.bsp-pane {
+  min-width: 0;
+}
+
+/* ---------- 参数两列 ---------- */
+
+.bsp-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-4);
+  align-content: start;
+}
+
+.bsp-wide {
+  grid-column: 1 / -1;
+}
+
+.bsp-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.bsp-note-warn {
+  color: var(--warn, #d8a657);
+}
+
+.bsp-foot-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ---------- 面板内的滑杆：占满格子，别把滑杆压没 ---------- */
+
+.bsp .opt {
+  width: 100%;
+  min-width: 0;
+}
+
+.bsp .opt-label {
+  flex: none;
+  width: 64px;
+}
+
+.bsp .opt-range {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.bsp .opt-num {
+  flex: none;
+  width: 46px;
+}
+
+/* 复选行的标签跟在方框后面，不占固定列宽 */
+.bsp .opt-check .opt-label {
+  width: auto;
+}
+
+/* 分段选择在格子里靠左排，按钮不换行 */
+.bsp .opt-modes {
+  flex-wrap: wrap;
+}
+
+/* ---------- 窄窗口：单列，别把参数挤成不可点 ---------- */
+
+@media (max-width: 720px) {
+  .bsp-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bsp-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-right: 0;
+    padding-bottom: var(--sp-2);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bsp-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,341 @@
+/**
+ * 选项条样式。
+ *
+ * 常规是一条 42px 高的横条：左端是当前工具名，中间随工具变化的参数，
+ * 右端钉死「⋯ 更多」。窗口窄到参数一行放不下时，参数区换行、整条顺势长高，
+ * 而不是把放不下的参数藏到滚动区外面 —— 藏起来就等于点不到，等同于假按钮。
+ */
+
+.optbar {
+  flex: none;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.optbar-tool {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text);
+  /* 与参数组同一节奏，工具图标 + 名字一起落进来 */
+  animation: optbar-slide-in var(--dur-fast) var(--ease-out);
+}
+
+.optbar-tool-name {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.optbar-sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+/*
+ * 参数区：占满中间，绝不把右端按钮挤走。
+ * 放不下就换行（整条随之长高），绝不藏进滚动区 ——
+ * 「看不见 / 点不到」等同于假按钮，这里一律不允许出现。
+ */
+.optbar-items {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  /* 换工具时整块重挂载，这里让它从上沿「落」进来，确认工具真的换成功了 */
+  animation: optbar-slide-in var(--dur-fast) var(--ease-out);
+}
+
+/* 笔尖预览：一块 30×30 的小样，衬在浅一档的底上 */
+.opt-tip {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
+.optbar-none {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* ---------- 单个参数 ---------- */
+.opt {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.opt-label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.opt-range {
+  width: 108px;
+  height: 4px;
+  margin: 0;
+  appearance: none;
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.opt-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.opt-num {
+  width: 52px;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  text-align: right;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.opt-num:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.opt-suffix {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* 只读数值（裁剪工具的「尺寸」）：形制沿用 .opt-num，但不带框、不可点 */
+.opt-readonly {
+  min-width: 52px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 选区四态模式 ---------- */
+.opt-modes {
+  display: inline-flex;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.opt-mode {
+  flex: none;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.opt-mode + .opt-mode {
+  border-left: 1px solid var(--border);
+}
+
+.opt-mode:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.opt-mode.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+
+/* ---------- 复选开关（魔棒的「连续」） ---------- */
+.opt-check {
+  cursor: pointer;
+}
+
+.opt-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.opt-chip {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong);
+}
+
+.opt-hex {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* ---------- 可编辑颜色字段 ---------- */
+/* 外观与只读色块相同，但整块可点：这里没有任何「点了没反应」的装饰件。 */
+.opt-color {
+  position: relative;
+}
+
+.opt-chip-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+
+.opt-chip-btn:hover {
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+.opt-chip-btn[aria-expanded="true"] {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* 颜色浮层：取色器 + 十六进制 + 常用色，三样任选其一都能立刻改色。
+   浮层由组件 portal 到 body，位置内联写入；z-index 必须压过工具二级面板（80）
+   与弹窗（100），否则会被盖住，看起来就像「点了没反应」。 */
+.color-pop {
+  position: fixed;
+  z-index: 120;
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: optbar-pop-in var(--dur-fast) var(--ease-out);
+}
+
+.color-pop-foot {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.fly-btn {
+  flex: 1;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.fly-btn:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.fly-btn.is-wide {
+  width: 100%;
+}
+
+/* ---------- 「⋯ 更多」 ---------- */
+.optbar-more-wrap {
+  position: relative;
+  flex: none;
+}
+
+.optbar-more {
+  min-width: 84px;
+  justify-content: center;
+}
+
+/* 「画笔设置」入口：与「⋯ 更多」同宽，钉在参数区之后，随时点得到 */
+.optbar-brush-panel {
+  flex: none;
+  min-width: 84px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.optbar-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: optbar-pop-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes optbar-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* 工具名 / 参数组的入场：从上沿落下，与换工具的点击方向一致 */
+@keyframes optbar-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.opt-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+/* 「更多」里并排的两条滑杆（流量 / 间距） */
+.opt-extra-row {
+  display: flex;
+  gap: var(--sp-4);
+}
+
+.opt-extra-row > * {
+  flex: 1;
+  min-width: 0;
+}

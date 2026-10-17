@@ -1,77 +1,252 @@
+/**
+ * 编辑壳样式（M1）。
+ *
+ * 结构：顶栏（品牌 + 菜单 + 工作区切换 + 视图/导出） → 文档标签条 →
+ * 主体三栏（工具轨｜选项栏 + 视口｜右侧单列面板） → 状态栏。
+ * 全程扁平、只吃 tokens.css 的变量，品牌蓝与中性黑两味，无重阴影无渐变。
+ */
+
 .editor {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  overflow: hidden;
 }
 
 /* ---------- 顶栏 ---------- */
 .editor-top {
   flex: none;
+  height: 48px;
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
-  padding: var(--sp-2) var(--sp-4);
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
-.editor-doc {
+/* 弹性留白：把视图操作与导出推到最右 */
+.editor-gap {
   flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-3);
-}
-
-.editor-doc-name {
-  font-size: var(--fs-md);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.editor-doc-meta {
-  flex: none;
-  font-size: var(--fs-xs);
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
+  min-width: var(--sp-3);
 }
 
 .editor-top-actions {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
 }
 
 .zoom-label {
-  min-width: 52px;
+  min-width: 46px;
   text-align: right;
   font-size: var(--fs-xs);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
 
-.btn-sm {
-  height: 32px;
-  padding: 0 var(--sp-4);
+/* 主题开关与画布操作之间的一道细线，避免按钮连成一片 */
+.top-divider {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--sp-1);
+  background: var(--border);
+}
+
+/* ---------- 工作区切换（修图 / 绘画） ----------
+   §7.4：一份界面两种工作区，只改默认工具与面板。
+   分段控件：一条浅槽 + 选中项白底加投影，比并排按钮更好读。 */
+.editor-ws {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
+.ws-btn {
+  height: 26px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  border-radius: var(--r-xs);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ws-btn:hover:not(.is-on) {
+  color: var(--text);
+}
+
+.ws-btn.is-on {
+  color: var(--text);
+  font-weight: 500;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  /* 切工作区：白底滑块弹一下，明确「现在在哪一边」 */
+  animation: ws-on var(--dur-fast) var(--ease-out);
+}
+
+@keyframes ws-on {
+  from {
+    transform: scale(0.96);
+  }
+}
+
+/* ---------- 文档标签条 ---------- */
+.editor-tabs {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-1);
+  height: 36px;
+  padding: 0 var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 200px;
+  padding: 0 var(--sp-2) 0 var(--sp-4);
   font-size: var(--fs-sm);
+  color: var(--text-2);
+  border-radius: var(--r-xs) var(--r-xs) 0 0;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+  /* 新文档的标签「落」进标签条，老标签不重挂载所以不会跟着抖 */
+  animation: tab-in var(--dur) var(--ease-out);
+}
+
+.tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 选中标签与下方工作区连成一片，顶部一道品牌蓝作为唯一强调 */
+.tab.is-on {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* 新建 / 打开的文档：标签从上方落进标签条 */
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未保存的小圆点：只在非选中标签上出现，避免和关闭按钮抢位置 */
+.tab-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+
+.tab-x {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-md);
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: var(--r-xs);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.tab:hover .tab-x,
+.tab.is-on .tab-x {
+  opacity: 1;
+}
+
+.tab-x:hover {
+  color: var(--text);
+  background: var(--pressed);
+}
+
+/* ---------- 主体三栏 ---------- */
+.editor-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* 中间列：选项栏 + 视口，纵向堆叠 */
+.editor-center {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 右列：常驻调色面板 + 图层面板，纵向堆叠 */
+.editor-right {
+  flex: none;
+  width: 264px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+/* 面板自身已经有宽度与左边框，放进右列后让位给列容器 */
+.editor-right .panel {
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 0;
+  border-left: 0;
 }
 
 /* ---------- 视口 ---------- */
 .editor-viewport {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   display: grid;
   place-items: center;
   background: var(--canvas-bg);
   background-image:
-    linear-gradient(45deg, rgba(128, 128, 140, 0.09) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(128, 128, 140, 0.09) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(128, 128, 140, 0.09) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 140, 0.09) 75%);
+    linear-gradient(45deg, var(--editor-mat) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--editor-mat) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--editor-mat) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--editor-mat) 75%);
   background-size: 20px 20px;
   background-position:
     0 0,
@@ -79,24 +254,27 @@
     10px -10px,
     -10px 0;
   padding: var(--sp-4);
+  touch-action: none;
 }
 
+/* 画布纸面：白纸 + 透明棋盘，位置与缩放由内联样式驱动 */
 .editor-stage {
   position: relative;
   flex: none;
-  box-shadow: var(--shadow-md);
-  background-color: #fff;
+  background-color: var(--paper);
   background-image:
-    linear-gradient(45deg, #d9d9de 25%, transparent 25%),
-    linear-gradient(-45deg, #d9d9de 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #d9d9de 75%),
-    linear-gradient(-45deg, transparent 75%, #d9d9de 75%);
+    linear-gradient(45deg, var(--checker) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker) 75%);
   background-size: 16px 16px;
   background-position:
     0 0,
     0 8px,
     8px -8px,
     -8px 0;
+  box-shadow: var(--shadow-md);
+  will-change: transform;
 }
 
 .editor-canvas {
@@ -106,33 +284,222 @@
   image-rendering: auto;
 }
 
-/* ---------- 底栏 ---------- */
-.editor-foot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  padding: 6px var(--sp-4);
-  font-size: var(--fs-xs);
-  color: var(--text-3);
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+/* 蚂蚁线 / 裁剪遮罩浮层：贴在画布正上方，纯粹显示，不吃指针事件 */
+.editor-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
-.editor-error {
-  color: var(--danger);
+/* 网格：只画线，不接事件；--grid-line 在浅色下要够淡，深色下要够清 */
+.editor-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+}
+
+/* 标尺：贴着画布上沿 / 左沿的两条刻度条，主刻度 100 文档像素、次刻度 10。
+   主刻度用 --text-3 打头压重，次刻度用 --grid-line 保持克制。 */
+.editor-ruler {
+  position: absolute;
+  pointer-events: none;
+  background-color: var(--surface-2);
+  background-repeat: repeat-x, repeat-x;
+  background-position: 0 100%, 0 100%;
+}
+.editor-ruler-h {
+  left: 0;
+  top: -17px;
+  width: 100%;
+  height: 17px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  background-image:
+    linear-gradient(to right, var(--text-3) 2px, transparent 2px),
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px);
+}
+.editor-ruler-v {
+  left: -17px;
+  top: 0;
+  width: 17px;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-right: 0;
+  background-image:
+    linear-gradient(to bottom, var(--text-3) 2px, transparent 2px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-repeat: repeat-y, repeat-y;
+  background-position: 100% 0, 100% 0;
+}
+
+/* ---------- 跟随光标（笔尖圆圈 / 吸管取样环） ---------- */
+
+.editor-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 3;
+  display: none;
+}
+
+.editor-cursor[data-mode="brush"],
+.editor-cursor[data-mode="pick"] {
+  display: block;
+}
+
+/* 笔尖圆圈：外黑内白两圈，任何底图上都看得清；大小＝真实笔尖直径 */
+.editor-cursor-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--r-full);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+}
+
+/* 圆圈正中的十字准心，方便对准 1px 的铅笔 */
+.editor-cursor-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.editor-cursor[data-mode="brush"] .editor-cursor-pick,
+.editor-cursor[data-mode="pick"] .editor-cursor-ring,
+.editor-cursor[data-mode="pick"] .editor-cursor-dot {
+  display: none;
+}
+
+/* 取样环：色块 + 十六进制值，边扫边看 */
+.editor-cursor-pick {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 3px 8px 3px 3px;
+  transform: translate(14px, 14px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+}
+
+.editor-cursor[data-mode="pick"] .editor-cursor-pick {
+  display: flex;
+}
+
+.editor-cursor-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-full);
+  background: #000;
+}
+
+.editor-cursor-hex {
+  font: 600 10px/1 var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+/* ---------- 文字工具：贴在落点上的输入框 ---------- */
+
+.editor-textbox {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  animation: textbox-in var(--dur) var(--ease-out);
+}
+
+/* 输入框本身就是所见即所得：字号 / 行距 / 对齐 / 颜色都与最终像素一致，
+   所以它没有底色、没有内边距，只有一圈虚线示意落点范围。 */
+.editor-textarea {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed var(--accent-ring);
+  border-radius: 2px;
+  outline: none;
+  background: transparent;
+  white-space: pre;
+  overflow: hidden;
+  resize: none;
+  caret-color: var(--accent);
+}
+
+.editor-textarea::placeholder {
+  color: var(--text-2);
+  opacity: 0.7;
+}
+
+.editor-textbox-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.editor-textbox-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  text-shadow: 0 0 3px var(--surface), 0 0 6px var(--surface);
+}
+
+@keyframes textbox-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* ---------- 错误条 ---------- */
+.editor-errorbar {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  z-index: 60;
+  max-width: min(560px, 80%);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--accent-ink);
+  background: var(--danger);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-md);
+  transform: translateX(-50%);
+  animation: toast-in var(--dur) var(--ease);
+  pointer-events: none;
 }
 
 /* ---------- 轻提示 ---------- */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 56px;
+  bottom: 84px;
   transform: translateX(-50%);
   padding: var(--sp-2) var(--sp-5);
   font-size: var(--fs-sm);
-  color: #fff;
-  background: rgba(28, 28, 33, 0.92);
+  color: var(--toast-ink);
+  background: var(--toast-bg);
   border-radius: var(--r-full);
   box-shadow: var(--shadow-md);
   animation: toast-in var(--dur) var(--ease);

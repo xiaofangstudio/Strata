@@ -5,7 +5,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(16, 16, 22, 0.42);
+  background: var(--mask);
   backdrop-filter: blur(2px);
   animation: mask-in var(--dur) var(--ease);
 }
@@ -77,4 +77,89 @@
     opacity: 0;
     transform: translateY(8px) scale(0.98);
   }
+}
+
+/* ---------- 浮层内容基元 ----------
+   开始页面与编辑壳共用同一套浮层内容，避免各写一份。 */
+.modal-lead {
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.keys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.keys-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+.kbd {
+  flex: none;
+  min-width: 132px;
+  padding: 3px var(--sp-3);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: var(--fs-xs);
+  text-align: center;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+}
+
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.about-name {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.about-studio {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.fact {
+  display: contents;
+}
+
+.fact dt {
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.fact dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.about-noai {
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-sm);
 }

@@ -36,5 +36,19 @@ export default defineConfig({
     minify: "esbuild",
     sourcemap: false,
     chunkSizeWarningLimit: 1024,
+    // 分包：第三方依赖单独成 chunk，主包只留业务代码。
+    // 好处是首屏主包显著变小，且升级业务代码时第三方包仍可命中缓存。
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+            return "vendor-react";
+          }
+          if (id.includes("@tauri-apps")) return "vendor-tauri";
+          return "vendor";
+        },
+      },
+    },
   },
 });

@@ -1,0 +1,258 @@
+/* 常驻调色面板：前景 / 背景、拾色器、标准色板、我的色板、最近使用 */
+
+.cp-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 62%;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.cp-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 10px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cp-panel-head:hover {
+  color: var(--text);
+}
+
+.cp-panel-title {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.cp-chev {
+  display: flex;
+  color: var(--text-3);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.cp-chev.is-on {
+  transform: rotate(0deg);
+}
+
+.cp-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* ---------- 前景 / 背景色 ---------- */
+
+.cp-fgbg {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex: none;
+}
+
+.cp-fgbg-stack {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 38px;
+}
+
+.cp-chip {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.cp-chip-fg {
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+.cp-chip-bg {
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+}
+
+.cp-chip.is-on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cp-fgbg-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cp-mini {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.cp-mini:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.cp-mini-reset {
+  line-height: 0;
+}
+
+.cp-fgbg-gap {
+  flex: 1;
+}
+
+.cp-eyedrop {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.cp-eyedrop:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ---------- 色板分组 ---------- */
+
+.cp-sw-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+
+.cp-sw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.cp-sw-save {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.cp-sw-save:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.cp-sw-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 3px;
+}
+
+.cp-sw {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.cp-sw:hover {
+  border-color: var(--accent);
+}
+
+.cp-sw.is-on {
+  box-shadow:
+    0 0 0 1px var(--surface),
+    0 0 0 2px var(--accent);
+}
+
+.cp-sw-cell {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.cp-sw-cell .cp-sw {
+  display: block;
+}
+
+.cp-sw-del {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1;
+  background: var(--surface-3, var(--surface-2));
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.cp-sw-cell:hover .cp-sw-del {
+  opacity: 1;
+}
+
+.cp-sw-empty {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.5;
+}

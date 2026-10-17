@@ -47,3 +47,8 @@ coverage/
 # ---- 参考资料（本地副本，不纳入本仓库版本库） ----
 /Compositor/
 /MyPaint/
+
+# ---- local reference software / shortcuts (never commit) ----
+/PhotoCraft/
+/reference/
+*.lnk

@@ -1,0 +1,37 @@
+/**
+ * 状态栏样式。
+ */
+
+.statusbar {
+  flex: none;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.st-item {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.st-key {
+  color: var(--text-3);
+}
+
+.st-val {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.st-gap {
+  flex: 1;
+}

@@ -1,0 +1,132 @@
+/**
+ * 顶部主菜单条。
+ *
+ * 视觉纪律（交接文档 §四）：扁平、无渐变、无重阴影；
+ * 品牌蓝只出现在「当前展开」与「键盘快捷键提示」上，其余一律中性灰。
+ */
+
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.menubar-slot {
+  position: relative;
+}
+
+/* ---------- 顶层按钮 ---------- */
+.menubar-btn {
+  height: var(--h-ctl);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.menubar-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.menubar-btn.is-open {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ---------- 下拉面板 ---------- */
+.menu-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 232px;
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  animation: menu-in var(--dur) var(--ease-out) both;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ---------- 条目 ---------- */
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  height: var(--h-ctl);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.menu-row:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.menu-row:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.menu-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-hint {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* 未实现能力的标记，刻意做成安静的小胶囊 */
+.menu-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.04em;
+}
+
+.menu-sep {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
+}

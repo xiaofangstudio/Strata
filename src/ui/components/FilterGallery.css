@@ -1,0 +1,162 @@
+/* ---------- 滤镜库 ----------
+   左侧选滤镜、右侧调参数，中间不留空白。配色只用中性色 + 品牌蓝，
+   选中态靠品牌蓝的「淡底 + 蓝字 + 左边一道亮条」表达，不做花哨渐变。 */
+
+.fg {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  gap: var(--sp-3);
+  min-height: 260px;
+}
+
+.fg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: var(--sp-3);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.fg-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+  /* 换滤镜时列表整块不动，只有参数区变，这里给个轻微的落点提示 */
+  animation: fg-in var(--dur-fast) var(--ease-out);
+}
+
+.fg-item:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.fg-item.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 选中：左边一道品牌蓝亮条，比整块高亮更克制，也更像 PS 的列表选中。 */
+.fg-item.is-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sp-2);
+  bottom: var(--sp-2);
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.fg-item:active {
+  transform: scale(0.985);
+}
+
+.fg-item-name {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.fg-item-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.fg-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-top: var(--sp-1);
+  overflow-y: auto;
+}
+
+.fg-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.fg-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.fg-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.fg-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.fg-field-value {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* 滑块：轨道走中性色，进度段与滑块拇指走品牌蓝。 */
+.fg-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.fg-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.fg-range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.fg-range:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.fg-note {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.fg-foot-spacer {
+  flex: 1;
+}
+
+@keyframes fg-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}

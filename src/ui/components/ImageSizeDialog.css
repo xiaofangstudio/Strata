@@ -1,0 +1,74 @@
+.isz-hint {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+.isz-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.isz-check input {
+  accent-color: var(--accent);
+}
+
+.isz-anchor {
+  margin-top: var(--sp-4);
+}
+
+.isz-anchor-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.isz-anchor-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.isz-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  grid-auto-rows: 26px;
+  gap: 4px;
+  padding: 6px;
+  width: max-content;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.isz-cell {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.isz-cell:hover {
+  border-color: var(--border-strong);
+}
+
+.isz-cell[data-on="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.isz-err {
+  margin-top: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--danger, #d9534f);
+}
