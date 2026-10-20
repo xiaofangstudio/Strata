@@ -16,6 +16,15 @@
   position: relative;
 }
 
+/* 右键菜单浮层：盖过一切面板与画布浮层；子菜单再压一层 */
+.menu-pop.is-context {
+  z-index: 320;
+}
+
+.menu-pop.is-sub {
+  z-index: 330;
+}
+
 /* ---------- 顶层按钮 ---------- */
 .menubar-btn {
   height: var(--h-ctl);
@@ -50,12 +59,27 @@
   left: 0;
   z-index: 60;
   min-width: 232px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface);
   box-shadow: var(--shadow-md);
   animation: menu-in var(--dur) var(--ease-out) both;
+}
+
+/* 子菜单挂到 body 上，用 fixed 规避父级滚动容器裁切 */
+.menu-pop.is-sub {
+  position: fixed;
+  top: auto;
+  left: auto;
+  animation: none;
+}
+
+.menu-item {
+  position: relative;
 }
 
 @keyframes menu-in {
@@ -91,9 +115,31 @@
   background: var(--hover);
 }
 
+/* 键盘 / 鼠标当前所在项 */
+.menu-row.is-active:not(:disabled) {
+  background: var(--hover);
+}
+
 .menu-row:disabled {
   color: var(--text-3);
   cursor: default;
+}
+
+/* 勾选位：所有条目都留出同样的左槽，标签才对得齐 */
+.menu-check {
+  flex: none;
+  width: 14px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+
+.menu-arrow {
+  flex: none;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
 }
 
 .menu-row-label {

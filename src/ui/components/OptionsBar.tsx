@@ -85,6 +85,9 @@ interface Props {
   /** 魔棒：是否只取与落点相连的一片 */
   contiguous: boolean;
   onContiguous: (v: boolean) => void;
+  /** 魔棒：对所有图层取样（按合成结果取色） */
+  sampleAllLayers?: boolean;
+  onSampleAllLayers?: (v: boolean) => void;
   /** 当前画布尺寸，供裁剪工具只读显示 */
   docSize: string;
   /** 打开画笔设置面板（F5）；只有画笔类工具会显示入口 */
@@ -119,6 +122,8 @@ export default function OptionsBar({
   onFeather,
   contiguous,
   onContiguous,
+  sampleAllLayers,
+  onSampleAllLayers,
   docSize,
   onOpenBrushPanel,
 }: Props) {
@@ -149,6 +154,8 @@ export default function OptionsBar({
     onFeather,
     contiguous,
     onContiguous,
+    sampleAllLayers,
+    onSampleAllLayers,
     docSize,
   });
 
@@ -211,6 +218,8 @@ interface Ctx {
   onFeather: (v: number) => void;
   contiguous: boolean;
   onContiguous: (v: boolean) => void;
+  sampleAllLayers?: boolean;
+  onSampleAllLayers?: (v: boolean) => void;
   docSize: string;
 }
 
@@ -388,6 +397,19 @@ function buildControls(tool: ToolId, c: Ctx): Built {
                 { value: "canvas", label: zh.options.textureCanvas },
                 { value: "grain", label: zh.options.textureGrain },
                 { value: "dots", label: zh.options.textureDots },
+              ]}
+            />
+          </div>
+          <div className="opt-extra-row">
+            <SegGroup
+              label={zh.options.symmetry}
+              value={c.brush.symmetry ?? "none"}
+              onChange={(symmetry) => c.onBrush({ symmetry })}
+              options={[
+                { value: "none", label: zh.options.symmetryNone },
+                { value: "vertical", label: zh.options.symmetryVertical, hint: zh.options.symmetryHint },
+                { value: "horizontal", label: zh.options.symmetryHorizontal, hint: zh.options.symmetryHint },
+                { value: "both", label: zh.options.symmetryBoth, hint: zh.options.symmetryHint },
               ]}
             />
           </div>
@@ -689,6 +711,15 @@ function buildControls(tool: ToolId, c: Ctx): Built {
           onChange={c.onContiguous}
           hint={zh.options.wandHint}
         />,
+        c.sampleAllLayers !== undefined && c.onSampleAllLayers && (
+          <Check
+            key="sampleall"
+            label={zh.options.sampleAllLayers}
+            on={c.sampleAllLayers}
+            onChange={c.onSampleAllLayers}
+            hint={zh.options.sampleAllLayersHint}
+          />
+        ),
       );
     } else {
       main.push(

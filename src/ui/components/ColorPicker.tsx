@@ -40,11 +40,22 @@ export interface ColorPickerProps {
    * 常驻调色面板用它；工具轨、色块浮层仍用紧凑形态。
    */
   detailed?: boolean;
+  /**
+   * `full`（默认）= 竖向：SV 方块 → 横向色相条 → 十六进制。
+   * `sv` = 横向：左边大 SV 方块、右边竖色相条，数值行交给调用方
+   * （右侧常驻调色面板用，与 PhotoCraft 的颜色页同构）。
+   */
+  variant?: "full" | "sv";
 }
 
 type ChannelMode = "rgb" | "hsb";
 
-export default function ColorPicker({ hex, onChange, detailed = false }: ColorPickerProps) {
+export default function ColorPicker({
+  hex,
+  onChange,
+  detailed = false,
+  variant = "full",
+}: ColorPickerProps) {
   const safe = normalizeHex(hex) ?? "#000000";
   const [hsv, setHsv] = useState(() => hexToHsv(safe));
   /** 上一次由本组件发出去的颜色，用来区分「外部改的」与「自己改的」，避免回灌。 */
@@ -76,7 +87,7 @@ export default function ColorPicker({ hex, onChange, detailed = false }: ColorPi
 
   const [mode, setMode] = useState<ChannelMode>("rgb");
 
-  const drag = useRef<"sv" | "hue" | null>(null);
+  const drag = useRef<"sv" | "hue" | "hue-v" | null>(null);
 
   const pickSv = (el: HTMLElement, cx: number, cy: number) => {
     const r = el.getBoundingClientRect();
@@ -88,13 +99,26 @@ export default function ColorPicker({ hex, onChange, detailed = false }: ColorPi
     });
   };
 
-  const pickHue = (el: HTMLElement, cx: number) => {
+  const pickHue = (el: HTMLElement, cx: number, cy: number, vertical: boolean) => {
     const r = el.getBoundingClientRect();
+    // 近黑色（明度和饱和度都趋零）时点色相条，结果依然近乎全黑 ——
+    // 这就是「调什么颜色都是黑的」的根因：默认前景色 #17171c 明度只有 11%，
+    // 只改色相救不回来。此时把饱和度/明度拉满，让所选色相立刻可见。
+    const lift = hsv.s < 0.12 && hsv.v < 0.2;
+    const s = lift ? 1 : hsv.s;
+    const v = lift ? 1 : hsv.v;
+    if (vertical) {
+      if (r.height === 0) return;
+      commit({ h: clamp01((cy - r.top) / r.height) * 360, s, v });
+      return;
+    }
     if (r.width === 0) return;
-    commit({ h: clamp01((cx - r.left) / r.width) * 360, s: hsv.s, v: hsv.v });
+    commit({ h: clamp01((cx - r.left) / r.width) * 360, s, v });
   };
 
-  const down = (kind: "sv" | "hue") => (e: RPointerEvent<HTMLDivElement>) => {
+  type DragKind = "sv" | "hue" | "hue-v";
+
+  const down = (kind: DragKind) => (e: RPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     drag.current = kind;
     try {
@@ -103,13 +127,13 @@ export default function ColorPicker({ hex, onChange, detailed = false }: ColorPi
       /* 指针已失效时忽略，拖动仍可继续 */
     }
     if (kind === "sv") pickSv(e.currentTarget, e.clientX, e.clientY);
-    else pickHue(e.currentTarget, e.clientX);
+    else pickHue(e.currentTarget, e.clientX, e.clientY, kind === "hue-v");
   };
 
-  const move = (kind: "sv" | "hue") => (e: RPointerEvent<HTMLDivElement>) => {
+  const move = (kind: DragKind) => (e: RPointerEvent<HTMLDivElement>) => {
     if (drag.current !== kind) return;
     if (kind === "sv") pickSv(e.currentTarget, e.clientX, e.clientY);
-    else pickHue(e.currentTarget, e.clientX);
+    else pickHue(e.currentTarget, e.clientX, e.clientY, kind === "hue-v");
   };
 
   const up = (e: RPointerEvent<HTMLDivElement>) => {
@@ -123,6 +147,51 @@ export default function ColorPicker({ hex, onChange, detailed = false }: ColorPi
 
   const cur = hsvToHex(hsv.h, hsv.s, hsv.v);
   const hueHex = hsvToHex(hsv.h, 1, 1);
+
+  // 横排形态：大 SV 方块 + 竖色相条。十六进制 / RGB 由调用方排在下面。
+  if (variant === "sv") {
+    return (
+      <div className="cp cp-inline">
+        <div
+          className="cp-sv cp-sv-inline"
+          style={{
+            background:
+              `linear-gradient(to top, #000, rgba(0,0,0,0)),` +
+              `linear-gradient(to right, #fff, ${hueHex})`,
+          }}
+          role="slider"
+          aria-label={zh.options.colorSv}
+          aria-valuetext={cur}
+          onPointerDown={down("sv")}
+          onPointerMove={move("sv")}
+          onPointerUp={up}
+          onPointerCancel={up}
+        >
+          <span
+            className="cp-knob"
+            style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%`, background: cur }}
+          />
+        </div>
+
+        <div
+          className="cp-hue-v"
+          role="slider"
+          aria-label={zh.options.colorHue}
+          aria-valuetext={String(Math.round(hsv.h))}
+          onPointerDown={down("hue-v")}
+          onPointerMove={move("hue-v")}
+          onPointerUp={up}
+          onPointerCancel={up}
+        >
+          <span
+            className="cp-knob cp-knob-huev"
+            style={{ top: `${(hsv.h / 360) * 100}%`, background: hueHex }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const { r, g, b } = hexToRgb(cur);
 
   return (
@@ -302,7 +371,7 @@ function RangeRow({
 }
 
 /** 数字框：打字过程中不打断，合法数字即时生效，失焦时回填当前值。 */
-function NumBox({
+export function NumBox({
   value,
   max,
   aria,
@@ -345,7 +414,7 @@ function NumBox({
  * 回车补交当前草稿，失焦时草稿合法就采纳、不合法才回滚 ——
  * 不能让用户打了一半点别处就把颜色弄丢。
  */
-function HexBox({ hex, onHex }: { hex: string; onHex: (hex: string) => void }) {
+export function HexBox({ hex, onHex }: { hex: string; onHex: (hex: string) => void }) {
   const short = hex.replace("#", "").toUpperCase();
   const [draft, setDraft] = useState(short);
   useEffect(() => setDraft(short), [short]);

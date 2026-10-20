@@ -1,0 +1,82 @@
+/* 属性 / 调整面板 */
+
+.pp-body {
+  gap: 0;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.pp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 26px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pp-row:last-child {
+  border-bottom: 0;
+}
+
+.pp-row-label {
+  flex: none;
+  width: 68px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.pp-row-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-empty {
+  margin: 0;
+  padding: var(--sp-3);
+}
+
+.pp-adjust {
+  gap: var(--sp-2);
+}
+
+.pp-group {
+  color: var(--text-3);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.pp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.pp-item {
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-align: left;
+  text-overflow: ellipsis;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.pp-item:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

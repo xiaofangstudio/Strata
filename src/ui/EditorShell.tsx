@@ -26,37 +26,63 @@ import { quitApp, type AppInfo } from "../core/appInfo";
 import {
   activeLayer,
   baseName,
+  cloneDoc,
   docFromBitmap,
   docFromBlank,
+  nextDocId,
   type StrataDoc,
 } from "../core/document";
 import { DEFAULT_DPI, PRESETS } from "../core/presets";
 import {
   addAdjustLayer,
+  addFillLayer,
   addLayer,
+  addLayerStyle,
+  addMaskFromSelection,
+  addMaskFromTransparency,
+  addMask,
   applyAdjustToLayer,
+  applyMask,
   canShiftLayer,
+  clearLayerStyle,
   clipHasContent,
   clipSize,
+  copyLayerStyle,
   copyToClipboard,
   cropDocument,
   cutSelection,
+  deleteHiddenLayers,
   deleteSelection,
   duplicateLayer,
   fillSelection,
   flattenImage,
+  grayscaleDocument,
   groupLayers,
+  hasStyle,
+  invertMask,
+  layerViaCopy,
+  layerViaCut,
   mergeDown,
+  mergeVisible,
   moveLayer,
   pasteFromClipboard,
+  pasteLayerStyle,
   placeRaster,
   removeLayer,
+  removeMask,
+  renameLayer,
   resizeCanvas,
   resizeDocument,
+  reverseLayerOrder,
   setSelection,
+  strokeSelection,
+  toggleClip,
+  toggleMaskActive,
   translateLayer,
   trimToSelection,
   ungroupLayers,
+  updateLayer,
+  type StrokePosition,
 } from "../core/layerOps";
 import {
   applyFreeTransform,
@@ -69,8 +95,10 @@ import {
   transformCorners,
   type FreeTransform,
 } from "../core/transform";
-import { ADJUST_DEFS, adjustDef, newAdjustState, type AdjustId, type AdjustState } from "../core/layer";
+import { adjustDef, newAdjustState, type AdjustId, type AdjustState, type StyleId } from "../core/layer";
 import {
+  borderSelection,
+  cloneSelection,
   combineSelection,
   contractSelection,
   ellipseMask,
@@ -82,8 +110,10 @@ import {
   rectMask,
   selectAllMask,
   selectionBounds,
+  smoothSelection,
   wandMask,
   type Point,
+  type SelectionMask,
   type SelectionMode,
 } from "../core/selection";
 import {
@@ -142,15 +172,33 @@ import {
 } from "../tools/catalog";
 import type { ThemeMode } from "../stores/theme";
 import { setPrefs, toBrushPrefs, usePrefs } from "../stores/prefs";
-import AppMenuBar, { type MenuGroup } from "./components/AppMenuBar";
+import { useRecentFiles } from "../stores/recent";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import AppMenuBar, { type MenuEntry, type MenuGroup } from "./components/AppMenuBar";
+import ContextMenu, { type ContextMenuState } from "./components/ContextMenu";
+import {
+  appendToGroup,
+  buildMenuGroups,
+  insertAfterId,
+  type MenuResolver,
+  type MenuState,
+} from "./components/menuCatalog";
 import BrandMark from "./components/BrandMark";
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import FilterGallery from "./components/FilterGallery";
 import InfoModals, { type InfoModalKind } from "./components/InfoModals";
 import ImageSizeDialog from "./components/ImageSizeDialog";
+import Modal from "./components/Modal";
+import ColorChip from "./components/ColorChip";
+import { Check } from "./components/controls";
 import ColorPanel from "./components/ColorPanel";
 import LiquifyDialog from "./components/LiquifyDialog";
 import LayersPanel from "./components/LayersPanel";
+import HistoryPanel from "./components/HistoryPanel";
+import HistogramPanel from "./components/HistogramPanel";
+import NavigatorPanel from "./components/NavigatorPanel";
+import PropertiesPanel from "./components/PropertiesPanel";
+import RightDock, { type GroupId as DockGroupId } from "./components/RightDock";
 import OptionsBar from "./components/OptionsBar";
 import BrushSettingsPanel from "./components/BrushSettingsPanel";
 import Preferences from "./components/Preferences";
@@ -264,6 +312,8 @@ const ZOOM_STEP = 1.25;
 const MAX_BRUSH = 500;
 /** 裁剪框最小边长（像素）；比这更小当作误触，不裁 */
 const CROP_MIN = 4;
+/** 网格间距（文档像素），与 .editor-grid 的 background-size 一致 */
+const GRID_STEP = 64;
 
 const GROUP_LABEL: Record<ToolGroupId, string> = {
   transform: zh.tools.groupTransform,
@@ -283,9 +333,6 @@ const SHAPE_KIND: Record<string, ShapeKind> = {
   shapeEllipse: "ellipse",
   shapeLine: "line",
 };
-
-/** 调整类型的族别顺序，与图层面板底部「fx」菜单保持一致。 */
-const ADJUST_FAMILY_ORDER = ["tone", "color", "effect"] as const;
 
 /** 指针压感：笔用真实压力，鼠标/触摸退回 0.5，保证笔触粗细稳定。 */
 function pressureOf(pressure: number, pointerType: string): number {
@@ -320,37 +367,18 @@ function cursorOf(tool: ToolId, panning: boolean): string {
 
 /* ------------------------------------------------------- 一键调整（图像菜单） */
 
-/** 按调整类型生成一份状态，params 用于覆盖默认值。 */
+/**
+ * 菜单里的对话框式命令重定向到「新建调整图层」：
+ * 与 PS 的「图像 > 调整」同源 —— 参数随时可回改、可删。
+ */
 function preset(id: AdjustId, params: Record<string, number> = {}): AdjustState {
   const s = newAdjustState(id);
   return { ...s, params: { ...s.params, ...params } };
 }
 
-/**
- * 「图像 > 调整」的一键项。
- *
- * 与调整图层互补：那边是非破坏、可反复改参数；这边按一下当场改像素，
- * 对齐 PS 同名菜单。所以只挑「一眼能看出效果」的几种，不做参数对话框。
- */
-const ADJUST_PRESETS: { label: string; state: AdjustState }[] = [
-  { label: zh.menu.adjustBright, state: preset("bc", { brightness: 15 }) },
-  { label: zh.menu.adjustContrast, state: preset("bc", { contrast: 25 }) },
-  { label: zh.menu.adjustSaturate, state: preset("hs", { saturate: 25 }) },
-  { label: zh.menu.adjustGray, state: preset("bw") },
-  { label: zh.menu.adjustInvert, state: preset("invert") },
-  { label: zh.menu.adjustThreshold, state: preset("threshold") },
-  { label: zh.menu.adjustPosterize, state: preset("posterize") },
-];
-
-/**
- * 「图像 > 滤镜」的一键项：同样当场改像素。
- *
- * 只挑效果族里那几种「按一下就知道结果」的；名字直接取调整定义里的中文，
- * 不再另抄一份文案，免得两处对不上。
- */
-const FILTER_PRESETS: { label: string; state: AdjustState }[] = (
-  ["blur", "motionblur", "sharpen", "grain", "noise"] as const
-).map((id) => ({ label: adjustDef(id).label, state: preset(id) }));
+/** 项目主页与问题反馈地址（帮助菜单用真实链接，不摆假入口）。 */
+const REPO_URL = "https://github.com/xiaofangstudio/Strata";
+const ISSUES_URL = `${REPO_URL}/issues`;
 
 export default function EditorShell({
   docs,
@@ -393,6 +421,10 @@ export default function EditorShell({
   /** 仿制 / 修复的取样点（Alt + 单击设定），null 表示还没取样 */
   const [anchor, setAnchor] = useState<Point | null>(null);
   const [tolerance, setTolerance] = useState(32);
+  /** 魔棒「对所有图层取样」：开着时按合成结果取色，而不是只看当前层 */
+  const [sampleAllLayers, setSampleAllLayers] = useState(false);
+  /** 通用右键菜单（画布 / 图层面板共用一个浮层） */
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [palette, setPalette] = useState(false);
@@ -406,9 +438,63 @@ export default function EditorShell({
   const [showGrid, setShowGrid] = useState(false);
   /** 视图 > 标尺：同上，只是刻度条 */
   const [showRulers, setShowRulers] = useState(false);
+  /** 视图 > 参考线：标尺里拖出来的对齐线，与网格同属「看」的浮层 */
+  const [showGuides, setShowGuides] = useState(true);
+  /** 视图 > 锁定参考线：锁定后参考线不可拖动 / 删除 */
+  const [guidesLocked, setGuidesLocked] = useState(false);
+  /** 参考线本体（文档坐标，像素）：x 是竖线、y 是横线 */
+  const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
+  /** 视图 > 额外内容（Ctrl+H）：总开关，关掉时网格与参考线一并隐藏 */
+  const [extras, setExtras] = useState(true);
+  /** 视图 > 像素网格：高倍缩放时的逐像素格子 */
+  const [showPixelGrid, setShowPixelGrid] = useState(false);
+  /** 视图 > 对齐（吸附）：拖动选区 / 裁剪时贴着参考线与画布边 */
+  const [snapOn, setSnapOn] = useState(true);
+  const [snapGuides, setSnapGuides] = useState(true);
+  const [snapBounds, setSnapBounds] = useState(true);
+  /** 对齐到网格（视图 > 对齐到 > 网格） */
+  const [snapGrid, setSnapGrid] = useState(false);
+  /** 新建参考线对话框；pos 以字符串保存，方便输入中间态 */
+  const [guideDialog, setGuideDialog] = useState<{ axis: "x" | "y"; pos: string } | null>(null);
+  /** 描边对话框：宽度 / 颜色 / 位置 / 不透明度，数字字段用字符串保存输入中间态 */
+  const [strokeDialog, setStrokeDialog] = useState<{
+    width: string;
+    color: string;
+    position: StrokePosition;
+    opacity: string;
+  } | null>(null);
+  /** 重命名图层对话框：id 锁定目标图层，name 保存输入中间态 */
+  const [renameDialog, setRenameDialog] = useState<{ id: string; name: string } | null>(null);
+  /** 新建参考线版面：按行列自动铺线，字段用字符串保存输入中间态 */
+  const [layoutDialog, setLayoutDialog] = useState<{
+    cols: string;
+    rows: string;
+    colGutter: string;
+    rowGutter: string;
+    margin: string;
+    clear: boolean;
+  } | null>(null);
+  /** 智能参考线：拖动时贴出尺寸标注，并与画布中线 / 参考线拉出对齐提示 */
+  const [smartGuides, setSmartGuides] = useState(true);
+  /** Tab 沉浸模式：收起工具轨 / 选项栏 / 面板坞 / 状态栏，只留画布 */
+  const [hidePanels, setHidePanels] = useState(false);
+  /** 视口尺寸（导航器面板要拿它画视口框），由 ResizeObserver 跟踪 */
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
+  /** 直方图 / 导航器的帧号：合成每前进一次（节流 250ms）就 +1 */
+  const [panelTick, setPanelTick] = useState(0);
   const [prefsOpen, setPrefsOpen] = useState(false);
   /** 画笔设置面板（F5）：一个面板里容纳 PhotoCraft 的全部笔刷 section */
   const [brushPanelOpen, setBrushPanelOpen] = useState(false);
+  /** 右侧面板坞的开关：由「窗口 > 颜色 / 属性 / 图层 / 历史」直接控制。 */
+  const [dockOpen, setDockOpen] = useState<Record<DockGroupId, boolean>>({
+    props: true,
+    color: true,
+    layers: true,
+    history: false,
+    navigator: false,
+    histogram: false,
+  });
+  const { items: recentItems, push: pushRecent, clear: clearRecent } = useRecentFiles();
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [spaceDown, setSpaceDown] = useState(false);
@@ -449,6 +535,14 @@ export default function EditorShell({
   const compRef = useRef<HTMLCanvasElement | null>(null);
   const scratchRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  /** 正在拖动的参考线：axis 是线的方向（"x" 竖线 / "y" 横线），from 是被拖那条的下标 */
+  const guideDragRef = useRef<{ axis: "x" | "y"; index: number; pos: number } | null>(null);
+  /** 从标尺往画布里拉新参考线的进行态 */
+  const rulerDragRef = useRef<{ axis: "x" | "y" } | null>(null);
+  /** 标尺拖线时指针是否已经进入画布（没进就松手 = 不创建） */
+  const rulerInsideRef = useRef(false);
+  /** 面板帧节流：直方图 / 导航器最多 250ms 刷新一次 */
+  const lastPanelRef = useRef(0);
   /** 正在进行的笔画；抬笔前只做回显，不进图层 */
   const strokeRef = useRef<Stroke | null>(null);
   /** 正在进行的修饰笔画（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵），同样是抬笔才落库 */
@@ -545,7 +639,21 @@ export default function EditorShell({
     setMaskEdit(false);
     setChannelVis(DEFAULT_CHANNEL_VIS);
     setActiveChannel("rgb");
+    // 参考线属于视图状态：换文档时一并清空，免得 A 图的参考线跑到 B 图上
+    setGuides({ x: [], y: [] });
   }, [docId]);
+
+  /** 视口尺寸跟踪：导航器画视口框要用（缩放窗口 / 开关面板时都会变） */
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setViewportSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    setViewportSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
 
   /** 通道页回调：只改视图状态，不碰文档、不入历史。 */
   const pickChannel = useCallback((vis: ChannelVis, active: ChannelId) => {
@@ -602,6 +710,12 @@ export default function EditorShell({
       cx.clearRect(0, 0, w, h);
       cx.drawImage(comp, 0, 0, docW, docH, 0, 0, w, h);
       applyChannelView(c, channelVis, activeChannel);
+      // 直方图 / 导航器读的就是这张 comp：节流 250ms 推一帧，画笔连扫时不拖后腿
+      const now = performance.now();
+      if (now - lastPanelRef.current > 250) {
+        lastPanelRef.current = now;
+        setPanelTick((t) => t + 1);
+      }
     };
 
     // 自由变换进行中：把被变换的那一层换成「变换后的像素」再整档合成 ——
@@ -723,6 +837,46 @@ export default function EditorShell({
   const docPoint = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => docXY(e.clientX, e.clientY),
     [docXY],
+  );
+
+  /**
+   * 吸附：把落点吸到最近的参考线 / 画布边。
+   * 阈值按 6 个屏幕像素折算回文档坐标，所以放大时手感不会变松。
+   */
+  const snapPoint = useCallback(
+    (x: number, y: number, thr = 6 / scale) => {
+      if (!snapOn) return { x, y };
+      let sx = x;
+      let sy = y;
+      if (snapGuides) {
+        for (const gx of guides.x) {
+          if (Math.abs(x - gx) <= thr) {
+            sx = gx;
+            break;
+          }
+        }
+        for (const gy of guides.y) {
+          if (Math.abs(y - gy) <= thr) {
+            sy = gy;
+            break;
+          }
+        }
+      }
+      if (snapGrid) {
+        const gx = Math.round(sx / GRID_STEP) * GRID_STEP;
+        const gy = Math.round(sy / GRID_STEP) * GRID_STEP;
+        if (Math.abs(sx - gx) <= thr) sx = gx;
+        if (Math.abs(sy - gy) <= thr) sy = gy;
+      }
+      if (snapBounds) {
+        if (Math.abs(sx) <= thr) sx = 0;
+        else if (Math.abs(sx - docW) <= thr) sx = docW;
+        if (Math.abs(sy) <= thr) sy = 0;
+        else if (Math.abs(sy - docH) <= thr) sy = docH;
+      }
+      return { x: sx, y: sy };
+    },
+    [snapOn, snapGuides, snapGrid, snapBounds, guides, docW, docH, scale],
   );
 
   const resetGesture = useCallback(() => {
@@ -930,6 +1084,65 @@ export default function EditorShell({
       getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() ||
       "#6fc0ff";
 
+    /**
+     * 智能参考线：框与画布中线 / 已有参考线对齐时拉一条品红线，
+     * 右下角再贴一个「宽 × 高」徽标。全部画在浮层上，不碰像素。
+     */
+    const drawSmart = (bx: number, by: number, bw: number, bh: number) => {
+      const u = 1 / scale;
+      const tol = 1.5 * u;
+      const vLines: number[] = [];
+      const hLines: number[] = [];
+      if (Math.abs(bx + bw / 2 - docW / 2) <= tol) vLines.push(docW / 2);
+      if (Math.abs(by + bh / 2 - docH / 2) <= tol) hLines.push(docH / 2);
+      for (const gx of guides.x) {
+        if (Math.abs(bx - gx) <= tol || Math.abs(bx + bw - gx) <= tol) vLines.push(gx);
+      }
+      for (const gy of guides.y) {
+        if (Math.abs(by - gy) <= tol || Math.abs(by + bh - gy) <= tol) hLines.push(gy);
+      }
+      if (vLines.length > 0 || hLines.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = "#ff2d95";
+        ctx.lineWidth = u;
+        ctx.beginPath();
+        for (const gx of vLines) {
+          ctx.moveTo(gx, 0);
+          ctx.lineTo(gx, docH);
+        }
+        for (const gy of hLines) {
+          ctx.moveTo(0, gy);
+          ctx.lineTo(docW, gy);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+      const label = `${Math.round(bw)} × ${Math.round(bh)}`;
+      const fs = 11 * u;
+      ctx.save();
+      ctx.font = `${fs}px "Segoe UI", system-ui, sans-serif`;
+      const tw = ctx.measureText(label).width;
+      const pad = 6 * u;
+      const bwid = tw + pad * 2;
+      const bhei = 18 * u;
+      const bxx = Math.min(docW - bwid - 4 * u, Math.max(4 * u, bx + bw + 8 * u));
+      const byy = Math.min(docH - bhei - 4 * u, Math.max(4 * u, by + bh + 8 * u));
+      const r = 4 * u;
+      ctx.beginPath();
+      ctx.moveTo(bxx + r, byy);
+      ctx.arcTo(bxx + bwid, byy, bxx + bwid, byy + bhei, r);
+      ctx.arcTo(bxx + bwid, byy + bhei, bxx, byy + bhei, r);
+      ctx.arcTo(bxx, byy + bhei, bxx, byy, r);
+      ctx.arcTo(bxx, byy, bxx + bwid, byy, r);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(18, 18, 24, 0.88)";
+      ctx.fill();
+      ctx.fillStyle = "#f4f5f8";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, bxx + pad, byy + bhei / 2 + 0.5 * u);
+      ctx.restore();
+    };
+
     // 既没有选区、没在拖框、没在拖形状、没在变换、也没有取样点：清一次就收工
     if (!antsPath && !selDragging && !shapeDragging && !anchorPt && !freeActive) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1013,6 +1226,15 @@ export default function EditorShell({
           ctx.setLineDash([]);
         }
 
+        // 智能参考线：选区 / 裁剪框的尺寸徽标与中线对齐提示
+        if (smartGuides) {
+          if (live && box && box.w > 0 && box.h > 0) {
+            drawSmart(box.x, box.y, box.w, box.h);
+          } else if (ft) {
+            drawSmart(ft.cx - ft.w / 2, ft.cy - ft.h / 2, ft.w, ft.h);
+          }
+        }
+
         // 取样点：三层同心环 + 十字，保证在任何底图上都看得见
         if (anchorPt) {
           const u = 1 / scale;
@@ -1090,7 +1312,7 @@ export default function EditorShell({
 
     raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive]);
+  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive, smartGuides, guides]);
 
   const onDown = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1128,12 +1350,45 @@ export default function EditorShell({
         return;
       }
 
+      // 参考线优先于工具：指针贴近某条未锁定的参考线时，按住即拖动它，
+      // 拖出画布松手即删除 —— 与 PS 的手感一致。
+      if (extras && showGuides && !guidesLocked) {
+        const hitR = 4 / scale;
+        let axis: "x" | "y" | null = null;
+        let index = -1;
+        for (let i = 0; i < guides.x.length; i += 1) {
+          if (Math.abs(p.x - guides.x[i]) <= hitR) {
+            axis = "x";
+            index = i;
+            break;
+          }
+        }
+        if (axis === null) {
+          for (let i = 0; i < guides.y.length; i += 1) {
+            if (Math.abs(p.y - guides.y[i]) <= hitR) {
+              axis = "y";
+              index = i;
+              break;
+            }
+          }
+        }
+        if (axis && index >= 0) {
+          guideDragRef.current = { axis, index, pos: 0 };
+          capturePointer(e.currentTarget, e.pointerId);
+          return;
+        }
+      }
+
       // 选区与裁剪作用于整份文档：不受图层锁定影响，没有活动图层也能用
       if (isSelectionTool(tool) || tool === "crop") {
         capturePointer(e.currentTarget, e.pointerId);
         setError("");
         if (tool === "wand") {
-          const src = act && act.kind === "pixel" ? act.surface : compRef.current;
+          // 「对所有图层取样」时按合成结果取色；否则只看当前像素层
+          const src =
+            sampleAllLayers || !act || act.kind !== "pixel"
+              ? compRef.current
+              : act.surface;
           const shape = src ? wandMask(src, p, tolerance, contiguous) : null;
           if (shape) {
             commitSelection(
@@ -1230,6 +1485,7 @@ export default function EditorShell({
           docH,
           { ...brush, color: fg },
           tool === "eraser",
+          doc.selection ?? null,
         );
         s.begin(p.x, p.y, pressureOf(e.pressure, e.pointerType), e.timeStamp);
         strokeRef.current = s;
@@ -1283,6 +1539,7 @@ export default function EditorShell({
       fg,
       bg,
       scheduleRender,
+      sampleAllLayers,
       scale,
       spaceDown,
       tolerance,
@@ -1292,6 +1549,10 @@ export default function EditorShell({
       tool,
       zoom,
       onCommit,
+      guides,
+      showGuides,
+      guidesLocked,
+      extras,
       docW,
       docH,
     ],
@@ -1357,6 +1618,25 @@ export default function EditorShell({
         scheduleRender();
         return;
       }
+      // 正在拖参考线：直接改那条线；拖出画布即删除（与 PS 一致）
+      const gd = guideDragRef.current;
+      if (gd) {
+        const q = docPoint(e);
+        const pos = Math.round(gd.axis === "x" ? q.x : q.y);
+        const out = pos < 0 || (gd.axis === "x" ? pos > docW : pos > docH);
+        setGuides((gv) => {
+          if (out) {
+            return gd.axis === "x"
+              ? { ...gv, x: gv.x.filter((_, i) => i !== gd.index) }
+              : { ...gv, y: gv.y.filter((_, i) => i !== gd.index) };
+          }
+          return gd.axis === "x"
+            ? { ...gv, x: gv.x.map((v, i) => (i === gd.index ? pos : v)) }
+            : { ...gv, y: gv.y.map((v, i) => (i === gd.index ? pos : v)) };
+        });
+        if (out) guideDragRef.current = null; // 删掉之后这根线已不存在，结束拖动
+        return;
+      }
       // 吸管按住拖动：连续取色，只有颜色真的变了才写状态，免得一路重渲染
       if (pickingRef.current && tool === "eyedropper") {
         const act = activeLayer(doc);
@@ -1369,7 +1649,9 @@ export default function EditorShell({
       // 选区 / 裁剪框：只更新 ref，由浮层那支 rAF 现读现画，不进历史也不重渲染
       const sel = selRef.current;
       if (sel) {
-        const p = docPoint(e);
+        const raw = docPoint(e);
+        // 套索要的是连续笔迹，不吸附；矩形 / 椭圆 / 裁剪的收尾点贴参考线与画布边
+        const p = sel.tool === "lasso" ? raw : snapPoint(raw.x, raw.y);
         if (sel.tool === "lasso") sel.points.push(p);
         sel.b = p;
         return;
@@ -1431,11 +1713,12 @@ export default function EditorShell({
         scheduleRender();
       }
     },
-    [docPoint, docXY, doc, fg, scheduleRender, syncCursor, tool],
+    [docPoint, docXY, doc, fg, scheduleRender, snapPoint, syncCursor, tool],
   );
 
   const onUp = useCallback(() => {
     pickingRef.current = false;
+    guideDragRef.current = null;
     if (panRef.current) {
       panRef.current = null;
       return;
@@ -1562,6 +1845,127 @@ export default function EditorShell({
     }
   }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, feather, commitSelection]);
 
+  /* ------------------------------------------------------------ 标尺拖参考线 */
+
+  /**
+   * 从标尺往画布里拉一条新参考线。
+   *
+   * 按下就先落一条线（贴在画布边缘），指针进画布后跟着走；
+   * 松手时若指针始终没进画布，就把这条线删掉 —— 与 PS 的手感一致。
+   */
+  const onRulerDown = useCallback(
+    (axis: "x" | "y") => (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const q = docXY(e.clientX, e.clientY);
+      const limit = axis === "x" ? docW : docH;
+      const raw = axis === "x" ? q.x : q.y;
+      const pos = Math.round(Math.min(limit, Math.max(0, raw)));
+      setGuides((gv) =>
+        axis === "x" ? { ...gv, x: [...gv.x, pos] } : { ...gv, y: [...gv.y, pos] },
+      );
+      rulerInsideRef.current =
+        q.x >= 0 && q.x <= docW && q.y >= 0 && q.y <= docH;
+      rulerDragRef.current = { axis };
+      setShowGuides(true);
+      setExtras(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [docW, docH, docXY],
+  );
+
+  const onRulerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const rd = rulerDragRef.current;
+      if (!rd) return;
+      const q = docXY(e.clientX, e.clientY);
+      const limit = rd.axis === "x" ? docW : docH;
+      rulerInsideRef.current =
+        q.x >= 0 && q.x <= docW && q.y >= 0 && q.y <= docH;
+      const raw = Math.round(rd.axis === "x" ? q.x : q.y);
+      const pos = Math.min(limit, Math.max(0, raw));
+      setGuides((gv) => {
+        const arr = rd.axis === "x" ? gv.x : gv.y;
+        if (!arr.length) return gv;
+        const next = arr.slice();
+        next[next.length - 1] = pos;
+        return rd.axis === "x" ? { ...gv, x: next } : { ...gv, y: next };
+      });
+    },
+    [docW, docH, docXY],
+  );
+
+  const onRulerUp = useCallback(() => {
+    const rd = rulerDragRef.current;
+    if (!rd) return;
+    rulerDragRef.current = null;
+    if (rulerInsideRef.current) return;
+    // 指针没进画布就松手：这条线不算数
+    setGuides((gv) =>
+      rd.axis === "x" ? { ...gv, x: gv.x.slice(0, -1) } : { ...gv, y: gv.y.slice(0, -1) },
+    );
+  }, []);
+
+  /** 「新建参考线…」对话框：校验落点后追加一条线。 */
+  const submitGuide = useCallback(() => {
+    if (!guideDialog) return;
+    const limit = guideDialog.axis === "x" ? docW : docH;
+    const n = Math.round(Number(guideDialog.pos));
+    if (!Number.isFinite(n) || n < 0 || n > limit) {
+      setToast(zh.dialog.guideInvalid);
+      return;
+    }
+    setGuides((gv) =>
+      guideDialog.axis === "x" ? { ...gv, x: [...gv.x, n] } : { ...gv, y: [...gv.y, n] },
+    );
+    setExtras(true);
+    setShowGuides(true);
+    setGuideDialog(null);
+  }, [guideDialog, docW, docH]);
+
+  /** 「新建参考线版面…」：按列 / 行铺线，列宽与行高自动均分剩余空间。 */
+  const submitLayout = useCallback(() => {
+    if (!layoutDialog) return;
+    const num = (v: string) => Math.max(0, Math.round(Number(v) || 0));
+    const cols = Math.min(100, num(layoutDialog.cols));
+    const rows = Math.min(100, num(layoutDialog.rows));
+    const cg = num(layoutDialog.colGutter);
+    const rg = num(layoutDialog.rowGutter);
+    const m = num(layoutDialog.margin);
+    if (cols + rows === 0 || m * 2 >= Math.min(docW, docH)) {
+      setToast(zh.dialog.layoutInvalid);
+      return;
+    }
+    // 每列的两条边界各生成一条参考线，列与列之间的间距自然留空
+    const edges = (total: number, count: number, gutter: number) => {
+      if (count <= 0) return [] as number[];
+      const span = (total - 2 * m - gutter * (count - 1)) / count;
+      if (span <= 0) return [] as number[];
+      const out: number[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const a = m + i * (span + gutter);
+        out.push(Math.round(a), Math.round(a + span));
+      }
+      return out;
+    };
+    const xs = edges(docW, cols, cg);
+    const ys = edges(docH, rows, rg);
+    if (xs.length === 0 && ys.length === 0) {
+      setToast(zh.dialog.layoutInvalid);
+      return;
+    }
+    const uniq = (a: number[]) => Array.from(new Set(a)).sort((p, q) => p - q);
+    setGuides((gv) => ({
+      x: uniq(layoutDialog.clear ? xs : [...gv.x, ...xs]),
+      y: uniq(layoutDialog.clear ? ys : [...gv.y, ...ys]),
+    }));
+    setExtras(true);
+    setShowGuides(true);
+    setLayoutDialog(null);
+    setToast(zh.dialog.layoutDone);
+  }, [layoutDialog, docW, docH]);
+
   /* -------------------------------------------------------------- 自由变换 */
 
   /**
@@ -1685,22 +2089,48 @@ export default function EditorShell({
     }
   }, [doc, docW, docH]);
 
-  /** 打开一张图片（从编辑壳内，无需回开始页面）。 */
+  /** 打开指定路径：图片按位图解码，.strata 工程走工程解码。 */
+  const openFileAt = useCallback(
+    async (path: string) => {
+      try {
+        // 工程编解码器按需加载：只有真的开 / 存 .strata 时才拉进来。
+        const { decodeProject, isStrataPath } = await import("../engine/project");
+        if (isStrataPath(path)) {
+          const bytes = await readFileBytes(path);
+          const next = await decodeProject(bytes);
+          next.sourcePath = path;
+          onOpenDoc(next);
+          setToast(zh.editor.projectOpened);
+        } else {
+          const bitmap = await loadImage(path);
+          onOpenDoc(docFromBitmap(bitmap, baseName(path), path));
+        }
+        pushRecent(path);
+      } catch (e) {
+        setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [onOpenDoc, pushRecent],
+  );
+
+  /** 文件 > 打开 / 打开为：图片与 .strata 工程共用同一个对话框。 */
   const openImage = useCallback(async () => {
     try {
+      const { STRATA_EXTENSION } = await import("../engine/project");
       const picked = await open({
         title: zh.dialog.openTitle,
         multiple: false,
         directory: false,
-        filters: [{ name: "图片", extensions: [...IMAGE_EXTENSIONS] }],
+        filters: [
+          { name: "图片与工程", extensions: [...IMAGE_EXTENSIONS, STRATA_EXTENSION] },
+        ],
       });
       if (typeof picked !== "string") return;
-      const bitmap = await loadImage(picked);
-      onOpenDoc(docFromBitmap(bitmap, baseName(picked), picked));
+      await openFileAt(picked);
     } catch (e) {
       setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [onOpenDoc]);
+  }, [openFileAt]);
 
   /**
    * 新建画布：编辑器内 Ctrl+N / 文件菜单直接开一张空白档。
@@ -1721,27 +2151,28 @@ export default function EditorShell({
   /** 关闭全部文档：走 App 层的统一出口，避免这里逐份 delete 撤销栈。 */
   const closeAll = useCallback(() => onCloseAll(), [onCloseAll]);
 
-  /** 打开一份 .strata 工程（图层 / 蒙版 / 调整图层全部还原）。 */
-  const openProject = useCallback(async () => {
-    try {
-      // 工程编解码器按需加载：只有真的开/存 .strata 时才拉进来。
-      const { STRATA_EXTENSION, decodeProject } = await import("../engine/project");
-      const picked = await open({
-        title: zh.dialog.openProjectTitle,
-        multiple: false,
-        directory: false,
-        filters: [{ name: "Strata 工程", extensions: [STRATA_EXTENSION] }],
-      });
-      if (typeof picked !== "string") return;
-      const bytes = await readFileBytes(picked);
-      const next = await decodeProject(bytes);
-      next.sourcePath = picked;
-      onOpenDoc(next);
-      setToast(zh.editor.projectOpened);
-    } catch (e) {
-      setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
+  /**
+   * 图像 > 复制：为当前文档做一份深拷贝并新开一个标签页。
+   *
+   * 图层像素与选区都克隆过（cloneDoc），两份文档之后互不影响；路径清空，
+   * 免得「保存」直接覆盖原文件。
+   */
+  const duplicateImage = useCallback(() => {
+    const copy = cloneDoc(doc);
+    copy.id = nextDocId();
+    copy.name = `${doc.name} ${zh.editor.copySuffix}`;
+    copy.sourcePath = undefined;
+    copy.dirty = true;
+    onOpenDoc(copy);
+    setToast(zh.menu.imageDuplicated);
+  }, [doc, onOpenDoc]);
+
+  /** 关闭除当前文档之外的所有文档。 */
+  const closeOthers = useCallback(() => {
+    for (const d of docs) {
+      if (d.id !== doc.id) onCloseDoc(d.id);
     }
-  }, [onOpenDoc]);
+  }, [doc.id, docs, onCloseDoc]);
 
   /** 保存工程：整份文档（含蒙版与调整图层）写成一个 .strata 文件。 */
   const saveProject = useCallback(async () => {
@@ -1847,6 +2278,86 @@ export default function EditorShell({
     }
     onCommit(setSelection(doc, next), zh.selection.contracted);
   }, [doc, hasSelection, onCommit, selRadius]);
+
+  /** 边界：只留选区边缘一圈，宽度沿用「羽化」半径（PS 的选择 > 修改 > 边界）。 */
+  const doBorder = useCallback(() => {
+    if (!doc.selection || !hasSelection) return;
+    if (selRadius <= 0) {
+      setError(zh.selection.radiusZero);
+      return;
+    }
+    onCommit(setSelection(doc, borderSelection(doc.selection, selRadius)), zh.selection.bordered);
+  }, [doc, hasSelection, onCommit, selRadius]);
+
+  /** 平滑：把选区边缘的毛刺磨圆，半径沿用「羽化」的设置。 */
+  const doSmooth = useCallback(() => {
+    if (!doc.selection || !hasSelection) return;
+    if (selRadius <= 0) {
+      setError(zh.selection.radiusZero);
+      return;
+    }
+    const next = smoothSelection(doc.selection, selRadius);
+    if (isSelectionEmpty(next)) {
+      setError(zh.selection.radiusTooBig);
+      return;
+    }
+    onCommit(setSelection(doc, next), zh.selection.smoothed);
+  }, [doc, hasSelection, onCommit, selRadius]);
+
+  /**
+   * 选取相似：以当前选区包围盒的中心为样本色，按魔棒容差在全图找同色像素
+   * （contiguous = false，不要求与样本点相连）。没有样本点可用时不可用。
+   */
+  const doSimilar = useCallback(() => {
+    if (!doc.selection || !hasSelection) return;
+    const act = activeLayer(doc);
+    const box = selectionBounds(doc.selection);
+    if (!act || act.kind !== "pixel" || !box) {
+      setError(zh.selection.noPixelLayer);
+      return;
+    }
+    const seed = {
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+    };
+    const next = wandMask(act.surface, seed, tolerance, false);
+    if (isSelectionEmpty(next)) {
+      setError(zh.selection.similarEmpty);
+      return;
+    }
+    onCommit(setSelection(doc, next), zh.selection.similar);
+  }, [doc, hasSelection, onCommit, tolerance]);
+
+  /** 编辑 > 描边：确认对话框后沿选区边界刷一圈实色。 */
+  const submitStroke = useCallback(() => {
+    if (!strokeDialog) return;
+    const width = Math.round(Number(strokeDialog.width));
+    if (!Number.isFinite(width) || width <= 0) {
+      setError(zh.dialog.strokeInvalid);
+      return;
+    }
+    const opacity = Math.max(0, Math.min(100, Number(strokeDialog.opacity) || 0));
+    const next = strokeSelection(doc, {
+      color: strokeDialog.color,
+      width,
+      position: strokeDialog.position,
+      opacity,
+    });
+    if (next === doc) {
+      setError(zh.selection.noPixelLayer);
+      return;
+    }
+    onCommit(next, zh.dialog.strokeDone);
+    setStrokeDialog(null);
+  }, [doc, onCommit, strokeDialog]);
+
+  /** 图层 > 重命名图层：确认后改名字，空名字保持原样。 */
+  const submitRename = useCallback(() => {
+    if (!renameDialog) return;
+    const name = renameDialog.name.trim();
+    if (name) onCommit(renameLayer(doc, renameDialog.id, name), zh.menu.renameDone);
+    setRenameDialog(null);
+  }, [doc, onCommit, renameDialog]);
 
   /** 在选区内填色；没有像素图层时只提示、不改文档。 */
   const doFill = useCallback(
@@ -2064,294 +2575,1030 @@ export default function EditorShell({
   /** 能不能做「图层级」的变换：得选中一个没被锁的像素层。 */
   const canTransform = at >= 0 && doc.layers[at].kind === "pixel" && !doc.layers[at].locked;
 
-  const menuGroups = useMemo<MenuGroup[]>(
-    () => [
-      {
-        key: "file",
-        label: zh.menu.file,
-        items: [
-          { label: zh.menu.newCanvasNow, hint: "Ctrl+N", onSelect: newCanvas },
-          { label: zh.menu.openImage, hint: "Ctrl+O", onSelect: () => void openImage() },
-          { label: zh.menu.openProject, onSelect: () => void openProject() },
-          { kind: "sep" },
-          { label: zh.menu.saveProject, hint: "Ctrl+S", onSelect: () => void saveProject() },
-          { label: zh.menu.exportPng, hint: "Ctrl+Shift+S", onSelect: () => void exportPng() },
-          { kind: "sep" },
-          { label: zh.editor.closeDoc, hint: "Ctrl+W", onSelect: () => onCloseDoc(doc.id) },
-          { label: zh.menu.closeAll, hint: "Ctrl+Alt+W", onSelect: closeAll },
-          { kind: "sep" },
-          { label: zh.menu.quit, onSelect: onQuit },
-        ],
-      },
-      {
-        key: "edit",
-        label: zh.menu.edit,
-        items: [
-          { label: zh.menu.undo, hint: "Ctrl+Z", disabled: !canUndo, onSelect: onUndo },
-          { label: zh.menu.redo, hint: "Ctrl+Shift+Z", disabled: !canRedo, onSelect: onRedo },
-          { kind: "sep" },
-          { label: zh.menu.cut, hint: "Ctrl+X", disabled: !hasSelection, onSelect: doCut },
-          { label: zh.menu.copy, hint: "Ctrl+C", onSelect: () => doCopy(false) },
-          { label: zh.menu.copyMerged, hint: "Ctrl+Shift+C", onSelect: () => doCopy(true) },
-          { label: zh.menu.paste, hint: "Ctrl+V", disabled: !canPaste, onSelect: doPaste },
-          { kind: "sep" },
-          { label: zh.menu.fillFg, hint: "Alt+Backspace", onSelect: () => doFill(fg) },
-          { label: zh.menu.fillBg, hint: "Ctrl+Backspace", onSelect: () => doFill(bg) },
-          {
-            label: zh.menu.deleteSelection,
-            hint: "Delete",
-            disabled: !hasSelection,
-            onSelect: doDeletePixels,
-          },
-          // 内容识别填充：与 PS 的「编辑 > 填充 > 内容识别」同源，用选区圈出要抹掉
-          // 的东西，按下就用周围纹理补上。没有选区时置灰（不给假按钮）。
-          { label: zh.menu.inpaint, disabled: !hasSelection, onSelect: doInpaint },
-          { kind: "sep" },
-          // 编辑 > 变换：与 PS 同构 —— 自由变换（Ctrl+T）加三个一步到位的翻转 / 旋转。
-          // 正在变换时这一栏换成「应用 / 取消」，配合 Enter、Esc，不留死路。
-          ...(freeActive
-            ? [
-                { label: zh.menu.transformApply, hint: "Enter", onSelect: commitFreeTransform },
-                { label: zh.menu.transformCancel, hint: "Esc", onSelect: cancelFreeTransform },
-              ]
-            : [
-                {
-                  label: zh.menu.transformFree,
-                  hint: "Ctrl+T",
-                  disabled: !canTransform,
-                  onSelect: beginFreeTransform,
-                },
-                {
-                  label: zh.menu.flipH,
-                  disabled: !canTransform,
-                  onSelect: () => onCommit(flipLayer(doc, "h"), zh.menu.flipH),
-                },
-                {
-                  label: zh.menu.flipV,
-                  disabled: !canTransform,
-                  onSelect: () => onCommit(flipLayer(doc, "v"), zh.menu.flipV),
-                },
-                {
-                  label: zh.menu.rotateHalf,
-                  disabled: !canTransform,
-                  onSelect: () => onCommit(rotateLayerHalf(doc), zh.menu.rotateHalf),
-                },
-              ]),
-          { kind: "sep" },
-          { label: zh.preferences.title, hint: "P", onSelect: () => setPrefsOpen(true) },
-        ],
-      },
-      {
-        key: "select",
-        label: zh.menu.select,
-        items: [
-          { label: zh.menu.selectAll, hint: "Ctrl+A", onSelect: doSelectAll },
-          {
-            label: zh.menu.deselect,
-            hint: "Ctrl+D",
-            disabled: !hasSelection,
-            onSelect: doDeselect,
-          },
-          { label: zh.menu.invertSelection, hint: "Ctrl+Shift+I", onSelect: doInvert },
-          { kind: "sep" },
-          // 选择 > 修改：半径沿用选项条上的「羽化」，在 hint 里印出来
-          {
-            label: zh.menu.featherSelection,
-            hint: `${selRadius} px`,
-            disabled: !hasSelection,
-            onSelect: doFeather,
-          },
-          {
-            label: zh.menu.expandSelection,
-            hint: `+${selRadius} px`,
-            disabled: !hasSelection,
-            onSelect: doExpand,
-          },
-          {
-            label: zh.menu.contractSelection,
-            hint: `-${selRadius} px`,
-            disabled: !hasSelection,
-            onSelect: doContract,
-          },
-        ],
-      },
-      {
-        key: "image",
-        label: zh.menu.image,
-        items: [
-          { label: zh.menu.imageSize, hint: "Ctrl+Alt+I", onSelect: () => setSizeDialog("image") },
-          { label: zh.menu.canvasSize, hint: "Ctrl+Alt+C", onSelect: () => setSizeDialog("canvas") },
-          { label: zh.menu.trimToSelection, onSelect: doTrim },
-          { kind: "sep" },
-          // 图像旋转 / 翻转画布：连画布一起转，90 度整倍时宽高互换 ——
-          // 这就是「不改像素数的前提下把横图变竖图」的正规做法。
-          {
-            label: zh.menu.rotateDocCw,
-            onSelect: () => onCommit(rotateDocument(doc, 90), zh.menu.rotateDocCw),
-          },
-          {
-            label: zh.menu.rotateDocCcw,
-            onSelect: () => onCommit(rotateDocument(doc, 270), zh.menu.rotateDocCcw),
-          },
-          {
-            label: zh.menu.flipCanvasH,
-            onSelect: () => onCommit(flipDocument(doc, "h"), zh.menu.flipCanvasH),
-          },
-          {
-            label: zh.menu.flipCanvasV,
-            onSelect: () => onCommit(flipDocument(doc, "v"), zh.menu.flipCanvasV),
-          },
-          { kind: "sep" },
-          { label: zh.menu.flatten, onSelect: () => onCommit(flattenImage(doc), zh.menu.flatten) },
-          { kind: "sep" },
-          // 自动色调三项：一键把直方图拉满，与 PS「图像 > 自动色调 / 自动对比度 /
-          // 自动颜色」同构。图本来就到位时内核会给「没得改」，界面上不落空历史。
-          {
-            label: zh.menu.autoTone,
-            onSelect: () => doAuto("tone", zh.menu.autoTone),
-          },
-          {
-            label: zh.menu.autoContrast,
-            onSelect: () => doAuto("contrast", zh.menu.autoContrast),
-          },
-          {
-            label: zh.menu.autoColor,
-            onSelect: () => doAuto("color", zh.menu.autoColor),
-          },
-          { kind: "sep" },
-          ...ADJUST_PRESETS.map((p) => ({
-            label: p.label,
-            onSelect: () => doAdjust(p.label, p.state),
-          })),
-        ],
-      },
-      {
-        // 滤镜单独成一栏，与 PS 同构：图像栏管「尺寸 / 拼合 / 调色」，
-        // 滤镜栏才是「一次性改变像素观感」的那批效果，两栏不再混着堆。
-        key: "filter",
-        label: zh.menu.filter,
-        items: [
-          // 滤镜库：带实时预览的调参面板，比下面的一键预设更适合「慢慢调」。
-          { label: zh.menu.filterGallery, onSelect: () => setGallery(true) },
-          // 液化：在面板里直接拖着涂，位移场累积，确定才把像素写回图层。
-          { label: zh.menu.liquify, onSelect: () => setLiquify(true) },
-          { kind: "sep" },
-          ...FILTER_PRESETS.map((p) => ({
-            label: p.label,
-            onSelect: () => doAdjust(p.label, p.state),
-          })),
-        ],
-      },
-      {
-        // 全部调整都走「新建调整图层」，与 PS 的「图像 > 调整」同源：
-        // 参数随时可回改、可删，配合不透明度还能当局部调色用。
-        key: "adjust",
-        label: zh.menu.adjust,
-        items: ADJUST_FAMILY_ORDER.flatMap((fam, fi) => {
-          const list = ADJUST_DEFS.filter((d) => d.family === fam);
-          if (list.length === 0) return [];
-          const head = fi === 0 ? [] : [{ kind: "sep" as const }];
-          return [
-            ...head,
-            ...list.map((d) => ({
-              label: d.label,
-              onSelect: () =>
-                onCommit(addAdjustLayer(doc, newAdjustState(d.id)), zh.layers.adjustAdd),
-            })),
-          ];
-        }),
-      },
-      {
-        key: "layer",
-        label: zh.menu.layer,
-        items: [
-          { label: zh.menu.newLayer, hint: "Ctrl+Shift+N", onSelect: () => onCommit(addLayer(doc), zh.menu.newLayer) },
-          { label: zh.menu.duplicateLayer, hint: "Ctrl+J", onSelect: () => onCommit(duplicateLayer(doc), zh.menu.duplicateLayer) },
-          { label: zh.menu.deleteLayer, onSelect: () => onCommit(removeLayer(doc), zh.menu.deleteLayer) },
-          { kind: "sep" },
-          { label: zh.menu.group, hint: "Ctrl+G", onSelect: () => onCommit(groupLayers(doc), zh.menu.group) },
-          {
-            label: zh.menu.ungroup,
-            hint: "Ctrl+Shift+G",
-            disabled: doc.layers[at]?.kind !== "group",
-            onSelect: () => onCommit(ungroupLayers(doc), zh.menu.ungroup),
-          },
-          { kind: "sep" },
-          { label: zh.menu.mergeDown, hint: "Ctrl+E", disabled: !mergeOk, onSelect: () => onCommit(mergeDown(doc), zh.menu.mergeDown) },
-          { label: zh.menu.moveLayerUp, disabled: !canShiftLayer(doc, 1), onSelect: () => onCommit(moveLayer(doc, 1), zh.menu.moveLayerUp) },
-          { label: zh.menu.moveLayerDown, disabled: !canShiftLayer(doc, -1), onSelect: () => onCommit(moveLayer(doc, -1), zh.menu.moveLayerDown) },
-        ],
-      },
-      {
-        key: "view",
-        label: zh.menu.view,
-        items: [
-          { label: zh.menu.resetView, hint: "Ctrl+0", onSelect: fit },
-          { label: zh.menu.actualSize, hint: "Ctrl+1", onSelect: () => zoom(1) },
-          { kind: "sep" },
-          { label: zh.menu.zoomIn, hint: "Ctrl++", onSelect: () => zoom(scale * ZOOM_STEP) },
-          { label: zh.menu.zoomOut, hint: "Ctrl+-", onSelect: () => zoom(scale / ZOOM_STEP) },
-          { kind: "sep" },
-          { label: zh.menu.toggleRulers, hint: "Ctrl+R", onSelect: () => setShowRulers((v) => !v) },
-          { label: zh.menu.toggleGrid, hint: "Ctrl+'", onSelect: () => setShowGrid((v) => !v) },
-        ],
-      },
-      {
-        key: "help",
-        label: zh.menu.help,
-        items: [
-          { label: zh.menu.shortcuts, onSelect: () => setModal("shortcuts") },
-          { label: zh.menu.palette, hint: "Ctrl+K", onSelect: () => setPalette(true) },
-          { kind: "sep" },
-          { label: zh.menu.about, onSelect: () => setModal("about") },
-        ],
-      },
-    ],
-    [
-      at,
-      bg,
-      beginFreeTransform,
-      canPaste,
-      canRedo,
-      canTransform,
-      canUndo,
-      cancelFreeTransform,
-      commitFreeTransform,
-      doAdjust,
-      doContract,
-      doCopy,
-      doCut,
-      doDeletePixels,
-      doDeselect,
-      doExpand,
-      doFeather,
-      doFill,
-      doInvert,
-      doPaste,
-      doSelectAll,
-      doTrim,
-      closeAll,
-      doc,
-      exportPng,
-      fg,
-      fit,
-      hasSelection,
-      freeActive,
-      mergeOk,
-      newCanvas,
-      onCloseDoc,
-      onCommit,
-      onQuit,
-      onRedo,
-      onUndo,
-      openImage,
-      openProject,
-      saveProject,
-      scale,
-      selRadius,
-      zoom,
-    ],
+  /** 把当前图层一路移到最顶 / 最底（对应「图层 > 排列」的置为顶层 / 置为底层）。 */
+  const moveLayerToEdge = useCallback(
+    (dir: 1 | -1) => {
+      let next = doc;
+      while (canShiftLayer(next, dir)) next = moveLayer(next, dir);
+      if (next !== doc) onCommit(next, dir === 1 ? "置为顶层" : "置为底层");
+    },
+    [doc, onCommit],
   );
+
+  /** 「窗口 > 面板」开关：右侧坞由菜单直接控制。 */
+  const toggleDock = useCallback((id: DockGroupId) => {
+    setDockOpen((v) => ({ ...v, [id]: !v[id] }));
+  }, []);
+
+  /* ---------------------------------------------- 右键菜单（对照 PhotoCraft） */
+
+  /**
+   * 命令解析器转发：真正的 resolve 在下方 menuGroups 的 useMemo 里定义，
+   * 这里用 ref 转发，让右键菜单与顶部菜单共用同一份命令表。
+   */
+  const resolveRef = useRef<
+    ((id: string) => { run?: () => void; hint?: string; checked?: boolean } | undefined) | null
+  >(null);
+
+  /** 最近一次的非空选区：Reselect（重新选择）的依据。 */
+  const lastSelectionRef = useRef<SelectionMask | null>(null);
+  useEffect(() => {
+    if (doc.selection) lastSelectionRef.current = doc.selection;
+  }, [doc.selection]);
+
+  /** 「铺满屏幕」：缩放到画布恰好盖住视口（允许超出，与「适合屏幕」相对）。 */
+  const fillScreen = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp || !docW || !docH) return;
+    const k = Math.max(vp.clientWidth / docW, vp.clientHeight / docH);
+    zoom(k);
+  }, [docW, docH, zoom]);
+
+  /** 快速导出单个图层为 PNG（Quick Export As PNG）：只画该层自己的像素。 */
+  const doExportLayerPng = useCallback(async () => {
+    const cur = activeLayer(doc);
+    if (!cur || cur.kind !== "pixel") return;
+    try {
+      const target = await save({
+        title: "快速导出为 PNG",
+        defaultPath: `${cur.name}.png`,
+        filters: [{ name: "PNG 图片", extensions: ["png"] }],
+      });
+      if (typeof target !== "string") return;
+      const canvas = createSurface(docW, docH);
+      const c = mustCtx(canvas);
+      c.globalAlpha = cur.opacity / 100;
+      c.drawImage(cur.surface, 0, 0);
+      c.globalAlpha = 1;
+      await writeFileBytes(target, await encodePng(canvas));
+      setToast(zh.editor.exported);
+    } catch (e) {
+      setError(`${zh.error.exportFailed}：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [doc, docW, docH]);
+
+  /** 行数组 → 菜单条目：resolve 给不出命令的行照常显示但置灰，不做假可用。 */
+  const entriesFromRows = useCallback(
+    (rows: readonly (readonly [string, string] | null)[]): MenuEntry[] => {
+      const entries: MenuEntry[] = [];
+      for (const row of rows) {
+        if (!row) {
+          entries.push({ kind: "sep" });
+          continue;
+        }
+        const [label, id] = row;
+        const st = resolveRef.current?.(id);
+        entries.push(
+          st?.run
+            ? { label, id, hint: st.hint, checked: st.checked, onSelect: st.run }
+            : { label, id, disabled: true },
+        );
+      }
+      return entries;
+    },
+    [],
+  );
+
+  /** 一行 = 「文案 + 命令 id」；null = 分隔线。 */
+  type MenuRow = readonly (readonly [string, string] | null)[];
+
+  /**
+   * 画布右键：按当前工具 / 状态分流，分支与 PhotoCraft 的 rows() 一一对应。
+   */
+  const openCanvasMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setCtxMenu(null);
+
+      // 参考线优先：右击贴到某条未锁定的线身上，弹的是参考线菜单，
+      // 而不是当前工具的画布菜单 —— 与 PS 一致。
+      if (extras && showGuides) {
+        const q = docXY(e.clientX, e.clientY);
+        const hitR = 4 / scale;
+        let axis: "x" | "y" | null = null;
+        let index = -1;
+        for (let i = 0; i < guides.x.length; i += 1) {
+          if (Math.abs(q.x - guides.x[i]) <= hitR) {
+            axis = "x";
+            index = i;
+            break;
+          }
+        }
+        if (axis === null) {
+          for (let i = 0; i < guides.y.length; i += 1) {
+            if (Math.abs(q.y - guides.y[i]) <= hitR) {
+              axis = "y";
+              index = i;
+              break;
+            }
+          }
+        }
+        if (axis !== null && index >= 0) {
+          const ax = axis;
+          const idx = index;
+          const del = () =>
+            setGuides((gv) =>
+              ax === "x"
+                ? { ...gv, x: gv.x.filter((_, i) => i !== idx) }
+                : { ...gv, y: gv.y.filter((_, i) => i !== idx) },
+            );
+          const entries: MenuEntry[] = [
+            { label: zh.guide.delete, id: "guide.delete", disabled: guidesLocked, onSelect: del },
+            {
+              label: zh.guide.clearAll,
+              id: "view.clearGuides",
+              disabled: guidesLocked,
+              onSelect: () => setGuides({ x: [], y: [] }),
+            },
+            { kind: "sep" },
+            {
+              label: guidesLocked ? zh.guide.unlock : zh.guide.lock,
+              id: "view.lockGuides",
+              checked: guidesLocked,
+              onSelect: () => setGuidesLocked((v) => !v),
+            },
+          ];
+          setCtxMenu({ x: e.clientX, y: e.clientY, entries });
+          return;
+        }
+      }
+
+      const rows: MenuRow | null = (() => {
+        if (freeActive) {
+          return [
+            ["自由变换", "edit.freeTransform"],
+            ["缩放", "edit.transform.scale"],
+            ["旋转", "edit.transform.rotate"],
+            ["斜切", "edit.transform.skew"],
+            ["扭曲", "edit.transform.distort"],
+            ["透视", "edit.transform.perspective"],
+            ["变形", "edit.transform.warp"],
+            null,
+            ["内容识别缩放", "edit.contentAwareScale"],
+            ["操控变形", "edit.puppetWarp"],
+            null,
+            ["旋转 180°", "edit.transform.rotate180"],
+            ["顺时针旋转 90°", "edit.transform.rotate90Cw"],
+            ["逆时针旋转 90°", "edit.transform.rotate90Ccw"],
+            null,
+            ["水平翻转", "edit.transform.flipHorizontal"],
+            ["垂直翻转", "edit.transform.flipVertical"],
+          ] as MenuRow;
+        }
+        if (tool === "zoom" || tool === "hand") {
+          return [
+            ["放大", "view.zoomIn"],
+            ["缩小", "view.zoomOut"],
+            null,
+            ["适合屏幕", "view.fitOnScreen"],
+            ["铺满屏幕", "view.fillScreen"],
+            null,
+            ["100%", "view.actualPixels"],
+            ["200%", "view.twoHundredPercent"],
+          ] as MenuRow;
+        }
+        if (isSelectionTool(tool)) {
+          return hasSelection
+            ? ([
+                ["取消选择", "select.deselect"],
+                ["反选", "select.inverse"],
+                ["羽化…", "select.modify.feather"],
+                ["选择并遮住…", "select.selectAndMask"],
+                null,
+                ["存储选区…", "select.saveSelection"],
+                null,
+                ["通过拷贝的图层", "layer.new.layerViaCopy"],
+                ["通过剪切的图层", "layer.new.layerViaCut"],
+                ["新建图层…", "layer.new.layer"],
+                null,
+                ["自由变换", "edit.freeTransform"],
+                ["变换选区", "select.transformSelection"],
+                ["扭曲", "edit.transform.distort"],
+                ["透视", "edit.transform.perspective"],
+                null,
+                ["删除并填充选区", "edit.clear"],
+                ["填充…", "edit.fill"],
+                ["内容识别填充…", "edit.contentAwareFill"],
+              ] as MenuRow)
+            : ([
+                ["全选", "select.all"],
+                ["重新选择", "select.reselect"],
+                null,
+                ["色彩范围…", "select.colorRange"],
+              ] as MenuRow);
+        }
+        // 其余工具：PhotoCraft 对画笔等工具不弹画布菜单
+        return null;
+      })();
+      if (!rows) return;
+      setCtxMenu({ x: e.clientX, y: e.clientY, entries: entriesFromRows(rows) });
+    },
+    [tool, hasSelection, freeActive, entriesFromRows, docXY, scale, extras, showGuides, guides, guidesLocked],
+  );
+
+  /**
+   * 图层行右键：条目与顺序照抄 PhotoCraft 的 layer_menu_ui.rs（PS 2026 顺序）。
+   * 智能对象 / 画板 / 链接 / 栅格化等暂无内核能力的行保留占位并置灰。
+   */
+  const openLayerMenu = useCallback(
+    (e: React.MouseEvent, layerId: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const layer = doc.layers.find((l) => l.id === layerId);
+      if (!layer) return;
+      const isPixel = layer.kind === "pixel";
+      const rows: readonly (readonly [string, string] | null)[] = [
+        ["混合选项…", "layer.layerStyle.blendingOptions"],
+        null,
+        ["复制图层…", "layer.duplicate"],
+        ["删除图层", "layer.delete"],
+        ["从图层建立组…", "layer.groupLayers"],
+        null,
+        ["快速导出为 PNG", "layer.quickExportAsPng"],
+        ["导出为…", "layer.exportAs"],
+        null,
+        ["转换为智能对象", "layer.smartObject.convert"],
+        isPixel || layer.kind === "group" ? null : ["栅格化图层", "layer.rasterize"],
+        null,
+        layer.mask
+          ? [
+              layer.maskActive ? "停用图层蒙版" : "启用图层蒙版",
+              "layer.layerMask.toggle",
+            ]
+          : null,
+        layer.mask ? ["应用图层蒙版", "layer.layerMask.apply"] : null,
+        layer.mask ? ["删除图层蒙版", "layer.layerMask.delete"] : null,
+        !layer.mask && isPixel ? ["添加图层蒙版", "layer.layerMask.addReveal"] : null,
+        !layer.mask && isPixel && hasSelection
+          ? ["添加图层蒙版（显示选区）", "layer.layerMask.addSelection"]
+          : null,
+        ["创建 / 释放剪贴蒙版", "layer.clipping.toggle"],
+        null,
+        ["拷贝图层样式", "layer.layerStyle.copy"],
+        ["粘贴图层样式", "layer.layerStyle.paste"],
+        ["清除图层样式", "layer.layerStyle.clear"],
+        null,
+        layer.kind === "group" ? ["合并组", "layer.mergeLayers"] : ["向下合并", "layer.mergeLayers"],
+        ["合并可见图层", "layer.mergeVisible"],
+        ["拼合图像", "layer.flattenImage"],
+      ];
+      setCtxMenu({ x: e.clientX, y: e.clientY, entries: entriesFromRows(rows) });
+    },
+    [doc, hasSelection, entriesFromRows],
+  );
+
+  /**
+   * 蒙版缩略图右键（PhotoCraft 同款）：停用 / 删除 / 应用，
+   * 再加「蒙版载入选区」三连（加选 / 减选 / 交选由 selectionMode 承担）。
+   */
+  const openMaskMenu = useCallback(
+    (e: React.MouseEvent, layerId: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const layer = doc.layers.find((l) => l.id === layerId);
+      if (!layer?.mask) return;
+      const rows: readonly (readonly [string, string] | null)[] = [
+        [layer.maskActive ? "停用图层蒙版" : "启用图层蒙版", "layer.layerMask.toggle"],
+        ["删除图层蒙版", "layer.layerMask.delete"],
+        ["应用图层蒙版", "layer.layerMask.apply"],
+        null,
+        ["添加蒙版到选区", "layer.layerMask.addToSelection"],
+        ["从选区减去蒙版", "layer.layerMask.subtractFromSelection"],
+        ["蒙版与选区交叉", "layer.layerMask.intersectSelection"],
+        null,
+        ["选择并遮住…", "select.selectAndMask"],
+      ];
+      setCtxMenu({ x: e.clientX, y: e.clientY, entries: entriesFromRows(rows) });
+    },
+    [doc, entriesFromRows],
+  );
+
+  /**
+   * 顶部菜单：一级 / 二级 / 三级全量对齐 PhotoCraft 的 770 条目录。
+   *
+   * 能真实执行的绑定到 Strata 内核；尚未实现的照常显示、置灰禁用 ——
+   * 不做「看得见点得动但什么也不发生」的假按钮。
+   */
+  const menuGroups = useMemo<MenuGroup[]>(() => {
+    /** 对话框式调整统一落到「新建调整图层」，参数随时可回改。 */
+    const adjustLayer = (kind: AdjustId): MenuState => ({
+      run: () => onCommit(addAdjustLayer(doc, newAdjustState(kind)), zh.layers.adjustAdd),
+    });
+
+    /**
+     * 图层样式菜单：没有就挂上，已有就提示去图层面板里调参数。
+     * 调整层没有自己的像素，不提供样式。
+     */
+    const layerStyleMenu = (style: StyleId): MenuState | undefined => {
+      const layer = doc.layers[at];
+      if (!layer || layer.kind === "adjust") return undefined;
+      if (hasStyle(layer, style)) {
+        return { run: () => setToast(zh.menu.styleExists), checked: true };
+      }
+      return { run: () => onCommit(addLayerStyle(doc, style), zh.menu.styleAdded) };
+    };
+
+    const resolve: MenuResolver = (id) => {
+      switch (id) {
+        /* ---------------------------------------------------------- 文件 */
+        case "file.new":
+          return { run: newCanvas };
+        case "file.open":
+        case "file.openAs":
+          return { run: () => void openImage() };
+        case "file.save":
+        case "file.saveAs":
+        case "file.saveACopy":
+          return { run: () => void saveProject() };
+        case "file.close":
+          return { run: () => onCloseDoc(doc.id) };
+        case "file.closeAll":
+          return { run: closeAll };
+        case "file.closeOthers":
+          return docs.length > 1 ? { run: closeOthers } : undefined;
+        case "file.export.quickExportAsPng":
+          return { run: () => void exportPng(), hint: "Ctrl+Shift+S" };
+        case "file.export.exportAs":
+          return { run: () => void exportPng() };
+        case "file.exit":
+          return { run: onQuit };
+
+        /* ---------------------------------------------------------- 编辑 */
+        case "edit.undo":
+          return canUndo ? { run: onUndo, hint: "Ctrl+Z" } : undefined;
+        case "edit.redo":
+          return canRedo ? { run: onRedo, hint: "Ctrl+Shift+Z" } : undefined;
+        case "edit.cut":
+          return hasSelection ? { run: doCut, hint: "Ctrl+X" } : undefined;
+        case "edit.copy":
+          return { run: () => doCopy(false), hint: "Ctrl+C" };
+        case "edit.copyMerged":
+          return { run: () => doCopy(true) };
+        case "edit.paste":
+          return canPaste ? { run: doPaste, hint: "Ctrl+V" } : undefined;
+        case "edit.clear":
+          return hasSelection ? { run: doDeletePixels, hint: "Delete" } : undefined;
+        case "edit.fill":
+          return { run: () => doFill(fg) };
+        case "edit.stroke":
+          // 描边宽度默认给 3px；选项条上的羽化值若已设，顺手沿用
+          return hasSelection
+            ? {
+                run: () =>
+                  setStrokeDialog({
+                    width: String(Math.max(1, Math.round(selRadius) || 3)),
+                    color: fg,
+                    position: "center",
+                    opacity: "100",
+                  }),
+              }
+            : undefined;
+        case "edit.search":
+          return { run: () => setPalette(true) };
+        case "edit.contentAwareFill":
+          return hasSelection ? { run: doInpaint } : undefined;
+        case "edit.freeTransform":
+          return freeActive
+            ? { run: commitFreeTransform, hint: "Enter" }
+            : canTransform
+              ? { run: beginFreeTransform }
+              : undefined;
+        case "edit.transform.rotate180":
+          return canTransform
+            ? { run: () => onCommit(rotateLayerHalf(doc), zh.menu.rotateHalf) }
+            : undefined;
+        case "edit.transform.flipHorizontal":
+          return canTransform
+            ? { run: () => onCommit(flipLayer(doc, "h"), zh.menu.flipH) }
+            : undefined;
+        case "edit.transform.flipVertical":
+          return canTransform
+            ? { run: () => onCommit(flipLayer(doc, "v"), zh.menu.flipV) }
+            : undefined;
+        case "edit.keyboardShortcuts":
+          return { run: () => setModal("shortcuts") };
+        case "edit.preferences.general":
+          return { run: () => setPrefsOpen(true) };
+
+        /* ---------------------------------------------------------- 图像 */
+        // 反相 / 去色 / 均衡是 PS 传统的一键烙印；其余弹出式调整
+        // 统一落到「新建调整图层」—— 参数随时可回改，比一次性烙死更强
+        case "image.adjustments.brightnessContrast":
+          return adjustLayer("bc");
+        case "image.adjustments.levels":
+          return adjustLayer("levels");
+        case "image.adjustments.curves":
+          return adjustLayer("curves");
+        case "image.adjustments.exposure":
+          return adjustLayer("exposure");
+        case "image.adjustments.vibrance":
+          return adjustLayer("vibrance");
+        case "image.adjustments.hueSaturation":
+          return adjustLayer("huesat");
+        case "image.adjustments.colorBalance":
+          return adjustLayer("colorbalance");
+        case "image.adjustments.blackWhite":
+          return adjustLayer("blackwhite");
+        case "image.adjustments.photoFilter":
+          return adjustLayer("photofilter");
+        case "image.adjustments.channelMixer":
+          return adjustLayer("channelmixer");
+        case "image.adjustments.colorLookup":
+          return adjustLayer("colorlookup");
+        case "image.adjustments.invert":
+          return { run: () => doAdjust(zh.menu.adjustInvert, preset("invert")), hint: "Ctrl+I" };
+        case "image.adjustments.posterize":
+          return adjustLayer("posterize");
+        case "image.adjustments.threshold":
+          return adjustLayer("threshold");
+        case "image.adjustments.gradientMap":
+          return adjustLayer("gradientmap");
+        case "image.adjustments.selectiveColor":
+          return adjustLayer("selectivecolor");
+        case "image.adjustments.shadowsHighlights":
+          return adjustLayer("shadowhighlight");
+        case "image.adjustments.hdrToning":
+          return adjustLayer("hdtoning");
+        case "image.adjustments.desaturate":
+          return { run: () => doAdjust(zh.menu.adjustGray, preset("bw")), hint: "Ctrl+Shift+U" };
+        case "image.adjustments.matchColor":
+          return adjustLayer("matchcolor");
+        case "image.adjustments.replaceColor":
+          return adjustLayer("replacecolor");
+        case "image.adjustments.equalize":
+          return { run: () => doAdjust(adjustDef("equalize").label, preset("equalize")) };
+        case "image.autoTone":
+          return { run: () => doAuto("tone", zh.menu.autoTone) };
+        case "image.autoContrast":
+          return { run: () => doAuto("contrast", zh.menu.autoContrast) };
+        case "image.autoColor":
+          return { run: () => doAuto("color", zh.menu.autoColor) };
+        case "image.imageSize":
+          return { run: () => setSizeDialog("image"), hint: "Ctrl+Alt+I" };
+        case "image.canvasSize":
+          return { run: () => setSizeDialog("canvas"), hint: "Ctrl+Alt+C" };
+        case "image.duplicate":
+          return { run: duplicateImage };
+        case "image.crop":
+          return {
+            run: () => {
+              setTool("crop");
+              setToast(zh.menu.cropReady);
+            },
+          };
+        case "image.trim":
+          return { run: doTrim };
+        case "image.mode.grayscale":
+          return { run: () => onCommit(grayscaleDocument(doc), zh.menu.grayscale) };
+        case "image.mode.rgb":
+          return { run: () => setToast(zh.menu.alreadyRgb), checked: true };
+        case "image.imageRotation.180":
+          return { run: () => onCommit(rotateDocument(doc, 180), "旋转 180°") };
+        case "image.imageRotation.90cw":
+          return { run: () => onCommit(rotateDocument(doc, 90), zh.menu.rotateDocCw) };
+        case "image.imageRotation.90ccw":
+          return { run: () => onCommit(rotateDocument(doc, 270), zh.menu.rotateDocCcw) };
+        case "image.imageRotation.flipCanvasHorizontal":
+          return { run: () => onCommit(flipDocument(doc, "h"), zh.menu.flipCanvasH) };
+        case "image.imageRotation.flipCanvasVertical":
+          return { run: () => onCommit(flipDocument(doc, "v"), zh.menu.flipCanvasV) };
+
+        /* ---------------------------------------------------------- 图层 */
+        case "layer.new.layer":
+          return {
+            run: () => onCommit(addLayer(doc), zh.menu.newLayer),
+            hint: "Ctrl+Shift+N",
+          };
+        case "layer.newFillLayer.solidColor":
+          return { run: () => onCommit(addFillLayer(doc, fg), zh.menu.fillLayer) };
+        case "layer.renameLayer": {
+          const layer = doc.layers[at];
+          return layer
+            ? { run: () => setRenameDialog({ id: layer.id, name: layer.name }) }
+            : undefined;
+        }
+        case "layer.new.group":
+        case "layer.groupLayers":
+          return { run: () => onCommit(groupLayers(doc), zh.menu.group), hint: "Ctrl+G" };
+        case "layer.new.layerViaCopy":
+          return hasSelection
+            ? { run: () => onCommit(layerViaCopy(doc), zh.menu.layerViaCopy) }
+            : undefined;
+        case "layer.new.layerViaCut":
+          return hasSelection
+            ? { run: () => onCommit(layerViaCut(doc), zh.menu.layerViaCut) }
+            : undefined;
+        case "layer.duplicate":
+          return {
+            run: () => onCommit(duplicateLayer(doc), zh.menu.duplicateLayer),
+            hint: "Ctrl+J",
+          };
+        case "layer.delete":
+          return { run: () => onCommit(removeLayer(doc), zh.menu.deleteLayer) };
+        case "layer.delete.hiddenLayers":
+          return doc.layers.some((l) => !l.visible)
+            ? { run: () => onCommit(deleteHiddenLayers(doc), zh.menu.deleteHidden) }
+            : undefined;
+        case "layer.quickExportAsPng":
+          return doc.layers[at]?.kind === "pixel" ? { run: doExportLayerPng } : undefined;
+        case "layer.exportAs":
+          return doc.layers[at]?.kind === "pixel" ? { run: doExportLayerPng } : undefined;
+        case "layer.mergeVisible":
+          return doc.layers.some((l) => l.visible)
+            ? { run: () => onCommit(mergeVisible(doc), zh.menu.mergeVisible) }
+            : undefined;
+        case "layer.layerMask.addReveal":
+        case "layer.layerMask.add":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+            ? { run: () => onCommit(addMask(doc, "reveal"), zh.menu.addMask) }
+            : undefined;
+        case "layer.layerMask.revealAll":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+            ? { run: () => onCommit(addMask(doc, "reveal"), zh.menu.addMask) }
+            : undefined;
+        case "layer.layerMask.hideAll":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+            ? { run: () => onCommit(addMask(doc, "hide"), zh.menu.maskHideAll) }
+            : undefined;
+        case "layer.layerMask.addSelection":
+        case "layer.layerMask.revealSelection":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask && hasSelection
+            ? { run: () => onCommit(addMaskFromSelection(doc), zh.menu.addMask) }
+            : undefined;
+        case "layer.layerMask.hideSelection":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask && hasSelection
+            ? {
+                run: () =>
+                  onCommit(invertMask(addMaskFromSelection(doc)), zh.menu.maskHideSelection),
+              }
+            : undefined;
+        case "layer.layerMask.fromTransparency":
+          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+            ? { run: () => onCommit(addMaskFromTransparency(doc), zh.menu.addMask) }
+            : undefined;
+        case "layer.layerMask.toggle":
+        case "layer.layerMask.enabled":
+          return doc.layers[at]?.mask
+            ? { run: () => onCommit(toggleMaskActive(doc), zh.menu.maskToggle), checked: !!doc.layers[at]?.maskActive }
+            : undefined;
+        case "layer.layerMask.delete":
+          return doc.layers[at]?.mask
+            ? { run: () => onCommit(removeMask(doc), zh.menu.maskDelete) }
+            : undefined;
+        case "layer.layerMask.apply":
+          return doc.layers[at]?.mask && doc.layers[at]?.maskActive
+            ? { run: () => onCommit(applyMask(doc), zh.menu.maskApply) }
+            : undefined;
+        case "layer.clipping.toggle":
+        case "layer.createClippingMask":
+        case "layer.releaseClippingMask":
+          return doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "group"
+            ? {
+                run: () => onCommit(toggleClip(doc), zh.menu.clippingToggle),
+                checked: !!doc.layers[at]?.clip,
+              }
+            : undefined;
+        case "layer.layerStyle.copy":
+        case "layer.layerStyle.copyLayerStyle":
+          return doc.layers[at]?.styles?.length ? { run: () => copyLayerStyle(doc) } : undefined;
+        case "layer.layerStyle.paste":
+        case "layer.layerStyle.pasteLayerStyle":
+          return { run: () => onCommit(pasteLayerStyle(doc), zh.menu.stylePaste) };
+        case "layer.layerStyle.clear":
+          return doc.layers[at]?.styles?.length
+            ? { run: () => onCommit(clearLayerStyle(doc), zh.menu.styleClear) }
+            : undefined;
+        case "layer.layerStyle.dropShadow":
+          return layerStyleMenu("dropshadow");
+        case "layer.layerStyle.innerShadow":
+          return layerStyleMenu("innershadow");
+        case "layer.layerStyle.outerGlow":
+          return layerStyleMenu("outerglow");
+        case "layer.layerStyle.innerGlow":
+          return layerStyleMenu("innerglow");
+        case "layer.layerStyle.stroke":
+          return layerStyleMenu("stroke");
+        case "layer.layerStyle.colorOverlay":
+          return layerStyleMenu("coloroverlay");
+        case "layer.layerStyle.hideAllEffects": {
+          const layer = doc.layers[at];
+          if (!layer?.styles?.length) return undefined;
+          const off = layer.styles.map((s) => ({ ...s, enabled: false }));
+          return {
+            run: () => onCommit(updateLayer(doc, layer.id, { styles: off }), zh.menu.styleHideAll),
+          };
+        }
+        case "layer.mergeLayers":
+          return mergeOk
+            ? { run: () => onCommit(mergeDown(doc), zh.menu.mergeDown) }
+            : undefined;
+        case "layer.flattenImage":
+          return { run: () => onCommit(flattenImage(doc), zh.menu.flatten) };
+        case "layer.ungroupLayers":
+          return doc.layers[at]?.kind === "group"
+            ? { run: () => onCommit(ungroupLayers(doc), zh.menu.ungroup) }
+            : undefined;
+        case "layer.arrange.bringForward":
+          return canShiftLayer(doc, 1)
+            ? { run: () => onCommit(moveLayer(doc, 1), zh.menu.moveLayerUp) }
+            : undefined;
+        case "layer.arrange.sendBackward":
+          return canShiftLayer(doc, -1)
+            ? { run: () => onCommit(moveLayer(doc, -1), zh.menu.moveLayerDown) }
+            : undefined;
+        case "layer.arrange.bringToFront":
+          return canShiftLayer(doc, 1) ? { run: () => moveLayerToEdge(1) } : undefined;
+        case "layer.arrange.sendToBack":
+          return canShiftLayer(doc, -1) ? { run: () => moveLayerToEdge(-1) } : undefined;
+        case "layer.arrange.reverse":
+          return doc.layers.length > 1
+            ? { run: () => onCommit(reverseLayerOrder(doc), zh.menu.reverseLayers) }
+            : undefined;
+        case "layer.newAdjustmentLayer.brightnessContrast":
+          return adjustLayer("bc");
+        case "layer.newAdjustmentLayer.levels":
+          return adjustLayer("levels");
+        case "layer.newAdjustmentLayer.curves":
+          return adjustLayer("curves");
+        case "layer.newAdjustmentLayer.exposure":
+          return adjustLayer("exposure");
+        case "layer.newAdjustmentLayer.hueSaturation":
+          return adjustLayer("hs");
+        case "layer.newAdjustmentLayer.colorBalance":
+          return adjustLayer("colorbalance");
+        case "layer.newAdjustmentLayer.blackWhite":
+          return adjustLayer("bw");
+        case "layer.newAdjustmentLayer.photoFilter":
+          return adjustLayer("photofilter");
+        case "layer.newAdjustmentLayer.channelMixer":
+          return adjustLayer("channelmixer");
+        case "layer.newAdjustmentLayer.invert":
+          return adjustLayer("invert");
+        case "layer.newAdjustmentLayer.posterize":
+          return adjustLayer("posterize");
+        case "layer.newAdjustmentLayer.threshold":
+          return adjustLayer("threshold");
+        case "layer.newAdjustmentLayer.gradientMap":
+          return adjustLayer("gradientmap");
+        case "layer.newAdjustmentLayer.vibrance":
+          return adjustLayer("vibrance");
+        case "layer.newAdjustmentLayer.selectiveColor":
+          return adjustLayer("selectivecolor");
+        case "layer.newAdjustmentLayer.colorLookup":
+          return adjustLayer("colorlookup");
+        case "layer.newAdjustmentLayer.shadowsHighlights":
+          return adjustLayer("shadowhighlight");
+        case "layer.newAdjustmentLayer.hdrToning":
+          return adjustLayer("hdtoning");
+        case "layer.newAdjustmentLayer.matchColor":
+          return adjustLayer("matchcolor");
+        case "layer.newAdjustmentLayer.replaceColor":
+          return adjustLayer("replacecolor");
+        case "layer.newAdjustmentLayer.equalize":
+          return adjustLayer("equalize");
+        case "layer.newAdjustmentLayer.cameraRaw":
+          return adjustLayer("cameraraw");
+
+        /* ---------------------------------------------------------- 选择 */
+        case "select.all":
+          return { run: doSelectAll };
+        case "select.deselect":
+          return hasSelection ? { run: doDeselect } : undefined;
+        case "select.inverse":
+          return { run: doInvert };
+        case "select.modify.feather":
+          return hasSelection ? { run: doFeather, hint: `${selRadius} px` } : undefined;
+        case "select.modify.expand":
+          return hasSelection ? { run: doExpand, hint: `+${selRadius} px` } : undefined;
+        case "select.modify.contract":
+          return hasSelection ? { run: doContract, hint: `-${selRadius} px` } : undefined;
+        case "select.modify.border":
+          return hasSelection ? { run: doBorder, hint: `±${selRadius} px` } : undefined;
+        case "select.modify.smooth":
+          return hasSelection ? { run: doSmooth, hint: `${selRadius} px` } : undefined;
+        case "select.similar":
+          return hasSelection ? { run: doSimilar, hint: `±${tolerance}` } : undefined;
+        case "select.reselect":
+          return !hasSelection && lastSelectionRef.current
+            ? {
+                run: () =>
+                  onCommit(
+                    setSelection(doc, cloneSelection(lastSelectionRef.current!)),
+                    zh.selection.reselected,
+                  ),
+              }
+            : undefined;
+        case "select.transformSelection":
+          // 变换选区 = 把自由变换框开在选区上（PhotoCraft 同名行为）
+          return hasSelection && canTransform ? { run: () => beginFreeTransform() } : undefined;
+        case "layer.layerMask.addToSelection":
+        case "layer.layerMask.subtractFromSelection":
+        case "layer.layerMask.intersectSelection": {
+          const layer = doc.layers[at];
+          if (!layer?.mask) return undefined;
+          const mask = cloneSelection(layer.mask);
+          // 加选 = sel ∪ mask；减选 = sel ∩ ¬mask；交选 = sel ∩ mask
+          if (id === "layer.layerMask.addToSelection") {
+            return {
+              run: () =>
+                onCommit(
+                  setSelection(doc, combineSelection(doc.selection, mask, "add")),
+                  zh.selection.masked,
+                ),
+            };
+          }
+          if (id === "layer.layerMask.subtractFromSelection") {
+            return {
+              run: () =>
+                onCommit(
+                  setSelection(
+                    doc,
+                    combineSelection(doc.selection, invertSelection(mask), "intersect"),
+                  ),
+                  zh.selection.masked,
+                ),
+            };
+          }
+          return {
+            run: () =>
+              onCommit(
+                setSelection(doc, combineSelection(doc.selection, mask, "intersect")),
+                zh.selection.masked,
+              ),
+          };
+        }
+
+        /* ---------------------------------------------------------- 滤镜 */
+        case "filter.cameraRaw":
+          return adjustLayer("cameraraw");
+        case "filter.filterGallery":
+          return { run: () => setGallery(true) };
+        case "filter.liquify":
+          return { run: () => setLiquify(true) };
+        case "filter.blur.blur":
+          return { run: () => doAdjust(adjustDef("blur").label, preset("blur")) };
+        case "filter.blur.gaussianBlur":
+          // 内核的 blur 就是 Canvas 的高斯模糊，两个菜单项共用同一套参数
+          return { run: () => doAdjust(adjustDef("blur").label, preset("blur", { radius: 8 })) };
+        case "filter.blur.motionBlur":
+          return { run: () => doAdjust(adjustDef("motionblur").label, preset("motionblur")) };
+        case "filter.sharpen.sharpen":
+          return { run: () => doAdjust(adjustDef("sharpen").label, preset("sharpen")) };
+        case "filter.noise.addNoise":
+          return { run: () => doAdjust(adjustDef("noise").label, preset("noise")) };
+
+        /* ---------------------------------------------------------- 视图 */
+        case "view.zoomIn":
+          return { run: () => zoom(scale * ZOOM_STEP) };
+        case "view.zoomOut":
+          return { run: () => zoom(scale / ZOOM_STEP) };
+        case "view.fitOnScreen":
+        case "view.resetView":
+          return { run: fit };
+        case "view.actualPixels":
+          return { run: () => zoom(1) };
+        case "view.twoHundredPercent":
+          return { run: () => zoom(2) };
+        case "view.fillScreen":
+          return { run: fillScreen };
+        case "view.rulers":
+          return { run: () => setShowRulers((v) => !v), checked: showRulers };
+        case "view.show.grid":
+          return { run: () => setShowGrid((v) => !v), checked: showGrid };
+        case "view.show.guides":
+          return { run: () => setShowGuides((v) => !v), checked: showGuides };
+        case "view.show.pixelGrid":
+          return { run: () => setShowPixelGrid((v) => !v), checked: showPixelGrid };
+        case "view.extras":
+          return { run: () => setExtras((v) => !v), checked: extras };
+        case "view.lockGuides":
+          return { run: () => setGuidesLocked((v) => !v), checked: guidesLocked };
+        case "view.clearGuides":
+        case "view.clearCanvasGuides":
+          return {
+            run: () => {
+              setGuides({ x: [], y: [] });
+              setToast("参考线已清除");
+            },
+          };
+        case "view.snap":
+          return { run: () => setSnapOn((v) => !v), checked: snapOn };
+        case "view.snapTo.guides":
+          return { run: () => setSnapGuides((v) => !v), checked: snapGuides };
+        case "view.snapTo.grid":
+          return { run: () => setSnapGrid((v) => !v), checked: snapGrid };
+        case "view.snapTo.documentBounds":
+          return { run: () => setSnapBounds((v) => !v), checked: snapBounds };
+        case "view.snapTo.all":
+          return {
+            run: () => {
+              setSnapOn(true);
+              setSnapGuides(true);
+              setSnapGrid(true);
+              setSnapBounds(true);
+            },
+            checked: snapOn && snapGuides && snapGrid && snapBounds,
+          };
+        case "view.show.all":
+          return {
+            run: () => {
+              setExtras(true);
+              setShowGrid(true);
+              setShowGuides(true);
+            },
+            checked: extras && showGrid && showGuides,
+          };
+        case "view.newGuide":
+          return {
+            run: () => {
+              setShowRulers(true);
+              setGuideDialog({ axis: "y", pos: String(Math.round(docH / 2)) });
+            },
+          };
+        case "view.newGuideLayout":
+          return {
+            run: () =>
+              setLayoutDialog({
+                cols: "3",
+                rows: "3",
+                colGutter: "20",
+                rowGutter: "20",
+                margin: "0",
+                clear: true,
+              }),
+          };
+        case "view.newGuidesFromShape":
+          return {
+            run: () => {
+              const b = selectionBounds(doc.selection);
+              if (!b) {
+                setToast(zh.dialog.guideFromShapeEmpty);
+                return;
+              }
+              const xs = [b.x, b.x + b.width - 1];
+              const ys = [b.y, b.y + b.height - 1];
+              setGuides((gv) => ({ x: [...gv.x, ...xs], y: [...gv.y, ...ys] }));
+              setExtras(true);
+              setShowGuides(true);
+              setToast(zh.dialog.guideFromShapeDone);
+            },
+          };
+        case "view.show.smartGuides":
+          return { run: () => setSmartGuides((v) => !v), checked: smartGuides };
+
+        /* ---------------------------------------------------------- 窗口 */
+        case "window.panel.color":
+          return { run: () => toggleDock("color"), checked: dockOpen.color };
+        case "window.panel.properties":
+          return { run: () => toggleDock("props"), checked: dockOpen.props };
+        case "window.panel.layers":
+          return { run: () => toggleDock("layers"), checked: dockOpen.layers };
+        case "window.panel.history":
+          return { run: () => toggleDock("history"), checked: dockOpen.history };
+        case "window.panel.navigator":
+          return { run: () => toggleDock("navigator"), checked: dockOpen.navigator };
+        case "window.panel.histogram":
+          return { run: () => toggleDock("histogram"), checked: dockOpen.histogram };
+        case "window.panel.brushSettings":
+          return {
+            run: () => setBrushPanelOpen((v) => !v),
+            checked: brushPanelOpen,
+          };
+        case "window.workspace.essentials":
+        case "window.workspace.photography":
+          return { run: () => pickWorkspace("photo"), checked: workspace === "photo" };
+        case "window.workspace.painting":
+        case "window.workspace.pixelArt":
+          return { run: () => pickWorkspace("paint"), checked: workspace === "paint" };
+        case "window.workspace.resetWorkspace":
+          return {
+            run: () => {
+              pickWorkspace("photo");
+              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false });
+            },
+          };
+        case "window.theme.toggle":
+          return { run: () => onSetTheme(themeMode === "dark" ? "light" : "dark") };
+
+        default:
+          return undefined;
+      }
+    };
+
+    const groups = buildMenuGroups(resolve);
+
+    // 右键菜单与顶部菜单共用同一份命令表：把 resolve 转发给上面的 resolveRef
+    resolveRef.current = resolve;
+
+    /* 文件 > 最近打开：与开始页共用同一份记录。 */
+    const recent: MenuEntry[] = recentItems.length
+      ? [
+          ...recentItems.map((it) => ({
+            kind: "item" as const,
+            label: it.name,
+            hint: it.missing ? "文件已移动" : it.path,
+            onSelect: () => void openFileAt(it.path),
+          })),
+          { kind: "sep" as const },
+          { kind: "item" as const, label: "清除最近打开", onSelect: clearRecent },
+        ]
+      : [{ kind: "item" as const, label: "暂无最近打开的文件", disabled: true }];
+    insertAfterId(groups, "file.openAs", [
+      { kind: "item", label: "最近打开", children: recent },
+    ]);
+
+    /* 窗口末尾：已打开的文档列表，当前文档打勾。 */
+    appendToGroup(groups, "window", [
+      { kind: "sep" },
+      ...docs.map((d) => ({
+        kind: "item" as const,
+        label: d.name,
+        checked: d.id === doc.id,
+        onSelect: () => onSelectDoc(d.id),
+      })),
+    ]);
+
+    /* 帮助：真实链接 + 应用内的快捷键 / 关于。 */
+    appendToGroup(groups, "help", [
+      { kind: "item", label: zh.menu.shortcuts, onSelect: () => setModal("shortcuts") },
+      {
+        kind: "item",
+        label: zh.menu.palette,
+        hint: "Ctrl+K",
+        onSelect: () => setPalette(true),
+      },
+      { kind: "sep" },
+      { kind: "item", label: "Strata 项目主页", onSelect: () => void openUrl(REPO_URL) },
+      { kind: "item", label: "报告问题…", onSelect: () => void openUrl(ISSUES_URL) },
+      { kind: "sep" },
+      { kind: "item", label: zh.menu.about, onSelect: () => setModal("about") },
+    ]);
+
+    return groups;
+  }, [
+    at,
+    beginFreeTransform,
+    brushPanelOpen,
+    canPaste,
+    canRedo,
+    canTransform,
+    canUndo,
+    clearRecent,
+    closeAll,
+    closeOthers,
+    commitFreeTransform,
+    doc,
+    docs,
+    doAdjust,
+    doAuto,
+    doContract,
+    doCopy,
+    doCut,
+    doDeletePixels,
+    doDeselect,
+    doExpand,
+    doFeather,
+    doFill,
+    doInpaint,
+    doInvert,
+    doPaste,
+    doSelectAll,
+    doSmooth,
+    doTrim,
+    dockOpen,
+    exportPng,
+    fg,
+    fit,
+    freeActive,
+    hasSelection,
+    mergeOk,
+    moveLayerToEdge,
+    newCanvas,
+    onCloseDoc,
+    onCommit,
+    onQuit,
+    onRedo,
+    onSelectDoc,
+    onSetTheme,
+    onUndo,
+    openFileAt,
+    openImage,
+    pickWorkspace,
+    recentItems,
+    saveProject,
+    scale,
+    selRadius,
+    showGrid,
+    showRulers,
+    showGuides,
+    guidesLocked,
+    showPixelGrid,
+    extras,
+    themeMode,
+    toggleDock,
+    workspace,
+    zoom,
+  ]);
 
   const commands = useMemo<Command[]>(() => {
     const list: Command[] = [];
@@ -2366,18 +3613,25 @@ export default function EditorShell({
         });
       }
     }
-    for (const mg of menuGroups) {
-      for (const it of mg.items) {
-        if (it.kind === "sep" || it.disabled || !it.onSelect) continue;
-        list.push({
-          id: `menu.${mg.key}.${it.label}`,
-          label: it.label,
-          hint: it.hint,
-          group: mg.label,
-          run: it.onSelect,
-        });
+    // 菜单是三级树，命令面板要的是平表：深度优先拍平，只收能真实执行的叶子。
+    let seq = 0;
+    const walk = (items: MenuEntry[], group: string) => {
+      for (const it of items) {
+        if (it.kind === "sep") continue;
+        if (!it.disabled && it.onSelect) {
+          seq += 1;
+          list.push({
+            id: it.id ? `menu.${it.id}` : `menu.${seq}`,
+            label: it.label,
+            hint: it.hint,
+            group,
+            run: it.onSelect,
+          });
+        }
+        if (it.children) walk(it.children, group);
       }
-    }
+    };
+    for (const mg of menuGroups) walk(mg.items, mg.label);
     return list;
   }, [menuGroups, pickTool]);
 
@@ -2524,6 +3778,21 @@ export default function EditorShell({
         setShowRulers((v) => !v);
         return;
       }
+      // 视图 > 额外内容（Ctrl+H）
+      if (k === "h" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        setExtras((v) => !v);
+        return;
+      }
+      // 参考线三连：Ctrl+; 显示 / Ctrl+Shift+; 吸附 / Ctrl+Alt+; 锁定。
+      // Shift 会让分号键输出冒号，两个键位都收。
+      if (k === ";" || k === ":") {
+        e.preventDefault();
+        if (e.altKey) setGuidesLocked((v) => !v);
+        else if (e.shiftKey) setSnapOn((v) => !v);
+        else setShowGuides((v) => !v);
+        return;
+      }
       // 剪切 / 复制 / 复制合并 / 粘贴（PS 的老习惯）
       if (k === "x") {
         e.preventDefault();
@@ -2563,6 +3832,12 @@ export default function EditorShell({
         if (mergeOk) onCommit(mergeDown(doc), zh.menu.mergeDown);
         return;
       }
+      // Ctrl+Shift+A：Camera Raw（滤镜菜单里印了快捷键，按下就得有反应）
+      if (k === "a" && e.shiftKey) {
+        e.preventDefault();
+        onCommit(addAdjustLayer(doc, newAdjustState("cameraraw")), zh.layers.adjustAdd);
+        return;
+      }
       if (k === "backspace") {
         e.preventDefault();
         doFill(bg);
@@ -2571,6 +3846,12 @@ export default function EditorShell({
       return;
     }
 
+    // Tab：沉浸模式，收起全部面板只留画布（PS 的老习惯）
+    if (e.key === "Tab") {
+      e.preventDefault();
+      setHidePanels((v) => !v);
+      return;
+    }
     // Alt+Backspace：用前景色填充选区（PS 的老习惯，落在 alt 早退之前）
     if (e.altKey && e.key === "Backspace") {
       e.preventDefault();
@@ -2658,7 +3939,7 @@ export default function EditorShell({
   const textBoxRows = textEdit ? Math.max(1, textEdit.value.split("\n").length) : 1;
 
   return (
-    <div className="editor">
+    <div className={hidePanels ? "editor is-immersive" : "editor"}>
       <header className="editor-top">
         <BrandMark size={22} />
         <AppMenuBar groups={menuGroups} />
@@ -2793,6 +4074,8 @@ export default function EditorShell({
             onFeather={setFeather}
             contiguous={contiguous}
             onContiguous={setContiguous}
+            sampleAllLayers={sampleAllLayers}
+            onSampleAllLayers={setSampleAllLayers}
             docSize={docSize}
             onOpenBrushPanel={() => setBrushPanelOpen(true)}
           />
@@ -2814,7 +4097,7 @@ export default function EditorShell({
                 onPointerUp={onUp}
                 onPointerCancel={onUp}
                 onPointerLeave={hideCursor}
-                onContextMenu={(e) => e.preventDefault()}
+                onContextMenu={openCanvasMenu}
               />
               {/* 蚂蚁线 / 裁剪遮罩浮层：只负责画，不接事件 */}
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
@@ -2826,18 +4109,52 @@ export default function EditorShell({
                   style={{ backgroundSize: `${64 * scale}px ${64 * scale}px` }}
                 />
               )}
-              {/* 标尺：贴着画布上沿 / 左沿的刻度条，随缩放和对齐画布原点 */}
+              {/* 参考线：从标尺里拉出来的对齐线，纯浮层，不进像素也不进历史 */}
+              {extras && showGuides && (guides.x.length > 0 || guides.y.length > 0) && (
+                <div className="editor-guides" aria-hidden="true">
+                  {guides.x.map((gx, i) => (
+                    <div
+                      key={`gx-${i}`}
+                      className="editor-guide is-v"
+                      style={{ left: gx * scale }}
+                    />
+                  ))}
+                  {guides.y.map((gy, i) => (
+                    <div
+                      key={`gy-${i}`}
+                      className="editor-guide is-h"
+                      style={{ top: gy * scale }}
+                    />
+                  ))}
+                </div>
+              )}
+              {/* 像素网格：放大到 800% 以上才画，否则格子会糊成一片灰 */}
+              {extras && showPixelGrid && scale >= 8 && (
+                <div
+                  className="editor-pixelgrid"
+                  aria-hidden="true"
+                  style={{ backgroundSize: `${scale}px ${scale}px` }}
+                />
+              )}
+              {/* 标尺：贴着画布上沿 / 左沿的刻度条，随缩放和对齐画布原点。
+                  从刻度条上按住往里拖，就能拉出新参考线。 */}
               {showRulers && (
                 <>
                   <div
                     className="editor-ruler editor-ruler-h"
-                    aria-hidden="true"
                     style={{ backgroundSize: `${100 * scale}px 100%, ${10 * scale}px 100%` }}
+                    onPointerDown={onRulerDown("y")}
+                    onPointerMove={onRulerMove}
+                    onPointerUp={onRulerUp}
+                    onPointerCancel={onRulerUp}
                   />
                   <div
                     className="editor-ruler editor-ruler-v"
-                    aria-hidden="true"
                     style={{ backgroundSize: `100% ${100 * scale}px, 100% ${10 * scale}px` }}
+                    onPointerDown={onRulerDown("x")}
+                    onPointerMove={onRulerMove}
+                    onPointerUp={onRulerUp}
+                    onPointerCancel={onRulerUp}
                   />
                 </>
               )}
@@ -2906,30 +4223,64 @@ export default function EditorShell({
             </div>
           </div>
         </div>
-        <div className="editor-right">
-          <ColorPanel
-            fg={fg}
-            bg={bg}
-            onFg={setFg}
-            onBg={setBg}
-            onSwap={swapColors}
-            onReset={resetColors}
-            onPickTool={pickTool}
-          />
-          <LayersPanel
-            doc={doc}
-            onChange={onCommit}
-            onPreview={onPreview}
-            maskEdit={maskEdit}
-            onMaskEdit={setMaskEdit}
-            historyLabels={historyLabels}
-            historyIndex={historyIndex}
-            onHistoryJump={onHistoryJump}
-            channelVis={channelVis}
-            activeChannel={activeChannel}
-            onChannel={pickChannel}
-          />
-        </div>
+        <RightDock
+          open={dockOpen}
+          onToggle={toggleDock}
+          navigator={
+            <NavigatorPanel
+              docW={docW}
+              docH={docH}
+              source={compRef.current}
+              version={panelTick}
+              scale={scale}
+              viewportW={viewportSize.w}
+              viewportH={viewportSize.h}
+              panX={pan.x}
+              panY={pan.y}
+              onCenter={(x, y) =>
+                setPan({
+                  x: viewportSize.w / 2 - x * scale,
+                  y: viewportSize.h / 2 - y * scale,
+                })
+              }
+              onZoom={zoom}
+            />
+          }
+          histogram={<HistogramPanel source={compRef.current} version={panelTick} />}
+          color={
+            <ColorPanel
+              fg={fg}
+              bg={bg}
+              onFg={setFg}
+              onBg={setBg}
+              onSwap={swapColors}
+              onReset={resetColors}
+              onPickTool={pickTool}
+            />
+          }
+          properties={<PropertiesPanel doc={doc} onChange={onCommit} onPreview={onPreview} />}
+          layers={
+            <LayersPanel
+              doc={doc}
+              onChange={onCommit}
+              onPreview={onPreview}
+              maskEdit={maskEdit}
+              onMaskEdit={setMaskEdit}
+              channelVis={channelVis}
+              activeChannel={activeChannel}
+              onChannel={pickChannel}
+              onLayerContextMenu={openLayerMenu}
+              onMaskContextMenu={openMaskMenu}
+            />
+          }
+          history={
+            <HistoryPanel
+              labels={historyLabels}
+              index={historyIndex}
+              onJump={onHistoryJump}
+            />
+          }
+        />
       </div>
 
       <StatusBar doc={doc} scale={scale} tool={tool} />
@@ -2939,6 +4290,321 @@ export default function EditorShell({
       )}
       {modal !== null && (
         <InfoModals which={modal} info={info} onClose={() => setModal(null)} />
+      )}
+      {/* 新建参考线：方向 + 位置，位置以文档像素计 */}
+      {guideDialog && (
+        <Modal
+          title={zh.dialog.newGuideTitle}
+          onClose={() => setGuideDialog(null)}
+          width={400}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setGuideDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={submitGuide}>
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">{zh.dialog.newGuideHint}</p>
+          <div className="field-row">
+            <div className="field">
+              <span className="field-label">{zh.dialog.guideOrientation}</span>
+              <div className="editor-ws" role="group" aria-label={zh.dialog.guideOrientation}>
+                <button
+                  type="button"
+                  className={guideDialog.axis === "y" ? "ws-btn is-on" : "ws-btn"}
+                  onClick={() =>
+                    setGuideDialog((v) => (v ? { ...v, axis: "y" } : v))
+                  }
+                >
+                  {zh.dialog.guideHorizontal}
+                </button>
+                <button
+                  type="button"
+                  className={guideDialog.axis === "x" ? "ws-btn is-on" : "ws-btn"}
+                  onClick={() =>
+                    setGuideDialog((v) => (v ? { ...v, axis: "x" } : v))
+                  }
+                >
+                  {zh.dialog.guideVertical}
+                </button>
+              </div>
+            </div>
+            <label className="field">
+              <span className="field-label">{zh.dialog.guidePosition}</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={0}
+                  max={guideDialog.axis === "x" ? docW : docH}
+                  value={guideDialog.pos}
+                  autoFocus
+                  onChange={(e) => {
+                    const pos = e.target.value;
+                    setGuideDialog((v) => (v ? { ...v, pos } : v));
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && submitGuide()}
+                />
+                <span className="field-unit">{zh.dialog.px}</span>
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
+      {/* 编辑 > 描边：宽度 / 颜色 / 位置 / 不透明度 */}
+      {strokeDialog && (
+        <Modal
+          title={zh.dialog.strokeTitle}
+          onClose={() => setStrokeDialog(null)}
+          width={430}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setStrokeDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={submitStroke}>
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">{zh.dialog.strokeHint}</p>
+          <div className="field-row">
+            <label className="field">
+              <span className="field-label">{zh.dialog.strokeWidth}</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={strokeDialog.width}
+                  autoFocus
+                  onChange={(e) => {
+                    const width = e.target.value;
+                    setStrokeDialog((v) => (v ? { ...v, width } : v));
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && submitStroke()}
+                />
+                <span className="field-unit">{zh.dialog.px}</span>
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">{zh.dialog.strokeOpacity}</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={strokeDialog.opacity}
+                  onChange={(e) => {
+                    const opacity = e.target.value;
+                    setStrokeDialog((v) => (v ? { ...v, opacity } : v));
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && submitStroke()}
+                />
+                <span className="field-unit">%</span>
+              </span>
+            </label>
+          </div>
+          <div className="field-row">
+            <div className="field">
+              <span className="field-label">{zh.dialog.strokeColor}</span>
+              <span className="field-input">
+                <ColorChip
+                  hex={strokeDialog.color}
+                  label={zh.dialog.strokeColor}
+                  onChange={(color) => setStrokeDialog((v) => (v ? { ...v, color } : v))}
+                />
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label">{zh.dialog.strokePosition}</span>
+              <div className="editor-ws" role="group" aria-label={zh.dialog.strokePosition}>
+                {(
+                  [
+                    ["inside", zh.dialog.strokeInside],
+                    ["center", zh.dialog.strokeCenter],
+                    ["outside", zh.dialog.strokeOutside],
+                  ] as const
+                ).map(([pos, label]) => (
+                  <button
+                    key={pos}
+                    type="button"
+                    className={strokeDialog.position === pos ? "ws-btn is-on" : "ws-btn"}
+                    onClick={() => setStrokeDialog((v) => (v ? { ...v, position: pos } : v))}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {/* 图层 > 重命名图层 */}
+      {renameDialog && (
+        <Modal
+          title={zh.dialog.renameTitle}
+          onClose={() => setRenameDialog(null)}
+          width={420}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setRenameDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={submitRename}>
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">{zh.dialog.renameHint}</p>
+          <label className="field">
+            <span className="field-label">{zh.dialog.renameName}</span>
+            <span className="field-input">
+              <input
+                type="text"
+                value={renameDialog.name}
+                autoFocus
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setRenameDialog((v) => (v ? { ...v, name } : v));
+                }}
+                onKeyDown={(e) => e.key === "Enter" && submitRename()}
+              />
+            </span>
+          </label>
+        </Modal>
+      )}
+      {/* 新建参考线版面：列 / 行 / 间距 / 边距，一次铺满整张画布 */}
+      {layoutDialog && (
+        <Modal
+          title={zh.dialog.layoutTitle}
+          onClose={() => setLayoutDialog(null)}
+          width={460}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setLayoutDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={submitLayout}>
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">{zh.dialog.layoutHint}</p>
+          <div className="guide-layout-form">
+            <div className="field-row">
+              <label className="field">
+                <span className="field-label">{zh.dialog.layoutColumns}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={layoutDialog.cols}
+                    autoFocus
+                    onChange={(e) => {
+                      const cols = e.target.value;
+                      setLayoutDialog((v) => (v ? { ...v, cols } : v));
+                    }}
+                  />
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.dialog.layoutRows}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={layoutDialog.rows}
+                    onChange={(e) => {
+                      const rows = e.target.value;
+                      setLayoutDialog((v) => (v ? { ...v, rows } : v));
+                    }}
+                  />
+                </span>
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field">
+                <span className="field-label">{zh.dialog.layoutColGutter}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    value={layoutDialog.colGutter}
+                    onChange={(e) => {
+                      const colGutter = e.target.value;
+                      setLayoutDialog((v) => (v ? { ...v, colGutter } : v));
+                    }}
+                  />
+                  <span className="field-unit">{zh.dialog.px}</span>
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.dialog.layoutRowGutter}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    value={layoutDialog.rowGutter}
+                    onChange={(e) => {
+                      const rowGutter = e.target.value;
+                      setLayoutDialog((v) => (v ? { ...v, rowGutter } : v));
+                    }}
+                  />
+                  <span className="field-unit">{zh.dialog.px}</span>
+                </span>
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field">
+                <span className="field-label">{zh.dialog.layoutMargin}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    value={layoutDialog.margin}
+                    onChange={(e) => {
+                      const margin = e.target.value;
+                      setLayoutDialog((v) => (v ? { ...v, margin } : v));
+                    }}
+                  />
+                  <span className="field-unit">{zh.dialog.px}</span>
+                </span>
+              </label>
+              <div className="field guide-layout-clear">
+                <Check
+                  label={zh.dialog.layoutClear}
+                  on={layoutDialog.clear}
+                  onChange={(clear) => setLayoutDialog((v) => (v ? { ...v, clear } : v))}
+                />
+              </div>
+            </div>
+          </div>
+        </Modal>
       )}
       {sizeDialog !== null && (
         <ImageSizeDialog
@@ -2997,6 +4663,8 @@ export default function EditorShell({
       )}
       {error && <div className="editor-errorbar">{error}</div>}
       {toast && <div className="toast">{toast}</div>}
+      {/* 画布 / 图层面板共用的右键菜单浮层 */}
+      <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />
     </div>
   );
 }

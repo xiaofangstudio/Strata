@@ -15,6 +15,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { zh } from "../../i18n/zh-CN";
@@ -93,21 +94,19 @@ interface Props {
   /** 当前是否在编辑蒙版（画笔落在蒙版上） */
   maskEdit: boolean;
   onMaskEdit: (on: boolean) => void;
-  /** 历史面板：步骤名（下标 0 是最早那一步，与撤销栈一一对应） */
-  historyLabels: string[];
-  /** 当前停在第几步；-1 表示栈尚未就绪 */
-  historyIndex: number;
-  /** 点历史里的某一步，直接跳过去 */
-  onHistoryJump: (index: number) => void;
   /** 通道页：各原色通道是否参与合成（纯视图，不入历史） */
   channelVis: ChannelVis;
   /** 通道页：当前正在查看的通道 */
   activeChannel: ChannelId;
   /** 通道页：改视图 —— 只影响屏幕，不写历史 */
   onChannel: (vis: ChannelVis, active: ChannelId) => void;
+  /** 图层行右键（菜单浮层在 EditorShell 统一渲染） */
+  onLayerContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
+  /** 蒙版缩略图右键 */
+  onMaskContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
 }
 
-type TabId = "layers" | "channels" | "paths" | "history";
+type TabId = "layers" | "channels" | "paths";
 
 export default function LayersPanel({
   doc,
@@ -115,18 +114,17 @@ export default function LayersPanel({
   onPreview,
   maskEdit,
   onMaskEdit,
-  historyLabels,
-  historyIndex,
-  onHistoryJump,
   channelVis,
   activeChannel,
   onChannel,
+  onLayerContextMenu,
+  onMaskContextMenu,
 }: Props) {
   const [tab, setTab] = useState<TabId>("layers");
   const cur = activeLayer(doc);
 
   return (
-    <aside className="panel" aria-label={zh.panel.layers}>
+    <aside className="panel dock-panel" aria-label={zh.panel.layers}>
       <div className="panel-tabs" role="tablist">
         <TabButton id="layers" tab={tab} onPick={setTab} label={zh.panel.layers} />
         <TabButton
@@ -144,13 +142,6 @@ export default function LayersPanel({
           hint={zh.panel.pathsSoon}
           disabled
         />
-        <TabButton
-          id="history"
-          tab={tab}
-          onPick={setTab}
-          label={zh.panel.history}
-          hint={zh.panel.historyHint}
-        />
       </div>
 
       {tab === "layers" && cur && (
@@ -161,6 +152,8 @@ export default function LayersPanel({
           onPreview={onPreview}
           maskEdit={maskEdit}
           onMaskEdit={onMaskEdit}
+          onLayerContextMenu={onLayerContextMenu}
+          onMaskContextMenu={onMaskContextMenu}
         />
       )}
 
@@ -173,71 +166,7 @@ export default function LayersPanel({
           onChange={onChange}
         />
       )}
-
-      {tab === "history" && (
-        <HistoryTab
-          labels={historyLabels}
-          index={historyIndex}
-          onJump={onHistoryJump}
-        />
-      )}
     </aside>
-  );
-}
-
-/* ---------------- 历史页 ---------------- */
-
-/**
- * 历史面板。
- *
- * 与 PS 一样：最新的步骤排在顶上，当前所处的那一步高亮；在它之上（更早的）
- * 是「撤销得到」的，在它之下是「重做得到」的 —— 后者压暗，一眼能看出
- * 「继续画一笔会把这条分支冲掉」。
- *
- * 点击任意一步即跳过去，跳过去之后再画一笔就从那里长出新分支。
- */
-function HistoryTab({
-  labels,
-  index,
-  onJump,
-}: {
-  labels: string[];
-  index: number;
-  onJump: (index: number) => void;
-}) {
-  if (labels.length === 0) {
-    return <p className="ly-empty">{zh.panel.historyEmpty}</p>;
-  }
-
-  return (
-    <div className="ly-list">
-      <ol className="hist-list">
-        {/* 倒序渲染：最新的在最上面，符合「刚做的就在眼前」的直觉 */}
-        {labels
-          .map((label, i) => ({ label, i }))
-          .reverse()
-          .map(({ label, i }) => (
-            <li key={i}>
-              <button
-                type="button"
-                className={
-                  i === index
-                    ? "hist-step is-now"
-                    : i > index
-                      ? "hist-step is-future"
-                      : "hist-step"
-                }
-                aria-current={i === index ? "step" : undefined}
-                title={label}
-                onClick={() => onJump(i)}
-              >
-                <span className="hist-dot" aria-hidden />
-                <span className="hist-label">{label}</span>
-              </button>
-            </li>
-          ))}
-      </ol>
-    </div>
   );
 }
 
@@ -447,6 +376,8 @@ interface LayerTabProps {
   onPreview: (next: StrataDoc) => void;
   maskEdit: boolean;
   onMaskEdit: (on: boolean) => void;
+  onLayerContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
+  onMaskContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
 }
 
 /**
@@ -500,6 +431,8 @@ function LayerTab({
   onPreview,
   maskEdit,
   onMaskEdit,
+  onLayerContextMenu,
+  onMaskContextMenu,
 }: LayerTabProps) {
   const [dragOpacity, setDragOpacity] = useState<number | null>(null);
   /** 被折叠起来的组 id（只影响面板显示，不动文档） */
@@ -534,11 +467,11 @@ function LayerTab({
   return (
     <>
       <div className="ly-props">
-        <div className="ly-prop">
-          <span className="ly-prop-label">{zh.layers.blend}</span>
+        <div className="ly-quick">
           <select
             className="ly-select"
             value={cur.blend}
+            title={zh.layers.blend}
             onChange={(e) => onChange(setBlend(doc, cur.id, e.target.value as BlendId), zh.layers.blend)}
           >
             {BLEND_MODES.map((b) => (
@@ -547,32 +480,26 @@ function LayerTab({
               </option>
             ))}
           </select>
+          <div className="ly-op" title={zh.layers.opacity}>
+            <input
+              type="range"
+              className="ly-range"
+              min={0}
+              max={100}
+              step={1}
+              value={shown}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setDragOpacity(v);
+                onPreview(setOpacity(doc, cur.id, v));
+              }}
+              onPointerUp={commitOpacity}
+              onKeyUp={commitOpacity}
+              onBlur={commitOpacity}
+            />
+            <span className="ly-opacity">{shown}</span>
+          </div>
         </div>
-
-        <div className="ly-prop">
-          <span className="ly-prop-label">{zh.layers.opacity}</span>
-          <input
-            type="range"
-            className="ly-range"
-            min={0}
-            max={100}
-            step={1}
-            value={shown}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setDragOpacity(v);
-              onPreview(setOpacity(doc, cur.id, v));
-            }}
-            onPointerUp={commitOpacity}
-            onKeyUp={commitOpacity}
-            onBlur={commitOpacity}
-          />
-          <span className="ly-opacity">{shown}</span>
-        </div>
-
-        {cur.kind === "adjust" && (
-          <AdjustProps doc={doc} layer={cur} onChange={onChange} onPreview={onPreview} />
-        )}
 
         {cur.mask && (
           <div className="ly-maskbar">
@@ -614,10 +541,6 @@ function LayerTab({
             </button>
           </div>
         )}
-
-        {cur.kind !== "adjust" && (
-          <StyleProps doc={doc} layer={cur} onChange={onChange} onPreview={onPreview} />
-        )}
       </div>
 
       <div className="ly-list" role="listbox" aria-label={zh.panel.layers}>
@@ -633,6 +556,8 @@ function LayerTab({
             onToggleCollapse={() => toggleCollapse(layer.id)}
             onChange={onChange}
             onPreview={onPreview}
+            onContextMenu={onLayerContextMenu}
+            onMaskContextMenu={onMaskContextMenu}
           />
         ))}
       </div>
@@ -814,7 +739,7 @@ function AdjustMenu({ onAdd }: { onAdd: (id: AdjustId) => void }) {
 }
 
 /** 调整图层的参数区（改参数不碰像素，随时可调可删）。 */
-function AdjustProps({
+export function AdjustProps({
   doc,
   layer,
   onChange,
@@ -873,22 +798,37 @@ function AdjustProps({
             return (
               <div className="ly-prop" key={p.id}>
                 <span className="ly-prop-label">{p.label}</span>
-                <input
-                  type="range"
-                  className="ly-range"
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  value={v}
-                  onChange={(e) => setParam(p.id, Number(e.target.value))}
-                  onPointerUp={commit}
-                  onKeyUp={commit}
-                  onBlur={commit}
-                />
-                <span className="ly-opacity">
-                  {v.toFixed(p.dec ?? 0)}
-                  {p.unit ?? ""}
-                </span>
+                {p.choices ? (
+                  <select
+                    className="ly-select"
+                    value={v}
+                    onChange={(e) => setParam(p.id, Number(e.target.value))}
+                    onBlur={commit}
+                  >
+                    {p.choices.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="range"
+                    className="ly-range"
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    value={v}
+                    onChange={(e) => setParam(p.id, Number(e.target.value))}
+                    onPointerUp={commit}
+                    onKeyUp={commit}
+                    onBlur={commit}
+                  />
+                )}
+                {!p.choices && (
+                  <span className="ly-opacity">
+                    {v.toFixed(p.dec ?? 0)}
+                    {p.unit ?? ""}
+                  </span>
+                )}
               </div>
             );
           })}
@@ -910,7 +850,7 @@ type NumField = "opacity" | "size" | "distance" | "angle";
  * 每种样式能单独开关、改参数、重置、删除；拖滑杆时走 onPreview 实时预览，
  * 松手才写进历史，和调整图层一个套路。
  */
-function StyleProps({
+export function StyleProps({
   doc,
   layer,
   onChange,
@@ -1529,6 +1469,9 @@ interface RowProps {
   onToggleCollapse: () => void;
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
+  /** 行右键 / 蒙版缩略图右键（菜单浮层统一在 EditorShell） */
+  onContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
+  onMaskContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
 }
 
 function LayerRow({
@@ -1540,6 +1483,8 @@ function LayerRow({
   onToggleCollapse,
   onChange,
   onPreview,
+  onContextMenu,
+  onMaskContextMenu,
 }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(layer.name);
@@ -1562,6 +1507,7 @@ function LayerRow({
       aria-selected={on}
       aria-level={depth + 1}
       onClick={() => onPreview(selectLayer(doc, layer.id))}
+      onContextMenu={(e) => onContextMenu?.(e, layer.id)}
     >
       {/* 缩进靠一段可伸缩的空白，子层往右让一格，一眼看出归属 */}
       <span className="ly-indent" style={{ width: depth * 14 }} aria-hidden="true" />
@@ -1601,7 +1547,13 @@ function LayerRow({
 
       <LayerThumb layer={layer} doc={doc} />
 
-      {layer.mask && <MaskThumb layer={layer} doc={doc} />}
+      {layer.mask && (
+        <MaskThumb
+          layer={layer}
+          doc={doc}
+          onContextMenu={onMaskContextMenu}
+        />
+      )}
 
       {editing ? (
         <input
@@ -1711,7 +1663,15 @@ function LayerThumb({ layer, doc }: { layer: StrataLayer; doc: StrataDoc }) {
 }
 
 /** 蒙版缩略图：alpha 直接当灰度画在白底上，所见即所得。 */
-function MaskThumb({ layer, doc }: { layer: StrataLayer; doc: StrataDoc }) {
+function MaskThumb({
+  layer,
+  doc,
+  onContextMenu,
+}: {
+  layer: StrataLayer;
+  doc: StrataDoc;
+  onContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -1742,6 +1702,7 @@ function MaskThumb({ layer, doc }: { layer: StrataLayer; doc: StrataDoc }) {
       height={36}
       className={layer.maskActive ? "ly-mask-thumb is-on" : "ly-mask-thumb is-off"}
       title={layer.maskActive ? zh.layers.maskOff : zh.layers.maskOn}
+      onContextMenu={(e) => onContextMenu?.(e, layer.id)}
     />
   );
 }

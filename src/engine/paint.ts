@@ -33,6 +33,9 @@ export type BrushTip = "round" | "pencil" | "chalk" | "bristle" | "spray";
  */
 export type BrushTexture = "none" | "paper" | "canvas" | "grain" | "dots";
 
+/** 对称模式：绕画布中轴镜像落笔（PhotoCraft 的 Symmetry）。 */
+export type SymmetryMode = "none" | "vertical" | "horizontal" | "both";
+
 /** 画笔参数。 */
 export interface BrushSettings {
   /** 笔尖直径（像素，满压感时） */
@@ -129,6 +132,9 @@ export interface BrushSettings {
   textureBrightness: number;
   /** 纹理对比度 -100–100：越大颗粒越硬、越分明 */
   textureContrast: number;
+  /* ---------------- 对称 ---------------- */
+  /** 绕画布中轴镜像落笔；缺省 none */
+  symmetry?: SymmetryMode;
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
@@ -809,6 +815,10 @@ export class Stroke {
   private readonly tip: Tip;
   private readonly erase: boolean;
   private readonly settings: BrushSettings;
+  /** 选区蒙版：非空时每个笔尖落下即刻裁进选区（拖动中实时生效，而非抬笔才裁） */
+  private readonly clipMask: HTMLCanvasElement | null;
+  /** 对称模式：每个笔尖按中轴镜像再补落 */
+  private readonly symmetry: SymmetryMode;
 
   /* --- 由画笔参数推导出的「mypaint 设置」，一笔之内不变 --- */
   /** 满压感时的笔尖半径 */
@@ -896,9 +906,12 @@ export class Stroke {
     height: number,
     settings: BrushSettings,
     erase: boolean,
+    clipMask?: HTMLCanvasElement | null,
   ) {
     this.settings = settings;
     this.erase = erase;
+    this.clipMask = clipMask ?? null;
+    this.symmetry = settings.symmetry ?? "none";
     this.buf = document.createElement("canvas");
     this.buf.width = Math.max(1, Math.round(width));
     this.buf.height = Math.max(1, Math.round(height));
@@ -1194,54 +1207,72 @@ export class Stroke {
         filter = `saturate(${sat}%) brightness(${bri}%)`;
       }
 
-      // 亚像素笔尖：缩放贴图会丢样，直接画矢量圆更干净（此处已看不见羽化）
-      if (r < VECTOR_DAB_RADIUS) {
-        c.fillStyle = this.erase ? "#000000" : this.settings.color;
-        if (filter) c.filter = filter;
-        c.beginPath();
-        c.arc(px, py, r, 0, Math.PI * 2);
-        c.fill();
-        if (filter) c.filter = "none";
-        this.trackDab(px, py, r);
-        continue;
+      // 对称：绕画布中轴把同一颗笔尖镜像补落（双轴再补对角两点）。
+      // 镜像点共享同一颗 alpha / 半径 / 滤镜，落点与轨迹完全对称。
+      const W = this.buf.width;
+      const H = this.buf.height;
+      const pts: Array<[number, number]> = [[px, py]];
+      if (this.symmetry === "vertical" || this.symmetry === "both") pts.push([W - px, py]);
+      if (this.symmetry === "horizontal" || this.symmetry === "both") pts.push([px, H - py]);
+      if (this.symmetry === "both") pts.push([W - px, H - py]);
+      for (const [sx, sy] of pts) {
+        this.stampDab(sx, sy, r, filter);
       }
-
-      // 颜色抖动：同一形状有 5 档色相，每个笔尖随机挑一张，叠出彩色颗粒
-      const variant =
-        this.tip.canvases.length > 1
-          ? Math.floor(Math.random() * this.tip.canvases.length)
-          : 0;
-
-      // 角度 / 圆度 / 翻转抖动：都作用在贴图绘制这一下
-      const spin = this.angleJitterAmp > 0
-        ? (Math.random() * 2 - 1) * 180 * this.angleJitterAmp
-        : 0;
-      let qScale = 1;
-      if (this.roundnessJitterAmp > 0) {
-        const q = Math.max(
-          this.roundnessMinAmp,
-          this.roundnessBase * (1 - Math.random() * this.roundnessJitterAmp),
-        );
-        qScale = clamp(q / this.roundnessBase, 0.01, 1);
-      }
-      const fx = this.flipX && Math.random() < 0.5 ? -1 : 1;
-      const fy = this.flipY && Math.random() < 0.5 ? -1 : 1;
-
-      // 默认参数一定要走这条最干净的路径：一次平移 + 一次 drawImage
-      if (spin === 0 && qScale === 1 && fx === 1 && fy === 1 && !filter) {
-        drawTipSprite(c, this.tip, px, py, r, variant);
-      } else {
-        c.save();
-        if (filter) c.filter = filter;
-        c.translate(px, py);
-        if (spin !== 0) c.rotate((spin * Math.PI) / 180);
-        if (qScale !== 1 || fx !== 1 || fy !== 1) c.scale(fx, qScale * fy);
-        drawTipSprite(c, this.tip, 0, 0, r, variant);
-        if (filter) c.filter = "none";
-        c.restore();
-      }
-      this.trackDab(px, py, r);
     }
+  }
+
+  /** 落一颗已定参的笔尖：亚像素走矢量圆，其余走贴图；落完记包围盒并裁选区。 */
+  private stampDab(px: number, py: number, r: number, filter: string): void {
+    const c = this.ctx;
+    // 亚像素笔尖：缩放贴图会丢样，直接画矢量圆更干净（此处已看不见羽化）
+    if (r < VECTOR_DAB_RADIUS) {
+      c.fillStyle = this.erase ? "#000000" : this.settings.color;
+      if (filter) c.filter = filter;
+      c.beginPath();
+      c.arc(px, py, r, 0, Math.PI * 2);
+      c.fill();
+      if (filter) c.filter = "none";
+      this.trackDab(px, py, r);
+      this.clipDab(px, py, r);
+      return;
+    }
+
+    // 颜色抖动：同一形状有 5 档色相，每个笔尖随机挑一张，叠出彩色颗粒
+    const variant =
+      this.tip.canvases.length > 1
+        ? Math.floor(Math.random() * this.tip.canvases.length)
+        : 0;
+
+    // 角度 / 圆度 / 翻转抖动：都作用在贴图绘制这一下
+    const spin = this.angleJitterAmp > 0
+      ? (Math.random() * 2 - 1) * 180 * this.angleJitterAmp
+      : 0;
+    let qScale = 1;
+    if (this.roundnessJitterAmp > 0) {
+      const q = Math.max(
+        this.roundnessMinAmp,
+        this.roundnessBase * (1 - Math.random() * this.roundnessJitterAmp),
+      );
+      qScale = clamp(q / this.roundnessBase, 0.01, 1);
+    }
+    const fx = this.flipX && Math.random() < 0.5 ? -1 : 1;
+    const fy = this.flipY && Math.random() < 0.5 ? -1 : 1;
+
+    // 默认参数一定要走这条最干净的路径：一次平移 + 一次 drawImage
+    if (spin === 0 && qScale === 1 && fx === 1 && fy === 1 && !filter) {
+      drawTipSprite(c, this.tip, px, py, r, variant);
+    } else {
+      c.save();
+      if (filter) c.filter = filter;
+      c.translate(px, py);
+      if (spin !== 0) c.rotate((spin * Math.PI) / 180);
+      if (qScale !== 1 || fx !== 1 || fy !== 1) c.scale(fx, qScale * fy);
+      drawTipSprite(c, this.tip, 0, 0, r, variant);
+      if (filter) c.filter = "none";
+      c.restore();
+    }
+    this.trackDab(px, py, r);
+    this.clipDab(px, py, r);
   }
 
   /** 记下这个笔尖的外接矩形（含抖动余量），供纹理裁剪定界。 */
@@ -1251,6 +1282,32 @@ export class Stroke {
     if (y - pad < this.minY) this.minY = y - pad;
     if (x + pad > this.maxX) this.maxX = x + pad;
     if (y + pad > this.maxY) this.maxY = y + pad;
+  }
+
+  /**
+   * 选区实时裁剪：笔尖刚落下的那一小块用 destination-in 咬一遍蒙版。
+   *
+   * 只裁笔尖的外接矩形 —— 之前落下的区域早已裁过，重复裁会越裁越狠；
+   * 这样拖动中笔画在选区外的部分当场消失，与 PhotoCraft / PS 一致，
+   * 不必等到抬笔的 finish() 才整体裁一次。
+   */
+  private clipDab(x: number, y: number, r: number): void {
+    const m = this.clipMask;
+    if (!m) return;
+    const x0 = Math.max(0, Math.floor(x - r - 2));
+    const y0 = Math.max(0, Math.floor(y - r - 2));
+    const x1 = Math.min(this.buf.width, Math.ceil(x + r + 2));
+    const y1 = Math.min(this.buf.height, Math.ceil(y + r + 2));
+    if (x1 <= x0 || y1 <= y0) return;
+    const c = this.ctx;
+    c.save();
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = "destination-in";
+    c.beginPath();
+    c.rect(x0, y0, x1 - x0, y1 - y0);
+    c.clip();
+    c.drawImage(m, 0, 0);
+    c.restore();
   }
 
   /** 抬笔合成前，按纹理把笔迹的 alpha 咬掉一层（整笔只咬一次）。 */

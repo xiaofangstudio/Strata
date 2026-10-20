@@ -14,6 +14,7 @@ import type { StrataDoc } from "../core/document";
 import { mustCtx } from "./surface";
 import { pruneFilters } from "./filters";
 import { clipBaseOf, maskedSurface, paintStyledLayer } from "./styles";
+import { isPixelAdjust, applyPixelAdjust } from "./adjustPixels";
 
 export { maskedSurface };
 
@@ -111,17 +112,30 @@ function applyAdjust(
   h: number,
 ): void {
   if (!layer.visible || layer.opacity <= 0 || !layer.adjust) return;
-  const filter = adjustFilter(layer.adjust, layer.id);
-  if (!filter) return;
 
   const buf = adjustBuffer(w, h);
   const bc = mustCtx(buf);
   bc.drawImage(ctx.canvas, 0, 0);
 
+  // 像素级调整：无法用 SVG 滤镜表达的一类，走 ImageData 内核
+  if (isPixelAdjust(layer.adjust.id)) {
+    const img = bc.getImageData(0, 0, w, h);
+    applyPixelAdjust(layer.adjust, img);
+    bc.putImageData(img, 0, 0);
+  } else {
+    const filter = adjustFilter(layer.adjust, layer.id);
+    if (!filter) return;
+    bc.filter = filter;
+    bc.globalCompositeOperation = "copy";
+    bc.drawImage(buf, 0, 0);
+    bc.filter = "none";
+    bc.globalCompositeOperation = "source-over";
+  }
+
   ctx.save();
   ctx.globalCompositeOperation = blendOp(layer.blend);
   ctx.clearRect(0, 0, w, h);
-  ctx.filter = filter;
+  ctx.filter = "none";
   ctx.globalAlpha = 1;
   ctx.drawImage(buf, 0, 0);
 

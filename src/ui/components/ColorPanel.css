@@ -1,61 +1,66 @@
 /* 常驻调色面板：前景 / 背景、拾色器、标准色板、我的色板、最近使用 */
 
 .cp-panel {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  max-height: 62%;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.cp-panel-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 30px;
-  padding: 0 10px;
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  user-select: none;
-}
-
-.cp-panel-head:hover {
-  color: var(--text);
-}
-
-.cp-panel-title {
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.cp-chev {
-  display: flex;
-  color: var(--text-3);
-  transform: rotate(-90deg);
-  transition: transform 0.15s ease;
-}
-
-.cp-chev.is-on {
-  transform: rotate(0deg);
-}
-
-.cp-panel-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-3);
+  background: var(--surface);
+}
+
+.cp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px var(--sp-2);
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* ---------- 十六进制 / RGB 数值 ---------- */
+
+.cp-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cp-values .cp-preview {
+  width: 20px;
+  height: 20px;
+}
+
+.cp-values .cp-hex {
+  height: 22px;
+}
+
+.cp-channels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.cp-channel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cp-channel-label {
+  flex: none;
+  width: 10px;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+
+.cp-channel .cp-num {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
 }
 
 /* ---------- 前景 / 背景色 ---------- */
@@ -70,14 +75,14 @@
 .cp-fgbg-stack {
   position: relative;
   flex: none;
-  width: 44px;
-  height: 38px;
+  width: 34px;
+  height: 30px;
 }
 
 .cp-chip {
   position: absolute;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-xs);
@@ -92,7 +97,7 @@
 }
 
 .cp-chip-bg {
-  top: 12px;
+  top: 8px;
   left: 12px;
   z-index: 1;
 }
@@ -111,11 +116,11 @@
 .cp-mini {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 18px;
+  width: 20px;
+  height: 15px;
   padding: 0;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -140,8 +145,8 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   color: var(--text-2);
   background: var(--surface-2);

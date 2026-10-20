@@ -1,0 +1,60 @@
+/* 导航器面板：整档缩略图 + 视口红框 */
+.nav-body {
+  padding: 6px 8px 8px;
+}
+.nav-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 216 / 132;
+  background:
+    repeating-conic-gradient(#2a2a30 0% 25%, #34343c 0% 50%) 0 0 / 12px 12px;
+  border-radius: 4px;
+  cursor: crosshair;
+  touch-action: none;
+}
+:root[data-theme="light"] .nav-thumb,
+.light .nav-thumb {
+  background:
+    repeating-conic-gradient(#e4e4e8 0% 25%, #f0f0f4 0% 50%) 0 0 / 12px 12px;
+}
+
+/* 底部缩放条：− / 滑杆 / +，滑杆走对数映射 */
+.nav-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.nav-zoom-btn {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.nav-zoom-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.nav-zoom input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

@@ -1,0 +1,33 @@
+/* 直方图面板：通道切换 + 柱状图 + 统计值 */
+.hist-channel {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.hist-body {
+  padding: 4px 8px 8px;
+}
+.hist-canvas {
+  display: block;
+  width: 100%;
+  height: 110px;
+  background:
+    repeating-conic-gradient(#2a2a30 0% 25%, #34343c 0% 50%) 0 0 / 12px 12px;
+  border-radius: 4px;
+}
+:root[data-theme="light"] .hist-canvas,
+.light .hist-canvas {
+  background:
+    repeating-conic-gradient(#e4e4e8 0% 25%, #f0f0f4 0% 50%) 0 0 / 12px 12px;
+}
+.hist-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 10px;
+  opacity: 0.75;
+  white-space: nowrap;
+}

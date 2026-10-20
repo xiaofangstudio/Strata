@@ -90,8 +90,8 @@ describe("混合模式表 BLEND_MODES", () => {
 });
 
 describe("调整定义表 ADJUST_DEFS", () => {
-  it("21 条且 id 唯一", () => {
-    expect(ADJUST_DEFS).toHaveLength(21);
+  it("31 条且 id 唯一", () => {
+    expect(ADJUST_DEFS).toHaveLength(31);
     const ids = ADJUST_DEFS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
   });

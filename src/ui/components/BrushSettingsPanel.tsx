@@ -22,11 +22,11 @@ const bp = zh.options.brushPanel;
 /* ---------------- 字段表 ---------------- */
 
 type NumericKey = {
-  [K in keyof BrushSettings]: BrushSettings[K] extends number ? K : never;
+  [K in keyof BrushSettings]-?: NonNullable<BrushSettings[K]> extends number ? K : never;
 }[keyof BrushSettings];
 
 type BoolKey = {
-  [K in keyof BrushSettings]: BrushSettings[K] extends boolean ? K : never;
+  [K in keyof BrushSettings]-?: NonNullable<BrushSettings[K]> extends boolean ? K : never;
 }[keyof BrushSettings];
 
 interface NumField {

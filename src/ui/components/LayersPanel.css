@@ -15,6 +15,14 @@
   border-left: 1px solid var(--border);
 }
 
+/* 放进右侧 Dock 后由坞决定宽度与边框，面板自己填满整组 */
+.panel.dock-panel {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border-left: 0;
+}
+
 /* ---------- 标签条 ---------- */
 .panel-tabs {
   flex: none;
@@ -36,6 +44,8 @@
   cursor: pointer;
   transition:
     color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-bottom-color var(--dur-fast) var(--ease),
     transform var(--dur-fast) var(--ease);
 }
 
@@ -60,13 +70,32 @@
 }
 
 /* ---------- 属性区 ---------- */
+/* 混合模式与不透明度压成一行，尽量把高度让给下面的图层列表；
+   调整参数 / 样式展开后最多占 58%，超出的部分自己滚动。 */
 .ly-props {
-  flex: none;
+  flex: 0 1 auto;
+  max-height: 58%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  padding: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
+}
+
+.ly-quick {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ly-op {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
 }
 
 .ly-prop {
@@ -83,16 +112,20 @@
 }
 
 .ly-select {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  height: 30px;
+  max-width: 152px;
+  height: 26px;
   padding: 0 var(--sp-2);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   color: var(--text);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-xs);
   cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .ly-select:focus {
@@ -123,7 +156,7 @@
 
 .ly-opacity {
   flex: none;
-  width: 32px;
+  width: 26px;
   font-size: var(--fs-xs);
   color: var(--text-2);
   text-align: right;
@@ -225,15 +258,28 @@
   text-overflow: ellipsis;
 }
 
+/* 独立历史面板：滚动区收紧一点，空态留白 */
+.hist-scroll {
+  gap: 1px;
+  padding: var(--sp-2);
+}
+
+.hist-empty {
+  padding: var(--sp-3);
+  text-align: center;
+}
+
 .ly-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 46px;
+  height: 38px;
   padding: 0 var(--sp-2);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
   /* 新建 / 粘贴出来的图层「落」进列表；老行不会重挂载，因此不会跟着抖 */
   animation: row-in var(--dur-fast) var(--ease-out) both;
 }
@@ -242,8 +288,11 @@
   background: var(--hover);
 }
 
+/* 当前图层：浅蓝底 + 左沿一道 2px 蓝条。
+   蓝条用内阴影画，不占布局，也不会把名字挤动。 */
 .ly-row.is-on {
   background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* 树形缩进：宽度由内联 style 给出，这里只管别被压缩 */
@@ -297,6 +346,18 @@
   border: none;
   border-radius: var(--r-xs);
   cursor: pointer;
+  /* 显隐 / 锁定是高频开关：颜色与灰度的变化走过渡，点下去不再硬跳 */
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+/* 按下即微缩：22px 的小图标给一点指尖反馈，松手回弹 */
+.ly-eye:active,
+.ly-lock:active {
+  transform: scale(0.86);
 }
 
 .ly-eye:hover,
@@ -320,8 +381,8 @@
 
 .ly-thumb {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--r-xs);
   border: 1px solid var(--border);
   background-color: var(--surface);
@@ -451,6 +512,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+/* 蒙版相关的开关按下时轻压一下，和图层行同一套触感 */
+.ly-toggle:active {
+  transform: scale(0.98);
 }
 
 .ly-toggle:hover {
@@ -471,6 +542,11 @@
   border-radius: var(--r-xs);
   border: 1px solid var(--border);
   background: #000;
+  /* 蒙版「正在编辑」时蓝框是渐显出来的，避免切换目标时整行闪一下 */
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
 }
 
 .ly-mask-thumb.is-on {
@@ -537,6 +613,14 @@
   border: none;
   border-radius: var(--r-xs);
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.ly-mini:active {
+  transform: scale(0.88);
 }
 
 .ly-mini:hover {
@@ -598,6 +682,9 @@
   border: none;
   border-radius: var(--r-xs);
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 
 .ly-menu-item:hover {
@@ -643,6 +730,14 @@
   border: none;
   border-radius: var(--r-xs);
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.ly-check:active {
+  transform: scale(0.88);
 }
 
 .ly-check:hover {
@@ -700,6 +795,9 @@
   background: transparent;
   border: none;
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .ly-seg-btn:hover {
@@ -804,7 +902,9 @@
   height: 44px;
   padding: 0 var(--sp-2);
   border-radius: var(--r-sm);
-  transition: background var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
   animation: row-in var(--dur-fast) var(--ease-out) both;
 }
 
@@ -815,6 +915,7 @@
 /* 正在单独查看的那一行：浅蓝底点亮，与「当前图层」用同一套语言 */
 .ch-row.is-viewed {
   background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* 单通道缩略图改用黑底：透明区域在通道里就是纯黑，不该漏出棋盘格 */

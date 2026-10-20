@@ -17,11 +17,12 @@
 
 /* ---------- 顶栏 ---------- */
 .editor-top {
+  position: relative;
   flex: none;
-  height: 48px;
+  height: 36px;
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   padding: 0 var(--sp-3);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -106,7 +107,7 @@
   display: flex;
   align-items: stretch;
   gap: var(--sp-1);
-  height: 36px;
+  height: 30px;
   padding: 0 var(--sp-3);
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
@@ -216,24 +217,6 @@
   flex-direction: column;
 }
 
-/* 右列：常驻调色面板 + 图层面板，纵向堆叠 */
-.editor-right {
-  flex: none;
-  width: 264px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--border);
-}
-
-/* 面板自身已经有宽度与左边框，放进右列后让位给列容器 */
-.editor-right .panel {
-  flex: 1 1 0;
-  width: 100%;
-  min-height: 0;
-  border-left: 0;
-}
-
 /* ---------- 视口 ---------- */
 .editor-viewport {
   flex: 1;
@@ -303,11 +286,86 @@
     linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
 }
 
+/* ---------- 参考线 ---------- */
+
+/* 线本体是 1px 的浮层，不吃事件：拖动由画布上的命中判定接管 */
+.editor-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.editor-guide {
+  position: absolute;
+  background: var(--guide, #24a2ff);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.25);
+  animation: guide-in var(--dur-fast) var(--ease-out);
+}
+
+.editor-guide.is-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.editor-guide.is-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+/* 新建的线从「一条细缝」淡入，不闪 */
+@keyframes guide-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 新建参考线版面：三行字段，行间留一点气口 */
+.guide-layout-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.guide-layout-clear {
+  justify-content: flex-end;
+  padding-bottom: 4px;
+}
+
+/* ---------- 像素网格（高倍缩放） ---------- */
+
+.editor-pixelgrid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.14) 1px, transparent 1px);
+  animation: pixelgrid-in 160ms var(--ease-out);
+}
+
+@keyframes pixelgrid-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* 标尺：贴着画布上沿 / 左沿的两条刻度条，主刻度 100 文档像素、次刻度 10。
    主刻度用 --text-3 打头压重，次刻度用 --grid-line 保持克制。 */
 .editor-ruler {
   position: absolute;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
   background-color: var(--surface-2);
   background-repeat: repeat-x, repeat-x;
   background-position: 0 100%, 0 100%;
@@ -335,6 +393,17 @@
     linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-repeat: repeat-y, repeat-y;
   background-position: 100% 0, 100% 0;
+}
+
+/* ---------- Tab 沉浸模式 ----------
+   只留画布：工具轨 / 选项栏 / 面板坞 / 状态栏一起收起。
+   用 display 切换而不是动画宽度，避免每次切换都触发整页重排抖动。 */
+.editor.is-immersive .toolrail,
+.editor.is-immersive .optbar,
+.editor.is-immersive .dock,
+.editor.is-immersive .statusbar,
+.editor.is-immersive .editor-tabs {
+  display: none;
 }
 
 /* ---------- 跟随光标（笔尖圆圈 / 吸管取样环） ---------- */

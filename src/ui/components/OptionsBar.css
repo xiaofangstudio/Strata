@@ -115,6 +115,9 @@
   border: 1px solid var(--border);
   border-radius: var(--r-xs);
   font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .opt-num:focus {
@@ -159,6 +162,9 @@
   border: 0;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .opt-mode + .opt-mode {
@@ -259,6 +265,15 @@
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.fly-btn:active {
+  transform: scale(0.97);
 }
 
 .fly-btn:hover {

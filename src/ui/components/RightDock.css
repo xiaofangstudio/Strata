@@ -1,0 +1,209 @@
+/**
+ * 右侧面板坞样式。
+ *
+ * 宽度对齐 PhotoCraft：36px 开关轨 + 290px 面板列。
+ * 面板组自上而下堆叠；颜色与属性按内容高度收缩，图层吃掉剩余空间，
+ * 历史拉出后从底部占一块可滚动的固定高度。
+ */
+
+.dock {
+  flex: none;
+  width: 326px;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+
+/* ---------- 竖排开关轨 ---------- */
+
+.dock-rail {
+  flex: none;
+  width: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+}
+
+.dock-rail-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.dock-rail-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.dock-rail-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft, rgba(111, 192, 255, 0.14));
+}
+
+/* 打开的那一组在轨道左沿亮一道蓝，和面板连成一体。
+   蓝条常驻在 DOM 里、只切换显隐，所以能「长」出来而不是凭空闪现。 */
+.dock-rail-btn::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleY(0.4);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.dock-rail-btn.is-on::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+/* ---------- 面板列 ---------- */
+
+.dock-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--border);
+  gap: 1px;
+}
+
+.dock-group {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  /* 面板拉出 / 收起时轻轻落位，只动 opacity 与 4px 位移，不触发布局动画 */
+  animation: dock-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 高度分配对齐 PhotoCraft：颜色与属性按内容收紧，图层吃掉剩余空间。
+   颜色约 200px，属性最多 150px（内部滚动），图层 ≥ 200px。 */
+.dock-group.is-color {
+  flex: 0 0 auto;
+}
+
+.dock-group.is-props {
+  flex: 0 1 auto;
+  max-height: 150px;
+}
+
+.dock-group.is-layers {
+  flex: 1 1 auto;
+  min-height: 200px;
+}
+
+.dock-group.is-history {
+  flex: 0 1 auto;
+  max-height: 208px;
+}
+
+/* 导航器 / 直方图按内容收紧，不跟图层抢剩余高度 */
+.dock-group.is-navigator,
+.dock-group.is-histogram {
+  flex: 0 0 auto;
+}
+
+/* 每个面板的通用外壳：标签条 + 可滚动主体 */
+.dock-panel {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.dock-panel .panel-tabs {
+  padding: 0 var(--sp-2);
+  background: var(--surface);
+}
+
+.dock-panel .panel-tab {
+  height: 31px;
+  font-size: var(--fs-xs);
+}
+
+/* 面板内滚动区：只滚内容，不滚标签条 */
+.dock-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* 单页签面板（历史）的标题条 */
+.dock-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  height: 31px;
+  padding: 0 var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+}
+
+.dock-head-count {
+  color: var(--text-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.dock-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* 窄窗口时把面板列收窄，画布优先 */
+@media (max-width: 1180px) {
+  .dock {
+    width: 290px;
+  }
+}

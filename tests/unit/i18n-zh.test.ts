@@ -33,6 +33,7 @@ const TOP_GROUPS = [
   "editor",
   "status",
   "dialog",
+  "guide",
   "liquify",
   "inpaint",
   "hint",
@@ -170,7 +171,7 @@ describe("zh 关键分组内容", () => {
 describe("zh 源码结构扫描（运行时看不到的重复键）", () => {
   const bodies = groupBodies(source);
 
-  it("源码里确实能解析出全部 21 个顶层分组", () => {
+  it("源码里确实能解析出全部 22 个顶层分组", () => {
     expect([...bodies.keys()]).toEqual([...TOP_GROUPS]);
   });
 

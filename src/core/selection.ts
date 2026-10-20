@@ -323,6 +323,26 @@ export function featherSelection(mask: SelectionMask, radius: number): Selection
 }
 
 /**
+ * 平滑：把选区边缘的毛刺磨圆（PS 的「选择 > 修改 > 平滑」）。
+ *
+ * 先模糊把锯齿摊成渐变，再按 50% 阈值收回硬边 —— 拐角变圆、细刺消失，
+ * 选区整体体积基本不变。
+ */
+export function smoothSelection(mask: SelectionMask, radius: number): SelectionMask {
+  if (radius <= 0) return cloneSelection(mask);
+  const out = createSurface(mask.width, mask.height);
+  const ctx = mustCtx(out);
+  ctx.filter = `blur(${radius}px)`;
+  ctx.drawImage(mask, 0, 0);
+  ctx.filter = "none";
+  const img = ctx.getImageData(0, 0, out.width, out.height);
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 128 ? 255 : 0;
+  ctx.putImageData(img, 0, 0);
+  return out;
+}
+
+/**
  * 扩展 / 收缩共用的形态学运算。
  *
  * 用一个「圆盘」结构元：在半径内取一圈方向，把遮罩按这些方向逐个偏移叠印，
@@ -359,4 +379,21 @@ export function expandSelection(mask: SelectionMask, radius: number): SelectionM
 export function contractSelection(mask: SelectionMask, radius: number): SelectionMask {
   if (radius <= 0) return cloneSelection(mask);
   return morphSelection(mask, radius, false);
+}
+
+/**
+ * 边界：只留选区边缘一圈宽 2×radius 的环带（PS 的「选择 > 修改 > 边界」）。
+ *
+ * 外侧膨胀与内侧收缩各做一次，再从外圈里挖掉内圈 —— 与描边共用同一套
+ * 形态学结果，视觉上就是沿边界的一条「描边选区」。
+ */
+export function borderSelection(mask: SelectionMask, radius: number): SelectionMask {
+  const r = Math.max(1, Math.round(radius));
+  const outer = expandSelection(mask, r);
+  const inner = contractSelection(mask, r);
+  const ctx = mustCtx(outer);
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.drawImage(inner, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  return outer;
 }

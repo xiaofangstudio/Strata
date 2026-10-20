@@ -155,8 +155,13 @@ export type AdjustId =
   | "curves"
   | "exposure"
   | "hs"
+  | "huesat"
   | "colorbalance"
   | "bw"
+  | "blackwhite"
+  | "vibrance"
+  | "selectivecolor"
+  | "colorlookup"
   | "gradientmap"
   | "channelmixer"
   | "invert"
@@ -166,6 +171,11 @@ export type AdjustId =
   | "shadowhighlight"
   | "colortemp"
   | "photofilter"
+  | "cameraraw"
+  | "equalize"
+  | "hdtoning"
+  | "matchcolor"
+  | "replacecolor"
   | "blur"
   | "motionblur"
   | "sharpen"
@@ -189,6 +199,8 @@ export interface AdjustParam {
   dec?: number;
   /** 同一条调整里再分组的标题（色彩平衡、通道混合器用） */
   group?: string;
+  /** 下拉选项（颜色查找预设这类离散值用），有此项时面板渲染 <select> */
+  choices?: readonly { label: string; value: number }[];
 }
 
 export interface AdjustDef {
@@ -345,6 +357,190 @@ export const ADJUST_DEFS: readonly AdjustDef[] = [
       { id: "hue", label: "滤镜色相", min: 0, max: 360, step: 1, def: 40, unit: "°" },
       { id: "strength", label: "浓度", min: 0, max: 100, step: 1, def: 0, unit: "%" },
       { id: "preserve", label: "保留明度", min: 0, max: 100, step: 1, def: 100, unit: "%" },
+    ],
+  },
+  {
+    id: "huesat",
+    label: "色相 / 饱和度（全功能）",
+    family: "color",
+    params: [
+      { id: "hue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "全图" },
+      { id: "saturate", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "全图" },
+      { id: "lightness", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "全图" },
+      { id: "colorize", label: "着色", min: 0, max: 1, step: 1, def: 0, group: "全图" },
+      { id: "redHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "红色" },
+      { id: "redSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "红色" },
+      { id: "redLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "红色" },
+      { id: "yellowHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "黄色" },
+      { id: "yellowSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "黄色" },
+      { id: "yellowLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "黄色" },
+      { id: "greenHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "绿色" },
+      { id: "greenSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "绿色" },
+      { id: "greenLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "绿色" },
+      { id: "cyanHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "青色" },
+      { id: "cyanSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "青色" },
+      { id: "cyanLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "青色" },
+      { id: "blueHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "蓝色" },
+      { id: "blueSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "蓝色" },
+      { id: "blueLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "蓝色" },
+      { id: "magentaHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "洋红" },
+      { id: "magentaSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "洋红" },
+      { id: "magentaLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "洋红" },
+    ],
+  },
+  {
+    id: "blackwhite",
+    label: "黑白（通道权重）",
+    family: "color",
+    params: [
+      { id: "red", label: "红色", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "通道权重" },
+      { id: "yellow", label: "黄色", min: 0, max: 100, step: 1, def: 60, unit: "%", group: "通道权重" },
+      { id: "green", label: "绿色", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "通道权重" },
+      { id: "cyan", label: "青色", min: 0, max: 100, step: 1, def: 60, unit: "%", group: "通道权重" },
+      { id: "blue", label: "蓝色", min: 0, max: 100, step: 1, def: 20, unit: "%", group: "通道权重" },
+      { id: "magenta", label: "洋红", min: 0, max: 100, step: 1, def: 80, unit: "%", group: "通道权重" },
+    ],
+  },
+  {
+    id: "vibrance",
+    label: "自然饱和度",
+    family: "color",
+    params: [
+      { id: "vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, def: 0 },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0 },
+    ],
+  },
+  {
+    id: "selectivecolor",
+    label: "可选颜色",
+    family: "color",
+    params: [
+      { id: "mode", label: "方法", min: 0, max: 1, step: 1, def: 0, group: "模式" },
+      { id: "redsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "yellowsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "greensC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "cyansC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "bluesC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "magentasC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "whitesC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "neutralsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "blacksC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+    ],
+  },
+  {
+    id: "colorlookup",
+    label: "颜色查找",
+    family: "color",
+    params: [
+      {
+        id: "preset",
+        label: "预设",
+        min: 0,
+        max: 9,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "暖阳", value: 0 },
+          { label: "冷冽", value: 1 },
+          { label: "胶片", value: 2 },
+          { label: "青橙", value: 3 },
+          { label: "复古", value: 4 },
+          { label: "墨色", value: 5 },
+          { label: "薄荷", value: 6 },
+          { label: "夜幕", value: 7 },
+          { label: "粉彩", value: 8 },
+          { label: "高反差", value: 9 },
+        ],
+      },
+      { id: "intensity", label: "强度", min: 0, max: 100, step: 1, def: 100, unit: "%" },
+    ],
+  },
+  {
+    id: "equalize",
+    label: "均衡",
+    family: "tone",
+    params: [],
+  },
+  {
+    id: "hdtoning",
+    label: "HDR 色调",
+    family: "tone",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 150, step: 1, def: 40, unit: "px" },
+      { id: "strength", label: "强度", min: 0, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "detail", label: "细节", min: 0, max: 300, step: 1, def: 80, unit: "%" },
+      { id: "gamma", label: "灰度系数", min: 0.5, max: 2, step: 0.01, def: 1, dec: 2 },
+      { id: "exposure", label: "曝光", min: -3, max: 3, step: 0.01, def: 0, dec: 2, unit: " EV" },
+    ],
+  },
+  {
+    id: "matchcolor",
+    label: "匹配颜色",
+    family: "color",
+    params: [
+      { id: "luminance", label: "明亮度", min: 0, max: 200, step: 1, def: 100, unit: "%" },
+      { id: "intensity", label: "颜色强度", min: 0, max: 200, step: 1, def: 100, unit: "%" },
+      { id: "fade", label: "渐隐", min: 0, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "neutralize", label: "中和", min: 0, max: 1, step: 1, def: 0 },
+    ],
+  },
+  {
+    id: "replacecolor",
+    label: "替换颜色",
+    family: "color",
+    params: [
+      { id: "targetHue", label: "目标色相", min: 0, max: 360, step: 1, def: 0, unit: "°", group: "选区" },
+      { id: "fuzziness", label: "颜色容差", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "选区" },
+      { id: "hue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "替换" },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "替换" },
+      { id: "lightness", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "替换" },
+    ],
+  },
+  {
+    id: "cameraraw",
+    label: "Camera Raw",
+    family: "effect",
+    params: [
+      { id: "temperature", label: "色温", min: -100, max: 100, step: 1, def: 0, group: "白平衡" },
+      { id: "tint", label: "色调", min: -100, max: 100, step: 1, def: 0, group: "白平衡" },
+      { id: "exposure", label: "曝光", min: -5, max: 5, step: 0.01, def: 0, dec: 2, unit: " EV", group: "影调" },
+      { id: "contrast", label: "对比度", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "highlights", label: "高光", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "shadows", label: "阴影", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "whites", label: "白色", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "blacks", label: "黑色", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "texture", label: "纹理", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "clarity", label: "清晰度", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "dehaze", label: "去薄雾", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
     ],
   },
 

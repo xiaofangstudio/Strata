@@ -31,7 +31,17 @@ import {
   type RecentEntry,
 } from "../stores/recent";
 import { quitApp, type AppInfo } from "../core/appInfo";
-import AppMenuBar, { type MenuAction, type MenuGroup } from "./components/AppMenuBar";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import AppMenuBar, {
+  type MenuEntry,
+  type MenuGroup,
+} from "./components/AppMenuBar";
+import {
+  appendToGroup,
+  buildMenuGroups,
+  insertAfterId,
+  type MenuResolver,
+} from "./components/menuCatalog";
 import BrandMark from "./components/BrandMark";
 import InfoModals, { type InfoModalKind } from "./components/InfoModals";
 import "./StartPage.css";
@@ -352,53 +362,65 @@ export default function StartPage({
   }, []);
 
   /**
-   * 开始页还没有文档，编辑类命令一律禁用，并说明真正的原因 —— 这些命令
-   * 在编辑界面里其实都已经能用了，这里只是缺一份文档，绝不再挂「待接入」。
+   * 顶部菜单与编辑器共用同一份目录（对齐 PhotoCraft 的十个顶级菜单）。
+   *
+   * 开始页还没有文档，除「新建 / 打开 / 退出」外一律置灰 —— 条目照常列出，
+   * 让人看得见功能在哪，而不是先砍掉九个顶级菜单。
    */
-  const needDocItem = (label: string, keys: string): MenuAction => ({
-    label,
-    disabled: true,
-    hint: `${keys} · ${zh.menu.needDoc}`,
-  });
+  const menuGroups = useMemo<MenuGroup[]>(() => {
+    const resolve: MenuResolver = (id) => {
+      switch (id) {
+        case "file.new":
+          return { run: () => void createBlank() };
+        case "file.open":
+        case "file.openAs":
+          return { run: () => void pickFile() };
+        case "file.exit":
+          return { run: onQuit };
+        default:
+          return undefined;
+      }
+    };
 
-  const menuGroups: MenuGroup[] = [
-    {
-      key: "file",
-      label: zh.menu.file,
-      items: [
-        { label: zh.menu.newCanvas, hint: "Ctrl + N", onSelect: () => void createBlank() },
-        { label: zh.menu.openImage, hint: "Ctrl + O", onSelect: () => void pickFile() },
-        { kind: "sep" },
-        { label: zh.menu.exportPng, disabled: true, hint: zh.menu.needDoc },
-        { label: zh.menu.closeDoc, disabled: true, hint: zh.menu.needDoc },
-        { kind: "sep" },
-        { label: zh.menu.quit, onSelect: onQuit },
-      ],
-    },
-    {
-      key: "edit",
-      label: zh.menu.edit,
-      items: [
-        needDocItem(zh.menu.undo, "Ctrl + Z"),
-        needDocItem(zh.menu.redo, "Ctrl + Shift + Z"),
-        { kind: "sep" },
-        needDocItem(zh.menu.cut, "Ctrl + X"),
-        needDocItem(zh.menu.copy, "Ctrl + C"),
-        needDocItem(zh.menu.paste, "Ctrl + V"),
-        { kind: "sep" },
-        needDocItem(zh.menu.selectAll, "Ctrl + A"),
-      ],
-    },
-    {
-      key: "help",
-      label: zh.menu.help,
-      items: [
-        { label: zh.menu.shortcuts, onSelect: () => setModal("shortcuts") },
-        { kind: "sep" },
-        { label: zh.menu.about, onSelect: () => setModal("about") },
-      ],
-    },
-  ];
+    const groups = buildMenuGroups(resolve);
+
+    /* 文件 > 最近打开：与开始页的最近文件共用同一份记录。 */
+    const recent: MenuEntry[] = recentItems.length
+      ? [
+          ...recentItems.map((it) => ({
+            kind: "item" as const,
+            label: it.name,
+            hint: it.missing ? "文件已移动" : it.path,
+            onSelect: () => void openPath(it.path),
+          })),
+          { kind: "sep" as const },
+          { kind: "item" as const, label: "清除最近打开", onSelect: clear },
+        ]
+      : [{ kind: "item" as const, label: "暂无最近打开的文件", disabled: true }];
+    insertAfterId(groups, "file.openAs", [
+      { kind: "item", label: "最近打开", children: recent },
+    ]);
+
+    /* 帮助：真实链接 + 应用内的快捷键 / 关于。 */
+    appendToGroup(groups, "help", [
+      { kind: "item", label: zh.menu.shortcuts, onSelect: () => setModal("shortcuts") },
+      { kind: "sep" },
+      {
+        kind: "item",
+        label: "Strata 项目主页",
+        onSelect: () => void openUrl("https://github.com/xiaofangstudio/Strata"),
+      },
+      {
+        kind: "item",
+        label: "报告问题…",
+        onSelect: () => void openUrl("https://github.com/xiaofangstudio/Strata/issues"),
+      },
+      { kind: "sep" },
+      { kind: "item", label: zh.menu.about, onSelect: () => setModal("about") },
+    ]);
+
+    return groups;
+  }, [clear, createBlank, onQuit, openPath, pickFile, recentItems]);
 
   return (
     <div className="start">

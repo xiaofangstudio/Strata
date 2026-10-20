@@ -7,6 +7,7 @@
 import { cloneSurface, createSurface, mustCtx } from "../engine/surface";
 import { composeDoc, paintSurface } from "../engine/compositor";
 import { clipBaseOf } from "../engine/styles";
+import { isPixelAdjust, applyPixelAdjust } from "../engine/adjustPixels";
 import {
   adjustDef,
   adjustFilter,
@@ -25,6 +26,8 @@ import {
 } from "./layer";
 import { activeLayer, type StrataDoc } from "./document";
 import {
+  contractSelection,
+  expandSelection,
   isSelectionEmpty,
   selectionBounds,
   type Rect,
@@ -153,6 +156,17 @@ export function addLayer(doc: StrataDoc, name?: string): StrataDoc {
 }
 
 /**
+ * 新建纯色填充图层（PS 的「图层 > 新建填充图层 > 纯色」）。
+ *
+ * 这里落成真实的像素层而不是参数化的填充层 —— 与其它工具的操作一致，
+ * 后续画笔、蒙版、变换都能直接作用在它上面。
+ */
+export function addFillLayer(doc: StrataDoc, color: string, name?: string): StrataDoc {
+  const layer = createLayer(doc.width, doc.height, name ?? `纯色填充 ${doc.layers.length + 1}`, color);
+  return spliceAbove(doc, layer);
+}
+
+/**
  * 把一张「已经栅格化的东西」（目前是文字）落到画布上（M3 文字工具）。
  *
  * 活动图层是未锁定的像素层时直接并进去 —— 与画笔、油漆桶的行为一致，
@@ -232,6 +246,55 @@ export function removeLayer(doc: StrataDoc): StrataDoc {
   // 原位置上现在站的是「上方那一层」；删的是栈顶时退到下面一层
   const next = layers[Math.min(block.start, layers.length - 1)];
   return { ...doc, layers, activeLayerId: next.id, dirty: true };
+}
+
+/** 删除全部隐藏图层（PS 的「图层 > 删除 > 隐藏图层」）。 */
+export function deleteHiddenLayers(doc: StrataDoc): StrataDoc {
+  const gone = new Set(doc.layers.filter((l) => !l.visible).map((l) => l.id));
+  if (gone.size === 0) return doc;
+  // 隐藏的组被删掉时，组里的可见子层也一并删掉，否则会留下无主图层
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const l of doc.layers) {
+      if (!gone.has(l.id) && l.parent && gone.has(l.parent)) {
+        gone.add(l.id);
+        grew = true;
+      }
+    }
+  }
+  const layers = doc.layers.filter((l) => !gone.has(l.id));
+  if (layers.length === 0) return doc;
+  const activeAlive = layers.some((l) => l.id === doc.activeLayerId);
+  return {
+    ...doc,
+    layers,
+    activeLayerId: activeAlive ? doc.activeLayerId : layers[layers.length - 1].id,
+    dirty: true,
+  };
+}
+
+/**
+ * 反转图层顺序（PS 的「图层 > 排列 > 反转」）。
+ *
+ * 只反转最外层的堆叠次序，组连它内部的整块一起搬 —— 反完组的成员关系不变。
+ */
+export function reverseLayerOrder(doc: StrataDoc): StrataDoc {
+  const blocks: StrataLayer[][] = [];
+  let i = 0;
+  while (i < doc.layers.length) {
+    const layer = doc.layers[i];
+    if ((layer.parent ?? null) !== null) {
+      i += 1;
+      continue;
+    }
+    const block = blockOf(doc, layer.id) ?? { start: i, end: i };
+    blocks.push(doc.layers.slice(block.start, block.end + 1));
+    i = block.end + 1;
+  }
+  if (blocks.length < 2) return doc;
+  const layers = blocks.reverse().flat();
+  return { ...doc, layers, dirty: true };
 }
 
 /**
@@ -343,6 +406,34 @@ export function flattenImage(doc: StrataDoc): StrataDoc {
   const out = createLayer(doc.width, doc.height, "背景");
   composeDoc(doc, out.surface);
   return { ...doc, layers: [out], activeLayerId: out.id, dirty: true };
+}
+
+/**
+ * 图像 > 模式 > 灰度：把所有像素层按亮度去色。
+ *
+ * 引擎内部始终以 RGBA 承载，这里是破坏性的像素转换（可撤销），
+ * 视觉结果与 PS 转灰度一致：每个像素取同值的 R = G = B。
+ */
+export function grayscaleDocument(doc: StrataDoc): StrataDoc {
+  let touched = false;
+  const layers = doc.layers.map((l) => {
+    if (l.kind !== "pixel") return l;
+    const surface = cloneSurface(l.surface);
+    const ctx = mustCtx(surface);
+    const img = ctx.getImageData(0, 0, surface.width, surface.height);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = Math.round(d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    touched = true;
+    return { ...l, surface };
+  });
+  if (!touched) return doc;
+  return { ...doc, layers, dirty: true };
 }
 
 /**
@@ -461,6 +552,13 @@ export function reorderLayer(doc: StrataDoc, from: number, to: number): StrataDo
 export function updateLayer(doc: StrataDoc, id: string, patch: LayerPatch): StrataDoc {
   const layers = doc.layers.map((l) => (l.id === id ? { ...l, ...patch } : l));
   return { ...doc, layers, dirty: true };
+}
+
+/** 重命名图层（空名字忽略，保持原名）。 */
+export function renameLayer(doc: StrataDoc, id: string, name: string): StrataDoc {
+  const trimmed = name.trim();
+  if (!trimmed) return doc;
+  return updateLayer(doc, id, { name: trimmed });
 }
 
 /** 切换选中图层。 */
@@ -658,6 +756,59 @@ export function deleteSelection(doc: StrataDoc): StrataDoc {
   return updateLayer(doc, cur.id, { surface });
 }
 
+/** 描边的位置：内侧 / 居中 / 外侧（与 PS 的「编辑 > 描边」一致）。 */
+export type StrokePosition = "inside" | "center" | "outside";
+
+/**
+ * 沿选区边界描一圈实色边（PS 的「编辑 > 描边」）。
+ *
+ * 环带用形态学现算：外侧 = 膨胀(w) − 原选区；内侧 = 原选区 − 收缩(w)；
+ * 居中 = 膨胀(⌈w/2⌉) − 收缩(⌊w/2⌋)。拿到环带后当成模板（source-in）刷一层
+ * 纯色，再整块贴回当前像素层 —— 与 fillSelection 同一套贴回路径，羽化边缘
+ * 也能自然过渡。没有选区或当前不是像素层时原样返回。
+ */
+export function strokeSelection(
+  doc: StrataDoc,
+  opts: { color: string; width: number; position: StrokePosition; opacity?: number },
+): StrataDoc {
+  const cur = pixelLayer(doc);
+  const sel = doc.selection;
+  if (!cur || !sel || isSelectionEmpty(sel)) return doc;
+  const w = Math.max(1, Math.round(opts.width));
+
+  const band = createSurface(sel.width, sel.height);
+  const bc = mustCtx(band);
+  if (opts.position === "inside") {
+    bc.drawImage(sel, 0, 0);
+    bc.globalCompositeOperation = "destination-out";
+    bc.drawImage(contractSelection(sel, w), 0, 0);
+  } else {
+    const outerR = opts.position === "outside" ? w : Math.ceil(w / 2);
+    bc.drawImage(expandSelection(sel, outerR), 0, 0);
+    const innerR = opts.position === "center" ? Math.floor(w / 2) : 0;
+    if (innerR > 0) {
+      bc.globalCompositeOperation = "destination-out";
+      bc.drawImage(contractSelection(sel, innerR), 0, 0);
+    }
+  }
+  bc.globalCompositeOperation = "source-over";
+
+  // 环带上色：source-in 只保留环带里的颜色，其余透明
+  const patch = createSurface(sel.width, sel.height);
+  const pc = mustCtx(patch);
+  pc.drawImage(band, 0, 0);
+  pc.globalCompositeOperation = "source-in";
+  pc.globalAlpha = Math.max(0, Math.min(100, opts.opacity ?? 100)) / 100;
+  pc.fillStyle = opts.color;
+  pc.fillRect(0, 0, patch.width, patch.height);
+  pc.globalAlpha = 1;
+  pc.globalCompositeOperation = "source-over";
+
+  const surface = cloneSurface(cur.surface);
+  mustCtx(surface).drawImage(patch, 0, 0);
+  return updateLayer(doc, cur.id, { surface });
+}
+
 /* ---------------------------------------------------------------- 画布裁剪 */
 
 /** 把一张画布整体平移并缩到新尺寸（用于裁剪所有图层与蒙版）。 */
@@ -825,13 +976,24 @@ export function applyAdjustToLayer(doc: StrataDoc, state: AdjustState): StrataDo
   if (at < 0) return doc;
   const layer = doc.layers[at];
   if (layer.kind !== "pixel" || layer.locked) return doc;
-  const filter = adjustFilter(state, layer.id);
-  if (!filter) return doc;
+
   const next = createSurface(layer.surface.width, layer.surface.height);
   const ctx = mustCtx(next);
-  ctx.filter = filter;
-  ctx.drawImage(layer.surface, 0, 0);
-  ctx.filter = "none";
+
+  // 像素级调整走 ImageData 内核；其余走 ctx.filter
+  if (isPixelAdjust(state.id)) {
+    ctx.drawImage(layer.surface, 0, 0);
+    const img = ctx.getImageData(0, 0, next.width, next.height);
+    applyPixelAdjust(state, img);
+    ctx.putImageData(img, 0, 0);
+  } else {
+    const filter = adjustFilter(state, layer.id);
+    if (!filter) return doc;
+    ctx.filter = filter;
+    ctx.drawImage(layer.surface, 0, 0);
+    ctx.filter = "none";
+  }
+
   const layers = doc.layers.slice();
   layers[at] = { ...layer, surface: next };
   return { ...doc, layers, dirty: true };
@@ -923,5 +1085,125 @@ export function pasteFromClipboard(doc: StrataDoc, name?: string): StrataDoc {
 export function cutSelection(doc: StrataDoc): StrataDoc {
   if (!copyToClipboard(doc)) return doc;
   return deleteSelection(doc);
+}
+
+/* ---------------------------------------------- 右键菜单专属（对照 PhotoCraft） */
+
+/** 「通过拷贝的图层」：把选中层在选区内的像素复制成新层（PS 的 Layer via Copy）。 */
+export function layerViaCopy(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || !doc.selection || isSelectionEmpty(doc.selection)) {
+    return doc;
+  }
+  const layer = createLayer(doc.width, doc.height, `${cur.name} 副本`);
+  const ctx = mustCtx(layer.surface);
+  ctx.drawImage(cur.surface, 0, 0);
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(doc.selection, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  return spliceAbove(doc, layer);
+}
+
+/** 「通过剪切的图层」：选区内像素剪切成新层，原层挖空。 */
+export function layerViaCut(doc: StrataDoc): StrataDoc {
+  const viaCopy = layerViaCopy(doc);
+  if (viaCopy === doc) return doc;
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || !doc.selection) return viaCopy;
+  const ctx = mustCtx(cur.surface);
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.drawImage(doc.selection, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  return { ...viaCopy, dirty: true };
+}
+
+/** 应用蒙版：把蒙版烙进图层 alpha，然后删除蒙版（PS 的 Apply Layer Mask）。 */
+export function applyMask(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || !cur.mask || cur.kind !== "pixel" || !cur.maskActive) return doc;
+  const ctx = mustCtx(cur.surface);
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(cur.mask, 0, 0);
+  ctx.restore();
+  return updateLayer(doc, cur.id, { mask: null, maskActive: false });
+}
+
+/** 由当前选区生成蒙版：选区内显示、选区外隐藏（PS 的 Add Layer Mask > Reveal Selection）。 */
+export function addMaskFromSelection(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.mask || !doc.selection || isSelectionEmpty(doc.selection)) return doc;
+  const mask = createMask(doc.width, doc.height);
+  const ctx = mustCtx(mask);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, mask.width, mask.height);
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(doc.selection, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  return updateLayer(doc, cur.id, { mask, maskActive: true });
+}
+
+/**
+ * 由透明度生成蒙版（PS 的 Add Layer Mask > From Transparency）：
+ * 图层里不透明的地方显示、透明的地方遮住。
+ */
+export function addMaskFromTransparency(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.mask || cur.kind !== "pixel") return doc;
+  const mask = createMask(doc.width, doc.height);
+  const ctx = mustCtx(mask);
+  ctx.drawImage(cur.surface, 0, 0);
+  // 图层的 alpha 留下来，RGB 统一刷白 —— 蒙版只认 alpha
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, mask.width, mask.height);
+  ctx.globalCompositeOperation = "source-over";
+  return updateLayer(doc, cur.id, { mask, maskActive: true });
+}
+
+/** 蒙版载入为选区：蒙版 alpha 就是选区 alpha，克隆一份即可。 */
+export function maskToSelection(doc: StrataDoc, id: string): StrataDoc {
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer?.mask) return doc;
+  return { ...doc, selection: cloneSurface(layer.mask), dirty: true };
+}
+
+/** 合并可见图层：所有可见层烙成一层置顶，隐藏层原样保留（PS 的 Merge Visible）。 */
+export function mergeVisible(doc: StrataDoc): StrataDoc {
+  const merged = createLayer(doc.width, doc.height, "合并的图层");
+  composeDoc(doc, merged.surface);
+  const hidden = doc.layers.filter((l) => !l.visible);
+  return {
+    ...doc,
+    layers: [merged, ...hidden],
+    activeLayerId: merged.id,
+    dirty: true,
+  };
+}
+
+/** 图层样式剪贴板：Copy Layer Style / Paste Layer Style 在图层间整份搬。 */
+let styleClipboard: LayerStyle[] | null = null;
+
+/** 拷贝选中图层的全部样式。 */
+export function copyLayerStyle(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  const list = cur?.styles;
+  if (!cur || !list?.length) return doc;
+  styleClipboard = list.map(cloneStyle);
+  return doc;
+}
+
+/** 粘贴图层样式：整份替换（与 PS 一致，不做差集合并）。 */
+export function pasteLayerStyle(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind === "adjust" || !styleClipboard?.length) return doc;
+  return updateLayer(doc, cur.id, { styles: styleClipboard.map(cloneStyle) });
+}
+
+/** 清除选中图层的全部样式。 */
+export function clearLayerStyle(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || !cur.styles?.length) return doc;
+  return updateLayer(doc, cur.id, { styles: [] });
 }
 
