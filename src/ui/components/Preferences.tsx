@@ -13,6 +13,7 @@ import type { BrushSettings } from "../../engine/paint";
 import Modal from "./Modal";
 import ToolIcon from "./ToolIcon";
 import "./Preferences.css";
+import RangeInput from "./RangeInput";
 
 interface Props {
   onClose: () => void;
@@ -144,12 +145,12 @@ export default function Preferences({ onClose, themeMode, onSetTheme, brush, onB
             <section className="pref-sec">
               <h3 className="pref-h">{zh.preferences.spacing}</h3>
               <div className="pref-row">
-                <input
-                  type="range"
+                <RangeInput
                   min={1}
                   max={50}
                   value={brush.spacing}
-                  onChange={(e) => onBrush({ spacing: Number(e.target.value) })}
+                  aria-label={zh.preferences.spacing}
+                  onChange={(v) => onBrush({ spacing: v })}
                 />
                 <span className="pref-val">{brush.spacing}%</span>
               </div>

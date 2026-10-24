@@ -18,6 +18,10 @@ import {
   type ToolId,
 } from "../../tools/catalog";
 import { type BrushSettings, type GradientStyle } from "../../engine/paint";
+import {
+  WARP_STYLES,
+  type WarpStyle,
+} from "../../engine/text";
 import { DEFAULT_SHAPE, type ShapeSettings } from "../../engine/shapes";
 import {
   TEXT_FAMILIES,
@@ -738,13 +742,59 @@ function buildControls(tool: ToolId, c: Ctx): Built {
       main,
       extra: (
         <>
-          <p className="opt-note">{wand ? zh.options.wandHint : zh.options.selectionHint}</p>
+          <p className="opt-note">
+            {wand ? zh.options.wandHint : tool === "polyLasso" ? zh.options.polyLassoHint : zh.options.selectionHint}
+          </p>
           {!wand && <p className="opt-note">{zh.options.featherHint}</p>}
           <p className="opt-note">{zh.options.marqueeSampleAll}</p>
           <button
             type="button"
             className="btn-ghost btn-xs"
             onClick={() => (wand ? c.onTolerance(32) : c.onFeather(0))}
+          >
+            {zh.options.reset}
+          </button>
+        </>
+      ),
+    };
+  }
+
+  // 魔术橡皮擦：与魔棒同一套容差 / 连续参数，只是「选中」变成「擦成透明」
+  if (tool === "magicEraser") {
+    return {
+      main: [
+        <Slider
+          key="tol"
+          label={zh.options.tolerance}
+          min={0}
+          max={100}
+          value={c.tolerance}
+          onChange={c.onTolerance}
+        />,
+        <Check
+          key="contig"
+          label={zh.options.contiguous}
+          on={c.contiguous}
+          onChange={c.onContiguous}
+          hint={zh.options.wandHint}
+        />,
+        c.sampleAllLayers !== undefined && c.onSampleAllLayers && (
+          <Check
+            key="sampleall"
+            label={zh.options.sampleAllLayers}
+            on={c.sampleAllLayers}
+            onChange={c.onSampleAllLayers}
+            hint={zh.options.sampleAllLayersHint}
+          />
+        ),
+      ],
+      extra: (
+        <>
+          <p className="opt-note">{zh.options.magicEraserHint}</p>
+          <button
+            type="button"
+            className="btn-ghost btn-xs"
+            onClick={() => c.onTolerance(32)}
           >
             {zh.options.reset}
           </button>
@@ -775,6 +825,15 @@ function buildControls(tool: ToolId, c: Ctx): Built {
           value={Math.round(c.text.size)}
           suffix="px"
           onChange={(size) => c.onText({ size })}
+        />,
+        <Slider
+          key="tracking"
+          label={zh.options.letterSpacing}
+          min={-20}
+          max={100}
+          value={Math.round(c.text.letterSpacing)}
+          suffix="px"
+          onChange={(letterSpacing) => c.onText({ letterSpacing })}
         />,
         <SegGroup<TextAlign>
           key="align"
@@ -808,6 +867,22 @@ function buildControls(tool: ToolId, c: Ctx): Built {
             on={c.text.italic}
             onChange={(italic) => c.onText({ italic })}
           />
+          <SegGroup<WarpStyle>
+            label={zh.options.textWarp}
+            value={c.text.warp}
+            options={WARP_STYLES.map((w) => ({ value: w.id, label: w.label }))}
+            onChange={(warp) => c.onText({ warp })}
+          />
+          {c.text.warp !== "none" && (
+            <Slider
+              label={zh.options.textWarpAmount}
+              min={-100}
+              max={100}
+              value={Math.round(c.text.warpAmount)}
+              suffix="%"
+              onChange={(v) => c.onText({ warpAmount: v })}
+            />
+          )}
           <p className="opt-note">{zh.options.textHint}</p>
         </>
       ),

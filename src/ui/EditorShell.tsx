@@ -119,6 +119,7 @@ import {
 import {
   DEFAULT_CHANNEL_VIS,
   applyChannelView,
+  applyAlphaChannelView,
   type ChannelId,
   type ChannelVis,
 } from "../core/channels";
@@ -183,9 +184,23 @@ import {
   type MenuResolver,
   type MenuState,
 } from "./components/menuCatalog";
+import {
+  probeReelix,
+  sendToReelix,
+  type ReelixLinkState,
+} from "../services/reelixLink";
 import BrandMark from "./components/BrandMark";
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import FilterGallery from "./components/FilterGallery";
+import FilterFxDialog from "./components/FilterFxDialog";
+import {
+  ChannelCalcDialog,
+  LoadSelectionDialog,
+  SaveSelectionDialog,
+} from "./components/ChannelDialogs";
+import RefineEdgeDialog from "./components/RefineEdgeDialog";
+import { filterDef } from "../engine/filters/defs";
+import { alphaChannelsOf } from "../core/channelOps";
 import InfoModals, { type InfoModalKind } from "./components/InfoModals";
 import ImageSizeDialog from "./components/ImageSizeDialog";
 import Modal from "./components/Modal";
@@ -196,6 +211,7 @@ import LiquifyDialog from "./components/LiquifyDialog";
 import LayersPanel from "./components/LayersPanel";
 import HistoryPanel from "./components/HistoryPanel";
 import HistogramPanel from "./components/HistogramPanel";
+import ScopesPanel from "./components/ScopesPanel";
 import NavigatorPanel from "./components/NavigatorPanel";
 import PropertiesPanel from "./components/PropertiesPanel";
 import RightDock, { type GroupId as DockGroupId } from "./components/RightDock";
@@ -432,6 +448,8 @@ export default function EditorShell({
   const [sizeDialog, setSizeDialog] = useState<"image" | "canvas" | null>(null);
   /** 滤镜库：左侧选滤镜、右侧拖参数，实时预览，确定才落盘进历史 */
   const [gallery, setGallery] = useState(false);
+  /** 滤镜参数弹窗：值为滤镜菜单 id（filter.blur.gaussianBlur 等），null 关闭 */
+  const [filterFx, setFilterFx] = useState<string | null>(null);
   /** 液化：面板内自己拖着涂，确定才把形变后的像素写回图层 */
   const [liquify, setLiquify] = useState(false);
   /** 视图 > 网格：纯装饰浮层，不影响像素，也不进历史 */
@@ -493,6 +511,7 @@ export default function EditorShell({
     history: false,
     navigator: false,
     histogram: false,
+    scopes: false,
   });
   const { items: recentItems, push: pushRecent, clear: clearRecent } = useRecentFiles();
   const [toast, setToast] = useState("");
@@ -500,6 +519,10 @@ export default function EditorShell({
   const [spaceDown, setSpaceDown] = useState(false);
   /** 是否正在编辑蒙版（画笔落在蒙版上而不是图层像素上） */
   const [maskEdit, setMaskEdit] = useState(false);
+  /** 快速蒙版：开着时红宝石膜盖在画面上，画笔直接改临时蒙版（Q 切换） */
+  const [quickMask, setQuickMask] = useState(false);
+  const qmRef = useRef<HTMLCanvasElement | null>(null);
+  const qmTintRef = useRef<HTMLCanvasElement | null>(null);
   /**
    * 通道视图：哪些原色参与合成 + 当前单独查看哪个通道。
    * 与蒙版编辑态一样属于「看」而不是「改」—— 一个像素都不动、不进历史，
@@ -507,6 +530,13 @@ export default function EditorShell({
    */
   const [channelVis, setChannelVis] = useState<ChannelVis>(DEFAULT_CHANNEL_VIS);
   const [activeChannel, setActiveChannel] = useState<ChannelId>("rgb");
+  /** 正在灰度查看的 Alpha 通道 id（null = 没在看）；与上面同一套「只看不改」逻辑 */
+  const [viewAlpha, setViewAlpha] = useState<string | null>(null);
+  /** 通道对话框：存储选区 / 载入选区 / 通道运算，null = 关闭 */
+  const [saveSelOpen, setSaveSelOpen] = useState(false);
+  const [loadSelOpen, setLoadSelOpen] = useState(false);
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
   /** 选区组合方式（选项条的四态：新建 / 添加 / 减去 / 交叉） */
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("new");
   /** 羽化半径（像素），矩形 / 椭圆 / 套索用 */
@@ -515,6 +545,9 @@ export default function EditorShell({
   const [contiguous, setContiguous] = useState(true);
   /** 是否正在拉选区 / 裁剪框（驱动蚂蚁线浮层的动画只在拖动时开动） */
   const [selDragging, setSelDragging] = useState(false);
+  /** 多边形套索：已落的顶点（文档坐标）；null 表示还没开始画 */
+  const [polyPts, setPolyPts] = useState<{ x: number; y: number }[] | null>(null);
+  const polyModeRef = useRef<SelectionMode>("new");
   /** 是否正在拖绘形状（驱动形状浮层的动画只在拖动时开动） */
   const [shapeDragging, setShapeDragging] = useState(false);
   /** 文字工具参数（字体 / 字号 / 行距 / 对齐 / 加粗斜体） */
@@ -639,6 +672,7 @@ export default function EditorShell({
     setMaskEdit(false);
     setChannelVis(DEFAULT_CHANNEL_VIS);
     setActiveChannel("rgb");
+    setViewAlpha(null);
     // 参考线属于视图状态：换文档时一并清空，免得 A 图的参考线跑到 B 图上
     setGuides({ x: [], y: [] });
   }, [docId]);
@@ -659,6 +693,8 @@ export default function EditorShell({
   const pickChannel = useCallback((vis: ChannelVis, active: ChannelId) => {
     setChannelVis(vis);
     setActiveChannel(active);
+    // 切到颜色通道视图时，顺手退出 Alpha 通道灰度查看（两者互斥）
+    setViewAlpha(null);
   }, []);
 
   /* -------------------------------------------------------------- 画面渲染 */
@@ -710,6 +746,11 @@ export default function EditorShell({
       cx.clearRect(0, 0, w, h);
       cx.drawImage(comp, 0, 0, docW, docH, 0, 0, w, h);
       applyChannelView(c, channelVis, activeChannel);
+      // Alpha 通道灰度查看：在合成与颜色通道视图之上再叠一道显示滤镜
+      if (viewAlpha) {
+        const ch = alphaChannelsOf(doc).find((x) => x.id === viewAlpha);
+        if (ch) applyAlphaChannelView(c, ch.mask);
+      }
       // 直方图 / 导航器读的就是这张 comp：节流 250ms 推一帧，画笔连扫时不拖后腿
       const now = performance.now();
       if (now - lastPanelRef.current > 250) {
@@ -742,6 +783,48 @@ export default function EditorShell({
     }
 
     const at = doc.layers.findIndex((l) => l.id === act.id);
+
+    // 快速蒙版：合成照旧，画笔这一笔直接叠进临时蒙版；屏幕上再蒙一层红色
+    // 宝石膜（涂到的地方 = 退出时会取消选中的地方），与 PS 的行为一致。
+    if (quickMask && qmRef.current) {
+      const qm = qmRef.current;
+      let eff = qm;
+      if (stroke) {
+        eff = cloneSurface(qm);
+        const mctx = mustCtx(eff);
+        mctx.save();
+        mctx.globalAlpha = brush.opacity / 100;
+        mctx.globalCompositeOperation =
+          tool === "eraser" ? "destination-out" : "source-over";
+        mctx.drawImage(stroke.buffer, 0, 0);
+        mctx.restore();
+      }
+      composeDoc(doc, comp);
+      present();
+      // 宝石膜：蒙版 alpha 染红、半透明盖上（Tint 缓存画布，尺寸不符再重建）
+      let tint = qmTintRef.current;
+      if (!tint || tint.width !== docW || tint.height !== docH) {
+        tint = createSurface(docW, docH);
+        qmTintRef.current = tint;
+      }
+      const tctx = mustCtx(tint);
+      tctx.setTransform(1, 0, 0, 1, 0, 0);
+      tctx.globalAlpha = 1;
+      tctx.globalCompositeOperation = "source-over";
+      tctx.filter = "none";
+      tctx.clearRect(0, 0, docW, docH);
+      tctx.drawImage(eff, 0, 0);
+      tctx.globalCompositeOperation = "source-in";
+      tctx.fillStyle = "#ff2d55";
+      tctx.fillRect(0, 0, docW, docH);
+      tctx.globalCompositeOperation = "source-over";
+      const vc = mustCtx(c);
+      vc.save();
+      vc.globalAlpha = 0.5;
+      vc.drawImage(tint, 0, 0, docW, docH, 0, 0, c.width, c.height);
+      vc.restore();
+      return;
+    }
 
     // 修饰回显：结果画布本身就是「原图 + 已扫过的效果」的整层像素，
     // 覆盖率与选区都已在笔画面内结算完毕，直接换掉本层表面即可，无需再叠 globalAlpha。
@@ -793,11 +876,32 @@ export default function EditorShell({
     }
     composeDoc(doc, comp, { index: at, layer: { ...act, surface: scratch } });
     present();
-  }, [doc, docW, docH, brush.opacity, tool, maskEdit, channelVis, activeChannel, scale]);
+  }, [doc, docW, docH, brush.opacity, tool, maskEdit, quickMask, channelVis, activeChannel, viewAlpha, scale]);
 
+  /**
+   * 文档变了就重画 —— 但攒到下一帧统一画一次。
+   *
+   * 之前这里直接同步 `render()`：一次拖动里浏览器会送来几十次输入，
+   * 每一次都各自触发一次整档合成（大图上几百毫秒），任务排着队累积，
+   * 表现就是「松手才跳过去、之后还要追好几秒」。改成按帧合并后，
+   * 一帧内再多次变更也只合成一次，且用的是这一帧的最新值。
+   */
+  const renderRef = useRef(render);
+  renderRef.current = render;
+  const docRafRef = useRef(0);
   useEffect(() => {
-    render();
+    if (docRafRef.current) return;
+    docRafRef.current = requestAnimationFrame(() => {
+      docRafRef.current = 0;
+      renderRef.current();
+    });
   }, [render]);
+  useEffect(
+    () => () => {
+      if (docRafRef.current) cancelAnimationFrame(docRafRef.current);
+    },
+    [],
+  );
 
   /**
    * 把高频的重绘合并到每一帧一次（跟手优化）。
@@ -975,6 +1079,44 @@ export default function EditorShell({
     [doc, onCommit],
   );
 
+  /** 多边形套索收尾：顶点闭合成选区（走与自由套索同一条遮罩路）。 */
+  const commitPoly = useCallback(
+    (pts: { x: number; y: number }[]) => {
+      setPolyPts(null);
+      const shape = lassoMask(docW, docH, pts, feather);
+      commitSelection(combineSelection(doc.selection, shape, polyModeRef.current));
+    },
+    [doc, docW, docH, feather, commitSelection],
+  );
+
+  /**
+   * 快速蒙版切换（Q）。
+   * 进入：选区取反成「红色保护区」蒙版 —— 红的地方就是没选中的地方；
+   * 退出：蒙版再取反回选区，一笔历史进账（蒙版内的涂抹本身不进历史）。
+   */
+  const toggleQuickMask = useCallback(() => {
+    if (!quickMask) {
+      qmRef.current = doc.selection
+        ? invertSelection(cloneSelection(doc.selection))
+        : createSurface(docW, docH);
+      setQuickMask(true);
+      setToast(zh.editor.quickMaskOn);
+    } else {
+      const m = qmRef.current;
+      qmRef.current = null;
+      setQuickMask(false);
+      if (m) {
+        const inv = invertSelection(m);
+        if (isSelectionEmpty(inv)) {
+          // 全涂掉了 = 没有选区，直接把选区清空
+          onCommit(setSelection(doc, null), zh.editor.quickMaskOff);
+        } else {
+          commitSelection(inv);
+        }
+      }
+      setToast(zh.editor.quickMaskOff);
+    }
+  }, [quickMask, doc, docW, commitSelection, onCommit]);
   /**
    * 确认文本框：整段文字一次性栅格化成像素，落进当前（或新建的）图层。
    *
@@ -998,6 +1140,11 @@ export default function EditorShell({
   // 切走文字工具：还没确认的文本框随手收掉，不留半截浮层在画布上
   useEffect(() => {
     if (!isTextTool(tool)) setTextEdit(null);
+  }, [tool]);
+
+  // 切走多边形套索：没闭合的折线一并收掉
+  useEffect(() => {
+    if (tool !== "polyLasso") setPolyPts(null);
   }, [tool]);
 
   /**
@@ -1143,8 +1290,8 @@ export default function EditorShell({
       ctx.restore();
     };
 
-    // 既没有选区、没在拖框、没在拖形状、没在变换、也没有取样点：清一次就收工
-    if (!antsPath && !selDragging && !shapeDragging && !anchorPt && !freeActive) {
+    // 既没有选区、没在拖框、没在拖形状、没在变换、没有取样点、也没有多边形折线：清一次就收工
+    if (!antsPath && !selDragging && !shapeDragging && !anchorPt && !freeActive && !polyPts) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, c.width, c.height);
       return;
@@ -1177,6 +1324,11 @@ export default function EditorShell({
         } else {
           path.rect(x, y, w, h);
         }
+      } else if (polyPts && polyPts.length > 0) {
+        // 多边形套索：已落的顶点连成折线（不闭合，闭合线等真正落选区）
+        path = new Path2D();
+        path.moveTo(polyPts[0].x, polyPts[0].y);
+        for (let i = 1; i < polyPts.length; i += 1) path.lineTo(polyPts[i].x, polyPts[i].y);
       } else if (antsPath) {
         path = antsPath;
       }
@@ -1312,7 +1464,7 @@ export default function EditorShell({
 
     raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive, smartGuides, guides]);
+  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive, smartGuides, guides, polyPts]);
 
   const onDown = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1397,6 +1549,41 @@ export default function EditorShell({
           }
           return;
         }
+        if (tool === "polyLasso") {
+          if (!polyPts) {
+            polyModeRef.current = modeWithMods(e.shiftKey, e.altKey, selectionMode);
+            setPolyPts([p]);
+          } else {
+            const first = polyPts[0];
+            const last = polyPts[polyPts.length - 1];
+            const hitR = 10 / scale;
+            if (polyPts.length >= 3 && Math.hypot(p.x - last.x, p.y - last.y) <= 1) {
+              // 双击：两下 pointerdown 落在同一点，第二下闭合
+              commitPoly(polyPts);
+            } else if (
+              polyPts.length >= 3 &&
+              Math.hypot(p.x - first.x, p.y - first.y) <= hitR
+            ) {
+              // 点回起点附近：闭合
+              commitPoly(polyPts);
+            } else if (Math.hypot(p.x - last.x, p.y - last.y) > 1) {
+              setPolyPts([...polyPts, p]);
+            }
+          }
+          return;
+        }
+        if (tool === "singleRow" || tool === "singleColumn") {
+          const x = Math.round(p.x);
+          const y = Math.round(p.y);
+          const shape =
+            tool === "singleRow"
+              ? rectMask(docW, docH, { x: 0, y }, { x: docW, y: y + 1 })
+              : rectMask(docW, docH, { x, y: 0 }, { x: x + 1, y: docH });
+          commitSelection(
+            combineSelection(doc.selection, shape, modeWithMods(e.shiftKey, e.altKey, selectionMode)),
+          );
+          return;
+        }
         if (tool === "crop") {
           selRef.current = { tool: "crop", a: p, b: p, points: [p], mode: "new" };
           setSelDragging(true);
@@ -1465,6 +1652,21 @@ export default function EditorShell({
       setError("");
       capturePointer(e.currentTarget, e.pointerId);
 
+      if (tool === "magicEraser") {
+        // 与魔棒同一套容差判定，只是「选中」变成「擦成透明」；一笔一步可撤销
+        const src = sampleAllLayers ? compRef.current : act.surface;
+        const shape = src ? wandMask(src, p, tolerance, contiguous) : null;
+        if (!shape) return;
+        const next = cloneSurface(act.surface);
+        const nctx = mustCtx(next);
+        nctx.save();
+        nctx.globalCompositeOperation = "destination-out";
+        nctx.drawImage(shape, 0, 0);
+        nctx.restore();
+        const layers = doc.layers.map((l) => (l.id === act.id ? { ...l, surface: next } : l));
+        onCommit({ ...doc, layers, dirty: true }, zh.tools.magicEraser);
+        return;
+      }
       if (isShapeTool(tool)) {
         shapeRef.current = {
           kind: SHAPE_KIND[tool],
@@ -1480,10 +1682,31 @@ export default function EditorShell({
         return;
       }
       if (usesBrush(tool)) {
+        // 铅笔：硬边、全流量、无抖动、无平滑 —— 只换参数，走同一条笔画管线
+        const settings =
+          tool === "pencil"
+            ? {
+                ...brush,
+                color: fg,
+                hardness: 100,
+                flow: 100,
+                opacity: 100,
+                spacing: 4,
+                jitter: 0,
+                sizeJitter: 0,
+                opacityJitter: 0,
+                flowJitter: 0,
+                scatterCount: 1,
+                scatterCountJitter: 0,
+                smoothing: 0,
+                texture: "none" as const,
+                tip: "round" as const,
+              }
+            : { ...brush, color: fg };
         const s = new Stroke(
           docW,
           docH,
-          { ...brush, color: fg },
+          settings,
           tool === "eraser",
           doc.selection ?? null,
         );
@@ -1546,6 +1769,8 @@ export default function EditorShell({
       contiguous,
       selectionMode,
       commitSelection,
+      commitPoly,
+      polyPts,
       tool,
       zoom,
       onCommit,
@@ -1794,6 +2019,13 @@ export default function EditorShell({
 
     const s = strokeRef.current;
     if (s) {
+      // 快速蒙版：这一笔落在临时蒙版画布上（不进文档、不进历史）
+      if (quickMask && qmRef.current) {
+        s.finish(qmRef.current, null);
+        resetGesture();
+        render();
+        return;
+      }
       // 蒙版涂抹只认蒙版，其余笔画被当前选区限制范围
       s.finish(
         maskEdit && act.mask ? act.mask : act.surface,
@@ -1843,7 +2075,7 @@ export default function EditorShell({
       }
       render();
     }
-  }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, feather, commitSelection]);
+  }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, quickMask, feather, commitSelection]);
 
   /* ------------------------------------------------------------ 标尺拖参考线 */
 
@@ -2093,7 +2325,7 @@ export default function EditorShell({
   const openFileAt = useCallback(
     async (path: string) => {
       try {
-        // 工程编解码器按需加载：只有真的开 / 存 .strata 时才拉进来。
+        // 工程编解码器按需加载：只有真的开 / 存 .strata / .psd 时才拉进来。
         const { decodeProject, isStrataPath } = await import("../engine/project");
         if (isStrataPath(path)) {
           const bytes = await readFileBytes(path);
@@ -2102,8 +2334,17 @@ export default function EditorShell({
           onOpenDoc(next);
           setToast(zh.editor.projectOpened);
         } else {
-          const bitmap = await loadImage(path);
-          onOpenDoc(docFromBitmap(bitmap, baseName(path), path));
+          // PSD：ag-psd 按需加载，重建图层栈
+          const { isPsdPath, decodePsdToDoc } = await import("../engine/psd");
+          if (isPsdPath(path)) {
+            const bytes = await readFileBytes(path);
+            const next = decodePsdToDoc(bytes, baseName(path), path);
+            onOpenDoc(next);
+            setToast(zh.editor.projectOpened);
+          } else {
+            const bitmap = await loadImage(path);
+            onOpenDoc(docFromBitmap(bitmap, baseName(path), path));
+          }
         }
         pushRecent(path);
       } catch (e) {
@@ -2122,7 +2363,10 @@ export default function EditorShell({
         multiple: false,
         directory: false,
         filters: [
-          { name: "图片与工程", extensions: [...IMAGE_EXTENSIONS, STRATA_EXTENSION] },
+          {
+            name: "图片 / 工程 / PSD",
+            extensions: [...IMAGE_EXTENSIONS, STRATA_EXTENSION, "psd"],
+          },
         ],
       });
       if (typeof picked !== "string") return;
@@ -2196,6 +2440,27 @@ export default function EditorShell({
       setError(`${zh.error.saveFailed}：${e instanceof Error ? e.message : String(e)}`);
     }
   }, [doc, onPreview]);
+
+  /**
+   * 导出 PSD：像素图层逐层交给 ag-psd 编码（先读后写同一套桥）。
+   * 与保存工程不同，这里是单向导出，不改 sourcePath / dirty。
+   */
+  const exportPsd = useCallback(async () => {
+    try {
+      const { encodeDocToPsd, PSD_EXTENSION } = await import("../engine/psd");
+      const target = await save({
+        title: zh.dialog.exportPsdTitle,
+        defaultPath: `${baseName(doc.name) || doc.name}.${PSD_EXTENSION}`,
+        filters: [{ name: "Photoshop PSD", extensions: [PSD_EXTENSION] }],
+      });
+      if (typeof target !== "string") return;
+      const bytes = await encodeDocToPsd(doc);
+      await writeFileBytes(target, bytes);
+      setToast(zh.editor.psdExported);
+    } catch (e) {
+      setError(`${zh.error.exportFailed}：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [doc]);
 
   const onQuit = useCallback(() => {
     void quitApp().catch(() => setError("退出失败，请直接关闭窗口"));
@@ -2873,6 +3138,24 @@ export default function EditorShell({
     [doc, entriesFromRows],
   );
 
+  // Reelix 联动探测：装着没开 / 开着（5 秒一探，心跳 10 秒过期）。
+  // 必须放在组件顶层 —— 之前误写进 menuGroups 的 useMemo 工厂里，memo 不重算
+  // 时这两个 Hook 不会执行，Hook 顺序错乱直接把编辑器渲染崩掉（创建画布白屏）。
+  const [reelixState, setReelixState] = useState<ReelixLinkState>("absent");
+  useEffect(() => {
+    let alive = true;
+    const probe = async () => {
+      const s = await probeReelix();
+      if (alive) setReelixState(s);
+    };
+    void probe();
+    const timer = window.setInterval(() => void probe(), 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   /**
    * 顶部菜单：一级 / 二级 / 三级全量对齐 PhotoCraft 的 770 条目录。
    *
@@ -2882,7 +3165,12 @@ export default function EditorShell({
   const menuGroups = useMemo<MenuGroup[]>(() => {
     /** 对话框式调整统一落到「新建调整图层」，参数随时可回改。 */
     const adjustLayer = (kind: AdjustId): MenuState => ({
-      run: () => onCommit(addAdjustLayer(doc, newAdjustState(kind)), zh.layers.adjustAdd),
+      run: () => {
+        onCommit(addAdjustLayer(doc, newAdjustState(kind)), zh.layers.adjustAdd);
+        // 建完必须把属性面板露出来：曲线 / 色阶 / 渐变映射这些编辑器都藏在里面，
+        // 不主动打开的话用户只会看到「菜单点了像没反应」，以为功能不存在。
+        setDockOpen((prev) => ({ ...prev, props: true }));
+      },
     });
 
     /**
@@ -2920,6 +3208,8 @@ export default function EditorShell({
           return { run: () => void exportPng(), hint: "Ctrl+Shift+S" };
         case "file.export.exportAs":
           return { run: () => void exportPng() };
+        case "file.export.psd":
+          return { run: () => void exportPsd() };
         case "file.exit":
           return { run: onQuit };
 
@@ -3062,6 +3352,19 @@ export default function EditorShell({
           return { run: () => onCommit(flipDocument(doc, "h"), zh.menu.flipCanvasH) };
         case "image.imageRotation.flipCanvasVertical":
           return { run: () => onCommit(flipDocument(doc, "v"), zh.menu.flipCanvasV) };
+        case "image.calculations":
+          // 通道运算：两个 Alpha 通道逐像素运算，至少得有两个通道
+          return alphaChannelsOf(doc).length >= 2
+            ? { run: () => setCalcOpen(true) }
+            : { run: () => setToast(zh.dialog.channelCalcNeed2) };
+
+        /* ---------------------------------------------------------- 选择 */
+        case "select.editInQuickMaskMode":
+          return { run: () => toggleQuickMask(), hint: "Q" };
+        case "select.selectAndMask":
+          return hasSelection
+            ? { run: () => setRefineOpen(true) }
+            : { run: () => setToast(zh.dialog.refineEdgeEmpty) };
 
         /* ---------------------------------------------------------- 图层 */
         case "layer.new.layer":
@@ -3260,6 +3563,16 @@ export default function EditorShell({
           return adjustLayer("cameraraw");
 
         /* ---------------------------------------------------------- 选择 */
+        case "select.saveSelection":
+          // 把当前选区存成 Alpha 通道，没有选区时给提示（不弹空对话框）
+          return hasSelection
+            ? { run: () => setSaveSelOpen(true) }
+            : { run: () => setToast(zh.dialog.channelSaveEmpty) };
+        case "select.loadSelection":
+          // 载入选区需要至少一个 Alpha 通道；挑张猫图前常先存一个，所以这里拦一下
+          return alphaChannelsOf(doc).length > 0
+            ? { run: () => setLoadSelOpen(true) }
+            : { run: () => setToast(zh.dialog.channelLoadEmpty) };
         case "select.all":
           return { run: doSelectAll };
         case "select.deselect":
@@ -3335,17 +3648,6 @@ export default function EditorShell({
           return { run: () => setGallery(true) };
         case "filter.liquify":
           return { run: () => setLiquify(true) };
-        case "filter.blur.blur":
-          return { run: () => doAdjust(adjustDef("blur").label, preset("blur")) };
-        case "filter.blur.gaussianBlur":
-          // 内核的 blur 就是 Canvas 的高斯模糊，两个菜单项共用同一套参数
-          return { run: () => doAdjust(adjustDef("blur").label, preset("blur", { radius: 8 })) };
-        case "filter.blur.motionBlur":
-          return { run: () => doAdjust(adjustDef("motionblur").label, preset("motionblur")) };
-        case "filter.sharpen.sharpen":
-          return { run: () => doAdjust(adjustDef("sharpen").label, preset("sharpen")) };
-        case "filter.noise.addNoise":
-          return { run: () => doAdjust(adjustDef("noise").label, preset("noise")) };
 
         /* ---------------------------------------------------------- 视图 */
         case "view.zoomIn":
@@ -3459,6 +3761,8 @@ export default function EditorShell({
           return { run: () => toggleDock("navigator"), checked: dockOpen.navigator };
         case "window.panel.histogram":
           return { run: () => toggleDock("histogram"), checked: dockOpen.histogram };
+        case "window.panel.scopes":
+          return { run: () => toggleDock("scopes"), checked: dockOpen.scopes };
         case "window.panel.brushSettings":
           return {
             run: () => setBrushPanelOpen((v) => !v),
@@ -3474,14 +3778,18 @@ export default function EditorShell({
           return {
             run: () => {
               pickWorkspace("photo");
-              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false });
+              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
             },
           };
         case "window.theme.toggle":
           return { run: () => onSetTheme(themeMode === "dark" ? "light" : "dark") };
 
-        default:
+        default: {
+          // 已注册的滤镜统一进参数弹窗（实时预览 + 确定才落盘）
+          const fx = filterDef(id);
+          if (fx) return { run: () => setFilterFx(fx.id) };
           return undefined;
+        }
       }
     };
 
@@ -3489,6 +3797,36 @@ export default function EditorShell({
 
     // 右键菜单与顶部菜单共用同一份命令表：把 resolve 转发给上面的 resolveRef
     resolveRef.current = resolve;
+
+    /* 文件 > 添加到 Reelix：检测到装了 Reelix 才出现（用户要求的联动） */
+    if (reelixState !== "absent") {
+      insertAfterId(groups, "file.openAs", [
+        {
+          kind: "item",
+          id: "reelix.sendTo",
+          label: "添加到 Reelix 当前项目",
+          hint: reelixState === "running" ? "直接进素材箱（PNG）" : "Reelix 未运行 · 存入投递箱",
+          onSelect: () => {
+            void (async () => {
+              try {
+                const ok = await sendToReelix(doc);
+                if (ok) {
+                  setToast(
+                    reelixState === "running"
+                      ? "已发送到 Reelix 素材箱"
+                      : "已存入投递箱，Reelix 打开时自动导入"
+                  );
+                } else {
+                  setToast("发送失败：投递箱不可写");
+                }
+              } catch {
+                setToast("发送失败");
+              }
+            })();
+          },
+        },
+      ]);
+    }
 
     /* 文件 > 最近打开：与开始页共用同一份记录。 */
     const recent: MenuEntry[] = recentItems.length
@@ -3585,6 +3923,7 @@ export default function EditorShell({
     openImage,
     pickWorkspace,
     recentItems,
+    reelixState,
     saveProject,
     scale,
     selRadius,
@@ -3647,6 +3986,11 @@ export default function EditorShell({
       return;
     }
     if (e.key === "Escape") {
+      // 多边形套索画到一半：Esc 先撤掉整段折线（PS 的老规矩）
+      if (polyPts) {
+        setPolyPts(null);
+        return;
+      }
       // 变换进行中：Esc 优先放弃变换（PS 的老规矩）
       if (cancelFreeTransform()) return;
       if (strokeRef.current) {
@@ -3901,6 +4245,12 @@ export default function EditorShell({
     }
     if (e.key.toLowerCase() === "x") {
       swapColors();
+      return;
+    }
+    // Q：快速蒙版（PS 同键位）
+    if (e.key.toLowerCase() === "q" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      toggleQuickMask();
       return;
     }
     const id = toolByShortcut(e.key);
@@ -4247,6 +4597,7 @@ export default function EditorShell({
             />
           }
           histogram={<HistogramPanel source={compRef.current} version={panelTick} />}
+          scopes={<ScopesPanel source={compRef.current} version={panelTick} />}
           color={
             <ColorPanel
               fg={fg}
@@ -4269,6 +4620,29 @@ export default function EditorShell({
               channelVis={channelVis}
               activeChannel={activeChannel}
               onChannel={pickChannel}
+              onSaveSelection={() => {
+                if (!hasSelection) {
+                  setToast(zh.dialog.channelSaveEmpty);
+                  return;
+                }
+                setSaveSelOpen(true);
+              }}
+              onLoadSelection={() => {
+                if (alphaChannelsOf(doc).length === 0) {
+                  setToast(zh.dialog.channelLoadEmpty);
+                  return;
+                }
+                setLoadSelOpen(true);
+              }}
+              onChannelCalc={() => {
+                if (alphaChannelsOf(doc).length < 2) {
+                  setToast(zh.dialog.channelCalcNeed2);
+                  return;
+                }
+                setCalcOpen(true);
+              }}
+              viewAlpha={viewAlpha}
+              onViewAlpha={setViewAlpha}
               onLayerContextMenu={openLayerMenu}
               onMaskContextMenu={openMaskMenu}
             />
@@ -4622,6 +4996,48 @@ export default function EditorShell({
           onClose={() => setSizeDialog(null)}
         />
       )}
+      {saveSelOpen && (
+        <SaveSelectionDialog
+          doc={doc}
+          onApply={(next) => {
+            setSaveSelOpen(false);
+            onCommit(next, zh.dialog.channelSaveTitle);
+          }}
+          onClose={() => setSaveSelOpen(false)}
+        />
+      )}
+      {loadSelOpen && (
+        <LoadSelectionDialog
+          doc={doc}
+          onPreview={onPreview}
+          onApply={(next) => {
+            setLoadSelOpen(false);
+            onCommit(next, zh.dialog.channelLoadTitle);
+          }}
+          onClose={() => setLoadSelOpen(false)}
+        />
+      )}
+      {calcOpen && (
+        <ChannelCalcDialog
+          doc={doc}
+          onApply={(next) => {
+            setCalcOpen(false);
+            onCommit(next, zh.dialog.channelCalcTitle);
+          }}
+          onClose={() => setCalcOpen(false)}
+        />
+      )}
+      {refineOpen && (
+        <RefineEdgeDialog
+          doc={doc}
+          onPreview={onPreview}
+          onApply={(next) => {
+            setRefineOpen(false);
+            onCommit(next, zh.dialog.refineEdgeTitle);
+          }}
+          onClose={() => setRefineOpen(false)}
+        />
+      )}
       {gallery && (
         <FilterGallery
           doc={doc}
@@ -4631,6 +5047,18 @@ export default function EditorShell({
             onCommit(next, zh.dialog.filterTitle);
           }}
           onClose={() => setGallery(false)}
+        />
+      )}
+      {filterFx && (
+        <FilterFxDialog
+          doc={doc}
+          filterId={filterFx}
+          onPreview={onPreview}
+          onApply={(next) => {
+            setFilterFx(null);
+            onCommit(next, filterDef(filterFx)?.label ?? zh.dialog.filterTitle);
+          }}
+          onClose={() => setFilterFx(null)}
         />
       )}
       {liquify && (

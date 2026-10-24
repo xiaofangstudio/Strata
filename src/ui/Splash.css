@@ -7,6 +7,8 @@
   position: fixed;
   inset: 0;
   z-index: 9999;
+  /* 深色兜底：背景图未加载/加载失败时也不会出现白底白字 */
+  background-color: #0a1018;
   background-size: cover;
   background-position: center;
   transition: opacity 0.62s ease;

@@ -1,0 +1,81 @@
+/* 通道对话框（存储 / 载入 / 运算）。复用 Modal 的基础，这里只管表单栅格。 */
+
+.cd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-2) 0;
+}
+
+.cd-note {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.cd-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.cd-label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.cd-input,
+.cd-select {
+  height: 30px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+.cd-input:focus,
+.cd-select:focus {
+  border-color: var(--accent);
+}
+
+.cd-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cd-calc-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-3) var(--sp-4);
+  align-items: end;
+}
+
+.cd-spacer {
+  display: block;
+}
+
+.cd-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cd-preview-canvas {
+  width: 160px;
+  height: 120px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: #000;
+}
+
+.cd-empty {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}

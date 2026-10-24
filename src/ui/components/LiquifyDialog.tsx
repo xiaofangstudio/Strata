@@ -18,6 +18,7 @@ import type { ThemeMode } from "../../stores/theme";
 import { capturePointer } from "../pointer";
 import Modal from "./Modal";
 import "./LiquifyDialog.css";
+import RangeInput from "./RangeInput";
 
 interface Props {
   doc: StrataDoc;
@@ -436,14 +437,14 @@ export default function LiquifyDialog({ doc, themeMode, onApply, onClose }: Prop
                   {d.unit}
                 </span>
               </span>
-              <input
+              <RangeInput
                 className="lq-range"
-                type="range"
                 min={d.min}
                 max={d.max}
                 step={d.step}
                 value={set[d.key]}
-                onChange={(e) => setValue(d.key, Number(e.target.value))}
+                aria-label={d.label}
+                onChange={(v) => setValue(d.key, v)}
               />
             </label>
           ))}

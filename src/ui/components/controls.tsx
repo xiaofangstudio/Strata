@@ -21,6 +21,7 @@ import {
   type BrushPrefs,
 } from "../../stores/prefs";
 import ColorPicker from "./ColorPicker";
+import RangeInput from "./RangeInput";
 import "./picker.css";
 
 /** 颜色工具的对外出口，保持既有引用可用。 */
@@ -44,14 +45,13 @@ export function Slider({ label, min, max, value, suffix, hint, onChange }: Slide
   return (
     <label className="opt" title={hint}>
       <span className="opt-label">{label}</span>
-      <input
-        type="range"
+      <RangeInput
         className="opt-range"
         min={min}
         max={max}
-        step={1}
         value={value}
-        onChange={(e) => onChange(clamp(Number(e.target.value)))}
+        aria-label={label}
+        onChange={(v) => onChange(clamp(v))}
       />
       <input
         type="number"

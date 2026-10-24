@@ -6,6 +6,8 @@
  */
 import { cloneLayer, createLayer, layerFromBitmap, type StrataLayer } from "./layer";
 import { cloneSelection, type SelectionMask } from "./selection";
+import { type AlphaChannel } from "./channels";
+import { cloneAlphaChannels } from "./channelOps";
 
 /** 选区遮罩：与画布同尺寸，alpha 分量即「选中程度」。无选区时为 null。 */
 export type { SelectionMask };
@@ -32,6 +34,11 @@ export interface StrataDoc {
    * 无选区 / 全选后取消时为 null —— 与 PS 一样，null 表示「不限制范围」。
    */
   selection?: SelectionMask | null;
+  /**
+   * 持久 Alpha 通道（「存储选区」的落点，随工程存盘）。
+   * 旧工程没有此字段，读取时按空数组处理。
+   */
+  alphaChannels?: AlphaChannel[];
   /** 相对磁盘是否有未保存改动 */
   dirty?: boolean;
 }
@@ -112,5 +119,7 @@ export function cloneDoc(doc: StrataDoc): StrataDoc {
     layers: doc.layers.map(cloneLayer),
     // 选区也要拷一份，否则两个文档标签页会共用同一张遮罩画布。
     selection: doc.selection ? cloneSelection(doc.selection) : doc.selection,
+    // Alpha 通道同理：各自一份遮罩，互不串台。
+    alphaChannels: cloneAlphaChannels(doc.alphaChannels),
   };
 }

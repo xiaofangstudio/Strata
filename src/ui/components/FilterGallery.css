@@ -160,3 +160,28 @@
     transform: translateY(3px);
   }
 }
+
+/* 分组标题与下拉选择（FilterFxDialog 复用滤镜库样式）。 */
+.fg-group {
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.fg-select {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.fg-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

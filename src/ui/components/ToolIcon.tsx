@@ -54,6 +54,24 @@ const PATHS: Record<IconId, ReactNode> = {
       <path d="M8 19.7c.6.9 2 .9 2.7.2" />
     </g>
   ),
+  // 多边形套索：折线闭合 + 顶点圆点
+  polyLasso: (
+    <g {...stroke} strokeDasharray="3 2.4">
+      <path d="M4.5 8 15 4.5l4.5 8.5-6.5 7-8.5-4.5Z" />
+    </g>
+  ),
+  // 单行选框：横贯全宽的一根虚线选区，上下两个小箭头示意可拖
+  singleRow: (
+    <g {...stroke} strokeDasharray="3 2.4">
+      <path d="M3.5 12h17" />
+    </g>
+  ),
+  // 单列选框：纵贯全高
+  singleColumn: (
+    <g {...stroke} strokeDasharray="3 2.4">
+      <path d="M12 3.5v17" />
+    </g>
+  ),
   // 魔棒
   wand: (
     <g {...stroke}>
@@ -95,6 +113,22 @@ const PATHS: Record<IconId, ReactNode> = {
     <g {...stroke}>
       <path d="M4.7 15.6l6-6a1.7 1.7 0 0 1 2.4 0l4 4a1.7 1.7 0 0 1 0 2.4l-4.2 4.2H9.1l-4.4-4.4a1.7 1.7 0 0 1 0-2.2Z" />
       <path d="M8.5 20.2h11.3" />
+    </g>
+  ),
+  // 魔术橡皮：橡皮 + 魔棒闪光
+  magicEraser: (
+    <g {...stroke}>
+      <path d="M4.2 14.9l5.2-5.2a1.5 1.5 0 0 1 2.1 0l3.5 3.5a1.5 1.5 0 0 1 0 2.1l-3.7 3.7H7.9l-3.7-3.7a1.5 1.5 0 0 1 0-2.1Z" />
+      <path d="M8.1 18.7h9.9" />
+      <path d="M16.6 3.4v3M15.1 4.9h3M20 9.2v2.4M18.8 10.4h2.4" />
+    </g>
+  ),
+  // 铅笔：斜置的削尖铅笔
+  pencil: (
+    <g {...stroke} transform="rotate(45 12 12)">
+      <path d="M10.6 3.4h2.8v3.4h-2.8z" />
+      <path d="M10.6 6.8h2.8v9.6l-1.4 4-1.4-4Z" />
+      <path d="M10.6 13h2.8" />
     </g>
   ),
   // 油漆桶

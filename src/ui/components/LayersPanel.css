@@ -843,6 +843,42 @@
   touch-action: none;
 }
 
+/* 曲线通道页签：RGB / 红 / 绿 / 蓝，选中的那条带本色标记 */
+.ly-curve-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.ly-curve-tab {
+  flex: 1;
+  height: 24px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--r-sm) - 1px);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.ly-curve-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ly-curve-tab.is-on {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--ly-tab-hue, var(--accent));
+}
+
 /* ---------- 渐变映射编辑器 ---------- */
 
 .ly-grad {
@@ -1007,6 +1043,58 @@
   color: var(--accent-ink);
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* 危险操作（删除通道）用红字，但平时收敛，悬停才亮 */
+.ch-act.is-danger {
+  color: var(--danger, #e5484d);
+}
+
+.ch-act.is-danger:hover:not(:disabled) {
+  color: #fff;
+  background: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+
+/* Alpha 通道段标题：与图层面板的小标题同语汇 */
+.ch-divider {
+  margin: var(--sp-2) 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: none;
+}
+
+/* 通道行末尾的删除「×」：默认隐去，悬停行才出现，免得误触 */
+.ch-del {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.ch-row:hover .ch-del {
+  opacity: 1;
+}
+
+.ch-del:hover {
+  color: #fff;
+  background: var(--danger, #e5484d);
 }
 
 /* ---------- 面板动效 ----------

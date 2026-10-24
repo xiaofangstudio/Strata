@@ -20,6 +20,15 @@ struct AppInfo {
     locale: &'static str,
 }
 
+/// 取 %LOCALAPPDATA%（Windows）或 $HOME（兜底）。Reelix 联动探测用。
+#[tauri::command]
+fn local_app_data() -> Result<String, String> {
+    std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|v| v.to_string_lossy().into_owned())
+        .ok_or_else(|| "定位不到本机数据目录".to_string())
+}
+
 /// 读取本地文件的原始字节。M0 用于把图片交给前端解码。
 #[tauri::command]
 fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
@@ -103,6 +112,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
+            local_app_data,
             files_stat,
             quit_app,
             app_info

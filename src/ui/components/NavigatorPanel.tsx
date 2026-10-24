@@ -7,6 +7,7 @@
 import { useEffect, useRef } from "react";
 import { zh } from "../../i18n/zh-CN";
 import "./NavigatorPanel.css";
+import RangeInput from "./RangeInput";
 
 interface Props {
   /** 文档尺寸 */
@@ -142,13 +143,12 @@ export default function NavigatorPanel({
         >
           −
         </button>
-        <input
-          type="range"
+        <RangeInput
           min={0}
           max={100}
           step={1}
           value={toSlider(scale)}
-          onChange={(e) => onZoom(fromSlider(Number(e.target.value)))}
+          onChange={(v) => onZoom(fromSlider(v))}
           aria-label={zh.panel.navigator}
         />
         <button

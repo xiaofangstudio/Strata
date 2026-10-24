@@ -11,6 +11,7 @@ import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n/zh-CN";
 import Modal from "./Modal";
 import "./FilterGallery.css";
+import RangeInput from "./RangeInput";
 
 interface Props {
   doc: StrataDoc;
@@ -127,16 +128,14 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
                     {p.unit ?? ""}
                   </span>
                 </span>
-                <input
+                <RangeInput
                   className="fg-range"
-                  type="range"
                   min={p.min}
                   max={p.max}
                   step={p.step}
                   value={v}
-                  onChange={(e) =>
-                    setParams((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))
-                  }
+                  aria-label={p.label}
+                  onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
                 />
               </label>
             );

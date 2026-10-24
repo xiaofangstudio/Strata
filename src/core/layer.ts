@@ -607,10 +607,48 @@ export interface GradientStop {
 export interface AdjustState {
   id: AdjustId;
   params: Record<string, number>;
-  /** 曲线控制点（id === "curves" 时用），按 x 升序 */
+  /** 曲线控制点（id === "curves" 时用），按 x 升序。RGB 复合曲线 */
   curve?: CurvePoint[];
+  /**
+   * 分通道曲线：红 / 绿 / 蓝各一条，各自独立调整（PS 曲线面板的同款切换）。
+   * 缺省就是一条对角线 —— 不影响画面。
+   */
+  curveR?: CurvePoint[];
+  curveG?: CurvePoint[];
+  curveB?: CurvePoint[];
   /** 渐变映射色标（id === "gradientmap" 时用），按 at 升序 */
   stops?: GradientStop[];
+}
+
+/** 正被编辑的那个通道，CurveEditor 用；存在这里而非组件内，方便右侧属性延续。 */
+export type CurveChannel = "rgb" | "r" | "g" | "b";
+
+/** 取某条通道的曲线点集（缺省返回对角线的副本）。 */
+export function curveOf(state: AdjustState, ch: CurveChannel): CurvePoint[] {
+  const src =
+    ch === "r"
+      ? state.curveR
+      : ch === "g"
+        ? state.curveG
+        : ch === "b"
+          ? state.curveB
+          : state.curve;
+  return src ? src.map((c) => ({ ...c })) : DEFAULT_CURVE.map((c) => ({ ...c }));
+}
+
+/** 把某个通道的曲线写回调整状态。 */
+export function setCurveOf(
+  state: AdjustState,
+  ch: CurveChannel,
+  pts: CurvePoint[],
+): AdjustState {
+  const next: AdjustState = { ...state, params: { ...state.params } };
+  const sorted = pts.slice().sort((a, b) => a.x - b.x);
+  if (ch === "r") next.curveR = sorted;
+  else if (ch === "g") next.curveG = sorted;
+  else if (ch === "b") next.curveB = sorted;
+  else next.curve = sorted;
+  return next;
 }
 
 /** 曲线默认是一条对角线，等于不改动画面。 */
@@ -645,6 +683,9 @@ export function newAdjustState(id: AdjustId): AdjustState {
 export function cloneAdjust(state: AdjustState): AdjustState {
   const out: AdjustState = { id: state.id, params: { ...state.params } };
   if (state.curve) out.curve = state.curve.map((c) => ({ ...c }));
+  if (state.curveR) out.curveR = state.curveR.map((c) => ({ ...c }));
+  if (state.curveG) out.curveG = state.curveG.map((c) => ({ ...c }));
+  if (state.curveB) out.curveB = state.curveB.map((c) => ({ ...c }));
   if (state.stops) out.stops = state.stops.map((s) => ({ ...s }));
   return out;
 }
@@ -784,8 +825,27 @@ export function adjustFilter(state: AdjustState, layerId: string): string {
     }
     case "curves": {
       const pts = state.curve;
+      // ① 复合曲线：三通道一起走同一条传递函数
       if (pts && pts.length >= 2 && !isIdentityCurve(pts)) {
         parts.push(register(layerId, uniTransfer(curveTable(pts))));
+      }
+      // ② 分通道曲线：红 / 绿 / 蓝各一条，叠在复合曲线之后。
+      //    缺失的通道用单位表补齐（rgbTransfer 需要三个参数都有值）。
+      const hasChannel =
+        [state.curveR, state.curveG, state.curveB].some(
+          (c) => c && c.length >= 2 && !isIdentityCurve(c),
+        );
+      if (hasChannel) {
+        // 没给曲线的通道用「单位表」占位 —— x 进 x 出，等于这一通道不动
+        const idn = tableOf((x) => x);
+        const tab = (c: CurvePoint[] | undefined) =>
+          c && c.length >= 2 && !isIdentityCurve(c) ? curveTable(c) : idn;
+        parts.push(
+          register(
+            layerId,
+            rgbTransfer(tab(state.curveR), tab(state.curveG), tab(state.curveB)),
+          ),
+        );
       }
       break;
     }

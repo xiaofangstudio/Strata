@@ -14,7 +14,12 @@ export type ToolId =
   | "marquee"
   | "ellipse"
   | "lasso"
+  | "polyLasso"
+  | "singleRow"
+  | "singleColumn"
   | "wand"
+  | "pencil"
+  | "magicEraser"
   | "shapeRect"
   | "shapeEllipse"
   | "shapeLine"
@@ -74,7 +79,10 @@ export const TOOLS: ToolDef[] = [
 
   { id: "marquee", shortcut: "M", group: "select", ready: true },
   { id: "ellipse", shortcut: "M", group: "select", ready: true },
+  { id: "singleRow", shortcut: "M", group: "select", ready: true },
+  { id: "singleColumn", shortcut: "M", group: "select", ready: true },
   { id: "lasso", shortcut: "L", group: "select", ready: true },
+  { id: "polyLasso", shortcut: "L", group: "select", ready: true },
   { id: "wand", shortcut: "W", group: "select", ready: true },
 
   { id: "shapeRect", shortcut: "U", group: "shape", ready: true },
@@ -84,7 +92,9 @@ export const TOOLS: ToolDef[] = [
   { id: "text", shortcut: "T", group: "text", ready: true },
 
   { id: "brush", shortcut: "B", group: "paint", ready: true },
+  { id: "pencil", shortcut: "B", group: "paint", ready: true },
   { id: "eraser", shortcut: "E", group: "paint", ready: true },
+  { id: "magicEraser", shortcut: "E", group: "paint", ready: true },
   { id: "bucket", shortcut: "G", group: "paint", ready: true },
   { id: "gradient", shortcut: "G", group: "paint", ready: true },
 
@@ -126,7 +136,15 @@ export function toolsWithShortcut(letter: string): ToolId[] {
 
 /** 是否是需要画选区框的工具（选项条据此切换内容）。 */
 export function isSelectionTool(id: ToolId): boolean {
-  return id === "marquee" || id === "ellipse" || id === "lasso" || id === "wand";
+  return (
+    id === "marquee" ||
+    id === "ellipse" ||
+    id === "lasso" ||
+    id === "polyLasso" ||
+    id === "singleRow" ||
+    id === "singleColumn" ||
+    id === "wand"
+  );
 }
 
 /** 按分组取出工具，供工具轨渲染。 */
@@ -136,7 +154,12 @@ export function toolsInGroup(group: string): ToolDef[] {
 
 /** 需要画笔参数的工具有哪些（选项条据此切换内容）。 */
 export function usesBrush(id: ToolId): boolean {
-  return id === "brush" || id === "eraser";
+  return id === "brush" || id === "pencil" || id === "eraser";
+}
+
+/** 走「点一下就落库」而不是「拖一圈」的选区工具。 */
+export function isClickSelectTool(id: ToolId): boolean {
+  return id === "wand" || id === "singleRow" || id === "singleColumn";
 }
 
 /** 形状工具（矩形 / 椭圆 / 直线）：拖拽绘制，选项条给出填充与描边。 */

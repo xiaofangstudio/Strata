@@ -9,7 +9,7 @@ import { useState, type ReactNode } from "react";
 import { zh } from "../../i18n/zh-CN";
 import "./RightDock.css";
 
-type GroupId = "props" | "color" | "layers" | "history" | "navigator" | "histogram";
+type GroupId = "props" | "color" | "layers" | "history" | "navigator" | "histogram" | "scopes";
 
 export type { GroupId };
 
@@ -26,6 +26,8 @@ interface Props {
   navigator: ReactNode;
   /** 直方图 */
   histogram: ReactNode;
+  /** 色彩示波器（波形 / Parade / 矢量） */
+  scopes: ReactNode;
   /** 受控开关（「窗口 > 面板」菜单直接控制）；不传则坞内自持。 */
   open?: Record<GroupId, boolean>;
   onToggle?: (id: GroupId) => void;
@@ -50,6 +52,17 @@ const RAIL: { id: GroupId; label: string; icon: ReactNode }[] = [
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
         <path d="M2 13h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         <path d="M3 13V9M6 13V5M9 13V7M12 13V3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: "scopes",
+    label: zh.panel.scopes,
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+        <circle cx="10.6" cy="5.6" r="1.1" fill="currentColor" />
+        <path d="M8 8 12 4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
       </svg>
     ),
   },
@@ -105,6 +118,7 @@ export default function RightDock({
   history,
   navigator,
   histogram,
+  scopes,
   open: outer,
   onToggle,
 }: Props) {
@@ -116,6 +130,7 @@ export default function RightDock({
     history: false,
     navigator: false,
     histogram: false,
+    scopes: false,
   });
   const open = outer ?? inner;
 
@@ -144,6 +159,7 @@ export default function RightDock({
 
       <div className="dock-body">
         {open.navigator && <div className="dock-group is-navigator">{navigator}</div>}
+        {open.scopes && <div className="dock-group is-scopes">{scopes}</div>}
         {open.histogram && <div className="dock-group is-histogram">{histogram}</div>}
         {open.color && <div className="dock-group is-color">{color}</div>}
         {open.props && <div className="dock-group is-props">{properties}</div>}

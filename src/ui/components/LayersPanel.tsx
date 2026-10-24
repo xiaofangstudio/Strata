@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  useMemo,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { zh } from "../../i18n/zh-CN";
@@ -24,12 +25,13 @@ import { capturePointer } from "../pointer";
 import {
   ADJUST_DEFS,
   BLEND_MODES,
-  DEFAULT_CURVE,
   DEFAULT_STOPS,
   STROKE_POSITIONS,
   STYLE_DEFS,
   adjustDef,
   adjustFamily,
+  curveOf,
+  setCurveOf,
   newAdjustState,
   newLayerStyle,
   styleDef,
@@ -38,6 +40,7 @@ import {
   type AdjustParam,
   type AdjustState,
   type BlendId,
+  type CurveChannel,
   type GradientStop,
   type LayerStyle,
   type StrataLayer,
@@ -79,10 +82,20 @@ import {
   channelToSelection,
   isChannelViewDefault,
   toggleChannelVis,
+  alphaChannelThumb,
+  type AlphaChannel,
   type ChannelId,
   type ChannelVis,
 } from "../../core/channels";
+import {
+  alphaChannelsOf,
+  createBlankChannel,
+  deleteChannel,
+  duplicateChannel,
+  loadChannelAsSelection,
+} from "../../core/channelOps";
 import ColorChip from "./ColorChip";
+import RangeInput from "./RangeInput";
 import "./LayersPanel.css";
 
 interface Props {
@@ -100,6 +113,16 @@ interface Props {
   activeChannel: ChannelId;
   /** 通道页：改视图 —— 只影响屏幕，不写历史 */
   onChannel: (vis: ChannelVis, active: ChannelId) => void;
+  /** 通道页：打开「存储选区」对话框 */
+  onSaveSelection: () => void;
+  /** 通道页：打开「载入选区」对话框 */
+  onLoadSelection: () => void;
+  /** 通道页：打开「通道运算」对话框 */
+  onChannelCalc: () => void;
+  /** 正在灰度查看的 Alpha 通道 id（null = 没在看） */
+  viewAlpha: string | null;
+  /** 切换 / 关闭 Alpha 通道灰度查看 */
+  onViewAlpha: (id: string | null) => void;
   /** 图层行右键（菜单浮层在 EditorShell 统一渲染） */
   onLayerContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
   /** 蒙版缩略图右键 */
@@ -117,6 +140,11 @@ export default function LayersPanel({
   channelVis,
   activeChannel,
   onChannel,
+  onSaveSelection,
+  onLoadSelection,
+  onChannelCalc,
+  viewAlpha,
+  onViewAlpha,
   onLayerContextMenu,
   onMaskContextMenu,
 }: Props) {
@@ -164,6 +192,11 @@ export default function LayersPanel({
           active={activeChannel}
           onChannel={onChannel}
           onChange={onChange}
+          onSaveSelection={onSaveSelection}
+          onLoadSelection={onLoadSelection}
+          onChannelCalc={onChannelCalc}
+          viewAlpha={viewAlpha}
+          onViewAlpha={onViewAlpha}
         />
       )}
     </aside>
@@ -208,12 +241,27 @@ function ChannelTab({
   active,
   onChannel,
   onChange,
+  onSaveSelection,
+  onLoadSelection,
+  onChannelCalc,
+  viewAlpha,
+  onViewAlpha,
 }: {
   doc: StrataDoc;
   vis: ChannelVis;
   active: ChannelId;
   onChannel: (vis: ChannelVis, active: ChannelId) => void;
   onChange: (next: StrataDoc, label: string) => void;
+  /** 打开「存储选区」对话框 */
+  onSaveSelection: () => void;
+  /** 打开「载入选区」对话框 */
+  onLoadSelection: () => void;
+  /** 打开「通道运算」对话框 */
+  onChannelCalc: () => void;
+  /** 正在查看的 Alpha 通道 id（灰色单独查看）；null = 没在看 */
+  viewAlpha: string | null;
+  /** 切换 / 关闭 Alpha 通道灰度查看 */
+  onViewAlpha: (id: string | null) => void;
 }) {
   // 合成结果现算一次，五张缩略图与「载入选区」共用同一张。
   const [flat, setFlat] = useState<HTMLCanvasElement | null>(null);
@@ -223,6 +271,9 @@ function ChannelTab({
     setFlat(c);
   }, [doc]);
 
+  const channels = alphaChannelsOf(doc);
+  const current = viewAlpha ? channels.find((c) => c.id === viewAlpha) : undefined;
+
   /** 把当前通道的明暗当作选区载入 —— 与 PS 的「载入通道作为选区」同一口径。 */
   const loadChannel = () => {
     if (!flat) return;
@@ -231,6 +282,16 @@ function ChannelTab({
       zh.panel.channelLoad,
     );
   };
+
+  const duplicateSelected = () => {
+    if (current) onChange(duplicateChannel(doc, current.id), zh.panel.channelDuplicate);
+  };
+  const deleteSelected = () => {
+    if (!current) return;
+    onChange(deleteChannel(doc, current.id), zh.panel.channelDelete);
+    onViewAlpha(null);
+  };
+  const newBlank = () => onChange(createBlankChannel(doc), zh.panel.channelNew);
 
   return (
     <Fragment>
@@ -250,6 +311,31 @@ function ChannelTab({
 
         {/* 正在单独查看某个通道时给一句说明，免得以为画面坏了 */}
         {active !== "rgb" && <p className="ch-note">{zh.panel.channelViewing}</p>}
+
+        {/* Alpha 通道（存储的选区）：持久数据，与上面的派生视图分开成段 */}
+        {channels.length > 0 && (
+          <>
+            <div className="ch-divider">{zh.panel.channelAlphaChannels}</div>
+            <div className="ch-list">
+              {channels.map((c) => (
+                <AlphaChannelRow
+                  key={c.id}
+                  channel={c}
+                  viewed={viewAlpha === c.id}
+                  onView={(on) => onViewAlpha(on ? c.id : null)}
+                  onLoad={() => onChange(loadChannelAsSelection(doc, c.id, "new"), zh.dialog.channelLoadDone)}
+                  onDelete={() => {
+                    onChange(deleteChannel(doc, c.id), zh.panel.channelDelete);
+                    if (viewAlpha === c.id) onViewAlpha(null);
+                  }}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* 查看某个 Alpha 通道时也提示一句，免得以为画面黑了 */}
+        {viewAlpha && <p className="ch-note">{zh.panel.channelViewingAlpha}</p>}
       </div>
 
       <div className="ly-foot ch-foot">
@@ -265,15 +351,141 @@ function ChannelTab({
         <span className="ly-foot-gap" />
         <button
           type="button"
-          className="ch-act is-primary"
+          className="ch-act"
           disabled={!flat}
           title={zh.panel.channelLoadHint}
           onClick={loadChannel}
         >
           {zh.panel.channelLoad}
         </button>
+        <span className="ly-foot-gap" />
+        <button
+          type="button"
+          className="ch-act"
+          disabled={!flat}
+          title="把当前选区存成 Alpha 通道"
+          onClick={onSaveSelection}
+        >
+          {zh.panel.channelSave}
+        </button>
+        <button
+          type="button"
+          className="ch-act"
+          disabled={channels.length === 0}
+          title="把某个 Alpha 通道载回选区"
+          onClick={onLoadSelection}
+        >
+          {zh.panel.channelLoad}
+        </button>
+        <button
+          type="button"
+          className="ch-act"
+          disabled={channels.length < 2}
+          title="两个 Alpha 通道逐像素运算"
+          onClick={onChannelCalc}
+        >
+          {zh.dialog.channelCalcTitle}
+        </button>
+        <span className="ly-foot-gap" />
+        <button
+          type="button"
+          className="ch-act"
+          disabled={!current}
+          title="复制当前查看的通道"
+          onClick={duplicateSelected}
+        >
+          {zh.panel.channelDuplicate}
+        </button>
+        <button
+          type="button"
+          className="ch-act is-danger"
+          disabled={!current}
+          title="删除当前查看的通道"
+          onClick={deleteSelected}
+        >
+          {zh.panel.channelDelete}
+        </button>
+        <button
+          type="button"
+          className="ch-act"
+          disabled={!flat}
+          title="新建一张空白通道"
+          onClick={newBlank}
+        >
+          {zh.panel.channelNew}
+        </button>
       </div>
     </Fragment>
+  );
+}
+
+/**
+ * Alpha 通道行：眼睛管「灰度单独查看」，缩略图点一下把该通道当选区载入，
+ * 名字也切到查看。与上面颜色通道同一套行样式，只是底部多了一个删除「×」。
+ */
+function AlphaChannelRow({
+  channel,
+  viewed,
+  onView,
+  onLoad,
+  onDelete,
+}: {
+  channel: AlphaChannel;
+  viewed: boolean;
+  onView: (on: boolean) => void;
+  onLoad: () => void;
+  onDelete: () => void;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(alphaChannelThumb(channel.mask, c.width), 0, 0);
+  }, [channel]);
+
+  return (
+    <div className={viewed ? "ch-row is-viewed" : "ch-row"}>
+      <button
+        type="button"
+        className={viewed ? "ly-eye" : "ly-eye is-off"}
+        aria-pressed={viewed}
+        title="查看此通道（灰度）"
+        onClick={() => onView(!viewed)}
+      >
+        <EyeIcon open={viewed} />
+      </button>
+
+      <canvas
+        ref={ref}
+        width={36}
+        height={36}
+        className="ly-thumb ch-mono"
+        title="点击把该通道载入选区"
+        onClick={onLoad}
+      />
+
+      <button
+        type="button"
+        className="ch-name"
+        title="查看此通道（灰度）"
+        onClick={() => onView(!viewed)}
+      >
+        {channel.name}
+      </button>
+
+      <button
+        type="button"
+        className="ch-del"
+        title={zh.panel.channelDelete}
+        aria-label={`${zh.panel.channelDelete}：${channel.name}`}
+        onClick={onDelete}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -481,21 +693,18 @@ function LayerTab({
             ))}
           </select>
           <div className="ly-op" title={zh.layers.opacity}>
-            <input
-              type="range"
+            <RangeInput
               className="ly-range"
               min={0}
               max={100}
               step={1}
               value={shown}
-              onChange={(e) => {
-                const v = Number(e.target.value);
+              aria-label={zh.layers.opacity}
+              onChange={(v) => {
                 setDragOpacity(v);
                 onPreview(setOpacity(doc, cur.id, v));
               }}
-              onPointerUp={commitOpacity}
-              onKeyUp={commitOpacity}
-              onBlur={commitOpacity}
+              onDragEnd={commitOpacity}
             />
             <span className="ly-opacity">{shown}</span>
           </div>
@@ -810,17 +1019,15 @@ export function AdjustProps({
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type="range"
+                  <RangeInput
                     className="ly-range"
                     min={p.min}
                     max={p.max}
                     step={p.step}
                     value={v}
-                    onChange={(e) => setParam(p.id, Number(e.target.value))}
-                    onPointerUp={commit}
-                    onKeyUp={commit}
-                    onBlur={commit}
+                    aria-label={p.label}
+                    onChange={(nv) => setParam(p.id, nv)}
+                    onDragEnd={commit}
                   />
                 )}
                 {!p.choices && (
@@ -935,17 +1142,15 @@ export function StyleProps({
         const numRow = (label: string, field: NumField, min: number, max: number) => (
           <div className="ly-prop" key={field}>
             <span className="ly-prop-label">{label}</span>
-            <input
-              type="range"
+            <RangeInput
               className="ly-range"
               min={min}
               max={max}
               step={1}
               value={s[field]}
-              onChange={(e) => setNum(s.id, field, Number(e.target.value), true)}
-              onPointerUp={() => setNum(s.id, field, s[field], false)}
-              onKeyUp={() => setNum(s.id, field, s[field], false)}
-              onBlur={() => setNum(s.id, field, s[field], false)}
+              aria-label={label}
+              onChange={(v) => setNum(s.id, field, v, true)}
+              onDragEnd={(v) => setNum(s.id, field, v, false)}
             />
             <span className="ly-opacity">
               {s[field]}
@@ -1099,11 +1304,29 @@ function CurveEditor({
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
 }) {
-  const pts = st.curve ?? DEFAULT_CURVE;
+  const [channel, setChannel] = useState<CurveChannel>("rgb");
+  // 当前编辑的是哪条曲线：切通道等于换一组点，写回也写到对应那一组
+  const pts = useMemo(() => curveOf(st, channel), [st, channel]);
   const ref = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<number | null>(null);
   // 刚刚由「空白处单击」新增的点，双击时不能立刻删掉它
   const freshRef = useRef<number | null>(null);
+
+  /** 把编辑后的点集写回对应通道（预览不进历史，松手才落一条）。 */
+  const push = (next: CurvePoint[], label?: string) => {
+    const doc2 = setAdjust(doc, layer.id, setCurveOf(st, channel, next));
+    if (label) onChange(doc2, label);
+    else onPreview(doc2);
+  };
+
+  const CHANNEL_TABS: { id: CurveChannel; label: string; hue: string }[] = [
+    { id: "rgb", label: "RGB", hue: "var(--text-2)" },
+    { id: "r", label: "红", hue: "#e05252" },
+    { id: "g", label: "绿", hue: "#4caf50" },
+    { id: "b", label: "蓝", hue: "#5b8def" },
+  ];
+
+  const activeHue = CHANNEL_TABS.find((c) => c.id === channel)?.hue ?? "var(--accent)";
 
   useEffect(() => {
     const cv = ref.current;
@@ -1119,8 +1342,9 @@ function CurveEditor({
     const ink = (name: string, fallback: string) =>
       cs.getPropertyValue(name).trim() || fallback;
     const border = ink("--border", "#2b2b2f");
-    const accent = ink("--accent", "#6fc0ff");
     const surface = ink("--surface", "#1a1a1f");
+    // 曲线与控制点用「当前通道」的色：RGB 复合走强调色，单通道各自带本色
+    const accent = ink("--ly-curve-hue", ink("--accent", "#6fc0ff"));
 
     ctx.clearRect(0, 0, CURVE_BOX, CURVE_BOX);
     ctx.fillStyle = surface;
@@ -1217,7 +1441,7 @@ function CurveEditor({
     }
     dragRef.current = idx;
     capturePointer(e.currentTarget, e.pointerId);
-    onPreview(setAdjust(doc, layer.id, { ...st, curve: next }));
+    push(next);
   };
 
   const onMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1232,7 +1456,7 @@ function CurveEditor({
     if (idx > 0 && idx < next.length - 1) {
       p.x = Math.max(next[idx - 1].x + 0.01, Math.min(next[idx + 1].x - 0.01, d.x));
     }
-    onPreview(setAdjust(doc, layer.id, { ...st, curve: next }));
+    push(next);
   };
 
   const onUp = () => {
@@ -1248,14 +1472,30 @@ function CurveEditor({
     // 刚加的点不删，端点也不删
     if (idx <= 0 || idx >= pts.length - 1 || idx === freshRef.current) return;
     const next = pts.filter((_, i) => i !== idx).map((p) => ({ ...p }));
-    onChange(setAdjust(doc, layer.id, { ...st, curve: next }), zh.layers.adjustParams);
+    push(next, zh.layers.adjustParams);
   };
 
   return (
     <div className="ly-curve">
+      <div className="ly-curve-tabs" role="tablist" aria-label="曲线通道">
+        {CHANNEL_TABS.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            role="tab"
+            aria-selected={channel === c.id}
+            className={channel === c.id ? "ly-curve-tab is-on" : "ly-curve-tab"}
+            style={{ "--ly-tab-hue": c.hue } as React.CSSProperties}
+            onClick={() => setChannel(c.id)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
       <canvas
         ref={ref}
         className="ly-curve-canvas"
+        style={{ "--ly-curve-hue": activeHue } as React.CSSProperties}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}

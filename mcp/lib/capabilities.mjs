@@ -448,6 +448,16 @@ export function buildCapabilities() {
       "strata_duplicate_layer",
       "strata_validate",
       "strata_build_recipe",
+      "strata_open_image",
+      "strata_image_info",
+      "strata_adjust_image",
+      "strata_filter_image",
+      "strata_edit_image",
+      "strata_export_image",
+      "strata_image_preview",
+      "strata_cutout",
+      "strata_composite",
+      "strata_light",
     ],
   };
 }

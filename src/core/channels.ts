@@ -17,9 +17,23 @@
  * 单测跑在 node 里（没有真实光栅化），能验的就是这层纯逻辑。
  */
 import { createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
+import type { SelectionMask } from "./selection";
 
 /** 复合通道 + 三个原色通道 + 透明度。 */
 export type ChannelId = "rgb" | "red" | "green" | "blue" | "alpha";
+
+/**
+ * Alpha 通道：一份起了名的持久选区，随工程存盘（PS 的「存储选区」落点）。
+ *
+ * 与文档选区同一口径 —— mask 是一张与画布同尺寸的遮罩画布，**alpha 分量即
+ * 选中程度**（0 未选 / 255 全选 / 中间值软边）。存的时候拷贝一份、与文档
+ * 共存亡；载入时原样变回选区，像素级一致。
+ */
+export interface AlphaChannel {
+  id: string;
+  name: string;
+  mask: SelectionMask;
+}
 
 /** 各原色通道是否参与合成。 */
 export interface ChannelVis {
@@ -199,5 +213,55 @@ export function channelThumb(
     channelGrayToBuffer(data.data, id);
     writePixels(c, data);
   }
+  return c;
+}
+
+/* ------------------------------------------------------- Alpha 通道视图与缩略图 */
+
+/**
+ * 把屏幕画布改写成某张 Alpha 通道的灰度视图（原位，纯函数）。
+ *
+ * 与 PS 一样：Alpha 通道单独查看时是一张**白底黑字**的灰度图 —— 255 全白
+ * （全选中）、0 全黑（未选中），软边自然呈现为灰阶。遮罩先按屏幕尺寸重采样
+ * 再逐像素取 alpha，缩放查看时也不会漏。
+ */
+export function applyAlphaChannelView(
+  canvas: HTMLCanvasElement,
+  mask: SelectionMask,
+): void {
+  const scaled = createSurface(canvas.width, canvas.height);
+  const sctx = mustCtx(scaled);
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = "high";
+  sctx.drawImage(mask, 0, 0, canvas.width, canvas.height);
+  const d = readPixels(canvas).data;
+  const m = readPixels(scaled).data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = m[i + 3];
+    d[i] = v;
+    d[i + 1] = v;
+    d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  writePixels(canvas, {
+    data: d,
+    width: canvas.width,
+    height: canvas.height,
+  } as ImageData);
+}
+
+/** Alpha 通道缩略图：黑底 + 白表示选中（PS 通道面板的观感）。 */
+export function alphaChannelThumb(mask: SelectionMask, size = 36): HTMLCanvasElement {
+  const c = createSurface(size, size);
+  const ctx = mustCtx(c);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, size, size);
+  if (mask.width < 1 || mask.height < 1) return c;
+  const k = Math.min(size / mask.width, size / mask.height);
+  const w = mask.width * k;
+  const h = mask.height * k;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(mask, (size - w) / 2, (size - h) / 2, w, h);
   return c;
 }

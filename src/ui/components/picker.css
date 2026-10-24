@@ -323,12 +323,50 @@
 
 /* ---------- 预设药丸行 ---------- */
 
+/*
+ * 横向滚动条：预设一排铺开，超宽时左右滑，不允许换行堆叠。
+ * 细滚动条 + 两端渐隐提示「这边还有」，滚到尽头渐隐自然消失。
+ */
 .brp {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--sp-2);
   align-items: center;
+  /* 选项条里必须限宽：不限宽就会把颜色块与滑块挤出去，限了才在里面横向滚 */
+  max-width: min(340px, 42vw);
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  /* 左右留出呼吸位，第一枚/最后一枚不被边框切到 */
+  padding: 2px 2px;
+  margin: -2px -2px;
+}
+
+.brp::-webkit-scrollbar {
+  height: 6px;
+}
+
+.brp::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.brp::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 预设与「自定义」戳都不允许被压扁，保持笔尖小样的方形 */
+.brp-stamp {
+  flex: 0 0 auto;
+}
+
+.brp-item {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .brp-item {

@@ -29,6 +29,7 @@ import {
   rgbToHsv,
 } from "../color-utils";
 import "./picker.css";
+import RangeInput from "./RangeInput";
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
@@ -355,15 +356,14 @@ function RangeRow({
   return (
     <div className="cp-row">
       <span className="cp-row-label">{label}</span>
-      <input
-        type="range"
+      <RangeInput
         className="cp-range"
         min={0}
         max={max}
         value={value}
         aria-label={aria}
         style={{ "--cp-track": track } as CSSProperties}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={onChange}
       />
       <NumBox value={value} max={max} aria={aria} onChange={onChange} />
     </div>

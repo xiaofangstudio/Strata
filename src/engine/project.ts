@@ -21,6 +21,8 @@ import {
 } from "../core/layer";
 import { nextDocId, type StrataDoc } from "../core/document";
 import { isSelectionEmpty } from "../core/selection";
+import type { AlphaChannel } from "../core/channels";
+import { nextAlphaChannelId } from "../core/channelOps";
 import { decodeImage } from "./image";
 import { createSurface, mustCtx } from "./surface";
 
@@ -28,8 +30,8 @@ import { createSurface, mustCtx } from "./surface";
 export const STRATA_EXTENSION = "strata";
 
 const MAGIC = "STRATA-PROJECT";
-/** 4 = 图层组；3 = 文档选区；2 = 剪贴蒙版与图层样式。 */
-const VERSION = 4;
+/** 5 = Alpha 通道（存储的选区）；4 = 图层组；3 = 文档选区；2 = 剪贴蒙版与图层样式。 */
+const VERSION = 5;
 
 /** 落盘时的一个图层。像素与蒙版走 base64 PNG，结构走明文。 */
 interface FileLayer {
@@ -71,6 +73,8 @@ interface ProjectFile {
   layers: FileLayer[];
   /** 文档选区的 base64 PNG（v3 起）；无选区时省略 */
   selection?: string;
+  /** Alpha 通道（v5 起）：名字 + base64 PNG 遮罩；没有时省略 */
+  alphaChannels?: { name: string; mask: string }[];
 }
 
 /** 画布 → base64 PNG（剥掉 data URL 前缀）。 */
@@ -150,6 +154,13 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
   if (doc.selection && !isSelectionEmpty(doc.selection)) {
     file.selection = canvasToB64(doc.selection);
   }
+  // Alpha 通道跟着工程走：每条一张 PNG，旧版本没有这个字段也能正常打开
+  if (doc.alphaChannels && doc.alphaChannels.length > 0) {
+    file.alphaChannels = doc.alphaChannels.map((c) => ({
+      name: c.name,
+      mask: canvasToB64(c.mask),
+    }));
+  }
   return new TextEncoder().encode(JSON.stringify(file));
 }
 
@@ -216,6 +227,15 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
   const selection = file.selection
     ? await b64ToCanvas(file.selection, width, height)
     : null;
+  // v5 起的 Alpha 通道；旧工程没有该字段时按空数组处理
+  const alphaChannels: AlphaChannel[] = [];
+  if (Array.isArray(file.alphaChannels)) {
+    for (const fc of file.alphaChannels) {
+      if (!fc || typeof fc.name !== "string" || typeof fc.mask !== "string") continue;
+      const mask = await b64ToCanvas(fc.mask, width, height);
+      alphaChannels.push({ id: nextAlphaChannelId(), name: fc.name, mask });
+    }
+  }
   return {
     id: nextDocId(),
     name: file.name,
@@ -224,6 +244,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
     layers,
     activeLayerId: active.id,
     selection,
+    alphaChannels,
     dpi: file.dpi,
     dirty: false,
   };
