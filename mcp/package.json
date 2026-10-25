@@ -1,6 +1,6 @@
 {
   "name": "strata-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Strata 图像编辑器的 MCP 服务器（零依赖、纯 Node ESM、stdio）",
   "license": "MIT",

@@ -17,7 +17,7 @@ export const PROTOCOL_VERSION = "2024-11-05";
 
 /** ServerInfo 名称与版本。 */
 export const SERVER_NAME = "strata";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "1.0.0";
 
 /* ------------------------------------------------ .strata 工程格式常量 */
 

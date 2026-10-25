@@ -1,7 +1,7 @@
 {
   "name": "strata",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Strata · Windows 优先、全中文、永久免费开源（MIT）的修图与绘画工具",
   "license": "MIT",
