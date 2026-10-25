@@ -15,7 +15,7 @@
 > | 看不懂英文界面 | **中文原生**，不是外挂汉化包 |
 > | 不想装几百兆的巨物 | **体积红线 100MB**，Tauri 外壳 + 系统 WebView2 |
 > | 担心图片被上传 | **纯本地处理**，零上传、零账号 |
-> | 不想要 AI 味 | **零 AI**，所有算法确定性、可解释 |
+> | 不想要 AI 味 | **软件本身零 AI**，所有算法确定性、可解释；但可经 MCP 让外部 AI 来操作它——**作者已亲测，AI 能真的修图** |
 >
 > **一句话：`PS 能干的活，Strata 免费、中文、Windows 上直接干。`**
 
@@ -124,7 +124,42 @@
 | 📁 **格式** | 打开 PNG / JPG / WebP / TIFF / BMP / GIF；工程存为 `.strata`；导出 PNG |
 | 🧩 **可被脚本驱动** | 工程是明文 JSON 清单 + 内嵌 PNG，脚本能直接生成与修改 |
 
-> **关于 AI**：本项目**不含任何 AI / 机器学习功能**——不做智能抠图、不做生成式填充、不做自然语言改图。所有算法都是**确定性的、可解释的**图像处理，纯本地运算，绝不上传你的图片。
+> **关于 AI**：软件本身**不含 AI / 机器学习模型**——不做智能抠图、不做生成式填充。所有算法都是**确定性的、可解释的**图像处理，纯本地运算，绝不上传你的图片。
+> 但它自带 **MCP 服务端**，可以把你自己的 AI 接进来操作它（见下一节）。
+
+---
+
+## 🤖 让 AI 来操作它（MCP）
+
+> ✅ **已由作者亲身测试：AI 已接入 MCP，实测可修图。**
+>
+> 把 Claude Desktop、Cursor 这类支持 MCP 的客户端连上 `mcp/strata-mcp.mjs`，
+> AI 就能打开图片、调色、上滤镜、抠图、合成、打光、导出——**不是演示，是真改像素**。
+
+一个 **stdio JSON-RPC** 的独立进程：不开端口、不联网、不随安装包常驻。AI 操作的是本地文件，图片依然不出本机。
+
+| 能力 | 工具 |
+|------|------|
+| 工程 / 图层 | `strata_capabilities`、`strata_read_project`、`strata_patch_layer`、`strata_add_layer`、`strata_remove_layer`、`strata_move_layer`、`strata_duplicate_layer`、`strata_validate` |
+| 修图管线 | `strata_open_image` → `strata_adjust_image`（15 种调色算子）→ `strata_filter_image` → `strata_cutout`（抠图）→ `strata_composite` / `strata_light` → `strata_export_image` |
+| 一步到位 | `strata_edit_image`：打开 → 调色 → 滤镜 → 导出 |
+
+接进 Claude Desktop（`%APPDATA%\Claude\claude_desktop_config.json`）：
+
+```json
+{
+  "mcpServers": {
+    "strata": {
+      "command": "node",
+      "args": ["D:/你的路径/Strata/mcp/strata-mcp.mjs"]
+    }
+  }
+}
+```
+
+先 `cd mcp && npm install`，再 `node strata-mcp.mjs --selftest` 自检（应输出「已注册 20 个工具」）。完整工具表见 [mcp/README.md](mcp/README.md)。
+
+**边界说清楚**：MCP 是「外部 AI 遥控本地文件」，不是内嵌 AI。软件自己不上传、不联网、不调用任何云模型。
 
 ---
 
@@ -135,7 +170,7 @@
 - ✅ **本地优先**：图片不出本机，零上传、零遥测
 - ✅ **中文原生**：界面 100% 中文，不是外挂汉化包
 - ✅ **轻量**：体积硬性红线 **100MB 以内**，不做几百兆的巨无霸
-- ✅ **无 AI**：不引入任何需要模型推理的功能，保持纯粹与可控
+- ✅ **软件零 AI**：自身不内嵌任何模型推理，保持纯粹与可控；但开放 MCP 让外部 AI 驱动（作者已亲测可修图）
 - ✅ **不糊弄**：没做的功能置灰并说明，绝不放假按钮
 
 ---

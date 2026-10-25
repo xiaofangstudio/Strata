@@ -836,38 +836,91 @@ export const FILTERS = {
 /** 单通道掩码结构。 */
 // { width, height, data: Uint8Array } —— data 取 0…255，255 = 保留
 
+/** 亮度图（0–255）。 */
+function luminanceMap(img) {
+  const { width: w, height: h, data } = img;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) {
+    lum[i] = 0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2];
+  }
+  return lum;
+}
+
+/**
+ * Sobel 梯度幅值（0–255 量级）。
+ * 只用来当"不许穿过"的墙：阈值调大 → 只有很硬的边能挡住；调小 → 纹理也会挡。
+ */
+function sobelMagnitude(img) {
+  const { width: w, height: h } = img;
+  const lum = luminanceMap(img);
+  const mag = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      const i = y * w + x;
+      const gx =
+        -lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1] +
+        lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1];
+      const gy =
+        -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] +
+        lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
+      // 归一到 0–255（Sobel 最大约 4×255）
+      mag[i] = Math.min(255, Math.sqrt(gx * gx + gy * gy) / 4);
+    }
+  }
+  return mag;
+}
+
 /**
  * 从图像边界向内洪水填充，找出「与边相连的相似背景」。
  * 判定标准是**局部平滑**：邻居色差 ≤ tol 就并进来，所以渐变虚化背景也能跟住。
  * 返回 Uint8Array（1 = 背景）。
  */
-export function backgroundFloodMask(img, tolerance = 28) {
+export function backgroundFloodMask(img, tolerance = 28, edgeGate = 0, sides = "tlbr") {
   const { width: w, height: h, data } = img;
-  const tol = Math.max(1, tolerance) * 2.2; // RGB 距离平方口径
+  // 容差语义：RGB 欧氏距离 ≤ tolerance × 2.55（tolerance 0–100，100 = 全图）。
+  // 判定用「到自己种子区的颜色距离」，而不是「到父像素的距离」——
+  // 纯局部判定会沿任何平滑梯度爬行（墙壁→床→猫一路吃穿），全局锚定才留得住主体。
+  const limit = Math.max(1, tolerance) * 2.55;
+  const tol = limit * limit;
   const bg = new Uint8Array(w * h);
   const queue = new Int32Array(w * h);
+  // 每个入队像素携带它所属种子区的颜色（种子 = 边界像素本身）
+  const seedR = new Uint8Array(w * h);
+  const seedG = new Uint8Array(w * h);
+  const seedB = new Uint8Array(w * h);
   let qh = 0;
   let qt = 0;
-  const push = (x, y) => {
+  const seed = (x, y) => {
     const i = y * w + x;
     if (!bg[i]) {
       bg[i] = 1;
+      seedR[i] = data[i * 4];
+      seedG[i] = data[i * 4 + 1];
+      seedB[i] = data[i * 4 + 2];
       queue[qt++] = i;
     }
   };
-  // 四条边全部作为种子
+  /*
+   * 种子边：默认四条边都取。做成可配是因为「留背景」场景下底边的毛发/地毯
+   * 往往和主体连在一起，从底边种下去会把它判成背景留下来（半透明绒毛会透出来）。
+   * 只从上/左/右取种子，贴边的主体就会被完整判成主体、一起挖走。
+   */
+  const has = (ch) => sides.includes(ch);
   for (let x = 0; x < w; x += 1) {
-    push(x, 0);
-    push(x, h - 1);
+    if (has("t")) seed(x, 0);
+    if (has("b")) seed(x, h - 1);
   }
   for (let y = 0; y < h; y += 1) {
-    push(0, y);
-    push(w - 1, y);
+    if (has("l")) seed(0, y);
+    if (has("r")) seed(w - 1, y);
   }
-  const dist2 = (a, b) => {
-    const dr = data[a * 4] - data[b * 4];
-    const dg = data[a * 4 + 1] - data[b * 4 + 1];
-    const db = data[a * 4 + 2] - data[b * 4 + 2];
+  // 边缘闸门：Sobel 梯度大的像素不许被背景"穿过"。
+  // 这是同色主体能被抠出来的关键 —— 白猫趴在白床单上，颜色分不开，但轮廓处有梯度。
+  const edge = edgeGate > 0 ? sobelMagnitude(img) : null;
+  const dist2ToSeed = (i, s) => {
+    const dr = data[i * 4] - seedR[s];
+    const dg = data[i * 4 + 1] - seedG[s];
+    const db = data[i * 4 + 2] - seedB[s];
     return dr * dr + dg * dg + db * db;
   };
   while (qh < qt) {
@@ -878,8 +931,12 @@ export function backgroundFloodMask(img, tolerance = 28) {
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
       const ni = ny * w + nx;
       if (bg[ni]) return;
-      if (dist2(ni, cur) <= tol) {
+      if (edge && edge[ni] >= edgeGate) return;
+      if (dist2ToSeed(ni, cur) <= tol) {
         bg[ni] = 1;
+        seedR[ni] = seedR[cur];
+        seedG[ni] = seedG[cur];
+        seedB[ni] = seedB[cur];
         queue[qt++] = ni;
       }
     };
@@ -925,7 +982,7 @@ export function largestIsland(flags, w, h) {
     }
     if (comp.length > best.length) best = comp;
   }
-  for (const i of best) out[i] = 1;
+  for (const i of best) out[i] = 255;
   return out;
 }
 
@@ -943,6 +1000,8 @@ export function featherMask(mask, w, h, radius = 2) {
     asImg.data[i * 4 + 2] = 255;
     asImg.data[i * 4 + 3] = mask[i];
   }
+  // 注意：mask 约定为 0–255（255 = 完全保留）。调用方若持有 0/1 布尔掩码，
+  // 必须先乘 255 —— 曾经 0/1 直接进来糊完全归零，成品整张贴图凭空消失。
   const blurred = gaussianBlur(asImg, radius);
   const out = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i += 1) out[i] = blurred.data[i * 4 + 3];
@@ -984,11 +1043,14 @@ export function crop(img, box) {
  * 主体抠图：背景透明，返回裁到内容包围盒的 RGBA。
  * `invert` 为 true 时反着来 —— 留背景、抠走主体（换猫用的就是这一档）。
  */
-export function cutout(img, { tolerance = 28, feather = 2, invert = false, trim = true } = {}) {
+export function cutout(
+  img,
+  { tolerance = 28, feather = 2, invert = false, trim = true, edgeGate = 0, sides = "tlbr" } = {},
+) {
   const { width: w, height: h } = img;
-  let bg = backgroundFloodMask(img, tolerance);
+  let bg = backgroundFloodMask(img, tolerance, edgeGate, sides);
   let subject = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i += 1) subject[i] = bg[i] ? 0 : 1;
+  for (let i = 0; i < w * h; i += 1) subject[i] = bg[i] ? 0 : 255;
   // 主体模式下只留最大连通域，防止背景里混进的孤岛跟过来
   if (!invert) subject = largestIsland(subject, w, h);
   let keep = invert
@@ -996,7 +1058,7 @@ export function cutout(img, { tolerance = 28, feather = 2, invert = false, trim 
         // 背景模式：主体挖掉，主体掩码同样取最大连通域（把猫认全）
         const core = largestIsland(subject, w, h);
         const out = new Uint8Array(w * h);
-        for (let i = 0; i < w * h; i += 1) out[i] = core[i] ? 0 : 1;
+        for (let i = 0; i < w * h; i += 1) out[i] = core[i] ? 0 : 255;
         return out;
       })()
     : subject;
@@ -1030,35 +1092,101 @@ export function inpaintFill(img, hole, iterations = 24, blurRadius = 6) {
     height: h,
     data: new Uint8ClampedArray(img.data),
   };
-  // 已知区 = 非洞；先把洞的初始色设为全图均值，避免黑底扩散
-  let sum = [0, 0, 0];
-  let n = 0;
-  for (let i = 0; i < w * h; i += 1) {
-    if (!hole[i]) {
-      sum[0] += out.data[i * 4];
-      sum[1] += out.data[i * 4 + 1];
-      sum[2] += out.data[i * 4 + 2];
-      n += 1;
+  const d = out.data;
+  const src = img.data;
+
+  /*
+   * 初始化用「十字拉伸」而不是全图均值：每个洞像素取左右最近已知像素做水平插值、
+   * 上下最近已知像素做垂直插值，四者平均。墙壁 / 虚化背景这类低频区域一插就平；
+   * 用全图均值会留一块明显发灰的补丁（之前那个"白耳朵鬼影"就是这么来的）。
+   *
+   * 最近已知位置预先两趟扫出索引，避免每个洞像素再扫一遍整行 —— 否则大洞会退化成 O(n²)。
+   */
+  const prevX = new Int32Array(w);
+  const nextX = new Int32Array(w);
+  const hFill = new Float32Array(w * h * 3);
+
+  for (let y = 0; y < h; y += 1) {
+    const row = y * w;
+    let last = -1;
+    for (let x = 0; x < w; x += 1) {
+      prevX[x] = last;
+      if (!hole[row + x]) last = x;
     }
-  }
-  if (n === 0) return out;
-  const avg = sum.map((v) => v / n);
-  for (let i = 0; i < w * h; i += 1) {
-    if (hole[i]) {
-      out.data[i * 4] = avg[0];
-      out.data[i * 4 + 1] = avg[1];
-      out.data[i * 4 + 2] = avg[2];
-      out.data[i * 4 + 3] = 255;
+    let nxt = -1;
+    for (let x = w - 1; x >= 0; x -= 1) {
+      nextX[x] = nxt;
+      if (!hole[row + x]) nxt = x;
     }
-  }
-  for (let it = 0; it < iterations; it += 1) {
-    const blurred = boxBlurPass({ width: w, height: h, data: new Uint8ClampedArray(out.data) }, blurRadius);
-    for (let i = 0; i < w * h; i += 1) {
-      if (hole[i]) {
-        out.data[i * 4] = blurred.data[i * 4];
-        out.data[i * 4 + 1] = blurred.data[i * 4 + 1];
-        out.data[i * 4 + 2] = blurred.data[i * 4 + 2];
+    for (let x = 0; x < w; x += 1) {
+      if (!hole[row + x]) continue;
+      const a = prevX[x];
+      const b = nextX[x];
+      const base = (row + x) * 3;
+      for (let c = 0; c < 3; c += 1) {
+        if (a >= 0 && b >= 0) {
+          const t = (x - a) / (b - a);
+          hFill[base + c] = src[(row + a) * 4 + c] + (src[(row + b) * 4 + c] - src[(row + a) * 4 + c]) * t;
+        } else if (a >= 0) {
+          hFill[base + c] = src[(row + a) * 4 + c];
+        } else if (b >= 0) {
+          hFill[base + c] = src[(row + b) * 4 + c];
+        } else {
+          hFill[base + c] = 128;
+        }
       }
+    }
+  }
+
+  const prevY = new Int32Array(h);
+  const nextY = new Int32Array(h);
+  for (let x = 0; x < w; x += 1) {
+    let last = -1;
+    for (let y = 0; y < h; y += 1) {
+      prevY[y] = last;
+      if (!hole[y * w + x]) last = y;
+    }
+    let nxt = -1;
+    for (let y = h - 1; y >= 0; y -= 1) {
+      nextY[y] = nxt;
+      if (!hole[y * w + x]) nxt = y;
+    }
+    for (let y = 0; y < h; y += 1) {
+      const i = y * w + x;
+      if (!hole[i]) continue;
+      const a = prevY[y];
+      const b = nextY[y];
+      for (let c = 0; c < 3; c += 1) {
+        let v;
+        if (a >= 0 && b >= 0) {
+          const t = (y - a) / (b - a);
+          v = src[(a * w + x) * 4 + c] + (src[(b * w + x) * 4 + c] - src[(a * w + x) * 4 + c]) * t;
+        } else if (a >= 0) {
+          v = src[(a * w + x) * 4 + c];
+        } else if (b >= 0) {
+          v = src[(b * w + x) * 4 + c];
+        } else {
+          v = 128;
+        }
+        d[i * 4 + c] = Math.round((hFill[i * 3 + c] + v) / 2);
+      }
+      d[i * 4 + 3] = 255;
+    }
+  }
+
+  // 再跑几轮扩散 + 轻模糊，把十字拉伸的交界磨平
+  const rounds = Math.max(1, Math.round(iterations / 4));
+  for (let it = 0; it < rounds; it += 1) {
+    const blurred = boxBlurPass(
+      { width: w, height: h, data: new Uint8ClampedArray(d) },
+      blurRadius,
+    );
+    for (let i = 0; i < w * h; i += 1) {
+      if (!hole[i]) continue;
+      d[i * 4] = blurred.data[i * 4];
+      d[i * 4 + 1] = blurred.data[i * 4 + 1];
+      d[i * 4 + 2] = blurred.data[i * 4 + 2];
+      d[i * 4 + 3] = 255;
     }
   }
   return out;

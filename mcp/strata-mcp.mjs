@@ -844,15 +844,33 @@ server.registerTool(
       mode: z.enum(["subject", "background"]).describe("subject=留主体，background=留背景"),
       tolerance: z.number().min(5).max(120).optional().describe("背景判定容差，默认 28"),
       feather: z.number().min(0).max(30).optional().describe("边缘羽化像素，默认 2"),
+      edgeGate: z
+        .number()
+        .min(0)
+        .max(120)
+        .optional()
+        .describe("边缘闸门（Sobel 梯度阈值，0=关闭）。越大越容易穿过，建议 12–24"),
+      sides: z
+        .string()
+        .optional()
+        .describe(
+          "取种子的画面边：t/b/l/r 组合，默认 tlbr。留背景（mode=background）时建议用 tlr，" +
+            "避免贴底边的主体被误判成背景",
+        ),
       inpaint: z
         .boolean()
         .optional()
         .describe("mode=background 时是否填补主体留下的洞（默认 true）"),
     },
   },
-  guard(async ({ sessionId, mode, tolerance, feather, inpaint }) => {
+  guard(async ({ sessionId, mode, tolerance, feather, edgeGate, sides, inpaint }) => {
     const s = sessionImage(sessionId);
-    const opts = { tolerance: tolerance ?? 28, feather: feather ?? 2 };
+    const opts = {
+      tolerance: tolerance ?? 28,
+      feather: feather ?? 2,
+      edgeGate: edgeGate ?? 0,
+      sides: sides ?? "tlbr",
+    };
     let img;
     let hole = null;
     if (mode === "subject") {
@@ -860,7 +878,7 @@ server.registerTool(
     } else {
       // 背景模式：主体（最大连通域）挖掉；洞用周边色扩散填平
       const { width: w, height: h } = s.img;
-      const bg = backgroundFloodMask(s.img, opts.tolerance);
+      const bg = backgroundFloodMask(s.img, opts.tolerance, opts.edgeGate, opts.sides);
       const subject = new Uint8Array(w * h);
       for (let i = 0; i < w * h; i += 1) subject[i] = bg[i] ? 0 : 1;
       hole = largestIsland(subject, w, h);

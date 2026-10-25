@@ -13,7 +13,7 @@ Strata 图像编辑器的 MCP 服务器。让外部 AI（Claude Desktop、Cursor
 ```bat
 cd mcp
 npm install
-node strata-mcp.mjs --selftest   :: 自检：应输出「已注册 10 个工具」
+node strata-mcp.mjs --selftest   :: 自检：应输出「已注册 20 个工具」
 node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 ```
 
@@ -51,6 +51,24 @@ node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 | `strata_validate` | 校验工程，逐条返回 error / warning 与中文原因 | 否 |
 | `strata_build_recipe` | 由「配方」直接生成工程 JSON，不碰磁盘 | 否 |
 
+### 图像管线（Mark 3：能真的修图）
+
+| 工具 | 作用 |
+| --- | --- |
+| `strata_open_image` | 打开 PNG / JPEG 进内存会话（`maxSide` 可先缩） |
+| `strata_image_info` / `strata_image_preview` | 查会话信息 / 取 base64 预览 |
+| `strata_adjust_image` | 按算子序列调色（15 种：亮度对比度、饱和度、自然饱和度、色阶、曲线、通道混合器、黑白、曝光、白平衡、色相、色彩平衡、反相、去色、色调分离、阈值） |
+| `strata_filter_image` | 施加滤镜（高斯/方框/USM/杂色/马赛克/中间值/动感模糊） |
+| `strata_cutout` | 抠图：`mode=subject` 拆主体、`mode=background` 留背景并填补洞。参数 `tolerance` / `edgeGate`（边缘闸门）/ `feather` / `sides`（种子边） |
+| `strata_composite` | 把叠层贴到底图上（`overlayWidth` 等比缩放、`x/y` 落点、`opacity`） |
+| `strata_light` | 打光：`glow` 径向光斑 / `beam` 自然光束 / `shadow` 接触阴影 / `vignette` 暗角 |
+| `strata_edit_image` | 一步到位：打开 → 调色 → 滤镜 → 导出 |
+| `strata_export_image` | 导出为 PNG / JPEG |
+
+抠图不用 AI，走「边界洪水填充（多种子、Sobel 边缘闸门）+ 最大连通域 + 羽化」；
+背景与主体颜色接近时优先调 `edgeGate` 与 `sides`，仍不干净就换一张对比更强的图 —— 
+纯色/虚化背景效果最好，这一步的上限由素材决定。
+
 **建议的调用顺序**：先 `strata_capabilities` 取一次清单，再按里面的 id 去调其它工具，
 不要凭记忆编造混合模式或调整类型的 id。
 
@@ -74,6 +92,7 @@ mcp/
   strata-mcp.mjs        服务器入口（工具注册 + 参数校验）
   lib/capabilities.mjs  能力字典（业务常量单一事实来源）
   lib/project.mjs       .strata 读写、校验、图层操作
+  lib/imageOps.mjs      图像管线（解码 / 调色算子 / 滤镜 / 抠图 / 合成 / 打光）
   lib/schema.mjs        轻量 schema 校验/补默认值
   lib/png.mjs           PNG 编解码（生成纯色底图等）
   package.json
