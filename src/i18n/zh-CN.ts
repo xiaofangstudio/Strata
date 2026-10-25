@@ -723,9 +723,9 @@ export const zh = {
     missingHint: "源文件已被移动或删除，可从列表移除。",
 
     importTitle: "导入",
-    importButton: "打开图片…",
+    importButton: "打开文件…",
     importHint:
-      "支持 PNG / JPEG / WebP / TIFF 等常见格式，也可以直接把文件拖进窗口。",
+      "支持 PNG / JPEG / WebP / TIFF 等常见图片，以及 Strata 工程文件（.strata）；也可以直接把文件拖进窗口。",
 
     others: "其它入口",
     sample: "示例工程",
@@ -850,7 +850,7 @@ export const zh = {
   },
 
   dialog: {
-    openTitle: "打开图片",
+    openTitle: "打开文件",
     saveTitle: "导出图片",
     openProjectTitle: "打开工程",
     saveProjectTitle: "保存工程",

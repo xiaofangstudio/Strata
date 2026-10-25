@@ -15,7 +15,7 @@
 > | 看不懂英文界面 | **中文原生**，不是外挂汉化包 |
 > | 不想装几百兆的巨物 | **体积红线 100MB**，Tauri 外壳 + 系统 WebView2 |
 > | 担心图片被上传 | **纯本地处理**，零上传、零账号 |
-> | 不想要 AI 味 | **软件本身零 AI**，所有算法确定性、可解释；但可经 MCP 让外部 AI 来操作它——**作者已亲测，AI 能真的修图** |
+> | 不想要 AI 味 | **软件本身零 AI**，所有算法确定性、可解释；但可经 MCP 让外部 AI 来操作它——**作者已亲测，AI 能真的修图，也能排版出图** |
 >
 > **一句话：`PS 能干的活，Strata 免费、中文、Windows 上直接干。`**
 
@@ -27,7 +27,20 @@
 
 ## 🆕 这个版本更新了什么
 
-### 📅 本轮更新：PS 功能大补齐（通道 / 滤镜 / 示波器 / PSD）
+### 📅 本轮更新：MCP 从「修图」干到「排版出图」
+
+- 🖼️ **图层文档**：新建分层文档、加图片层（可 `crop` 把局部拆成独立层）、加文字层（中文字体贴合，字重 / 字距 / 行高 / 描边 / 阴影）、加形状层（圆角矩形 / 虚线框 / 椭圆 / 渐变，`blur` 做柔光软阴影）
+- 🎚️ **分区调色**：`strata_doc_adjust_layer` 能只对**某一层**调色，并用矩形 / 椭圆 + 羽化做**局部**处理；`strata_doc_drop_shadow` 按图层轮廓生成真投影
+- 🖌️ **手绘矢量路径**：`strata_doc_add_path` 支持 SVG 心智的 `M/L/C/Q/A/Z`，画挂钩、链子这类装饰件，坐标可直接当文档坐标用
+- 🪢 **关节变换**：`strata_doc_transform_layer` 以 `pivot` 为轴做缩放 + 旋转，能把东西「挂歪」
+- ✨ **质感件三连**：贴边虚线框（沿 alpha 轮廓走，不套方框）、胶封（边缘暗环 + 定向高光）、独立光晕层、明玻璃膜层
+- 💾 **可续编**：整张图能存成 **`.strata` 工程**，每层都是独立像素层，保留不透明度与混合模式，界面打开继续改
+- 🧪 **底层图元**：marching squares 轮廓、沿弧长虚线、旋转、胶封、矢量路径、径向光晕、玻璃膜，全部配单元测试
+- 🎬 **演示脚本**：`mcp-album-demo` 用这套工具端到端拼出「悬挂的猫」相册（1080×1350，约 39 层）；另有插画 demo
+- 🤖 **MCP 扩到 35 个工具**：从 20 扩到 35，自检通过；文字与形状由 `@napi-rs/canvas` 调系统字体渲染
+- ⌨️ **桌面细节**：`.strata` 文件关联（双击直接打开）、启动参数带文件即开、编辑区补齐 Ctrl+A / C / X / V
+
+### 📅 上一轮：PS 功能大补齐（通道 / 滤镜 / 示波器 / PSD）
 
 - 🖌️ **新工具**：多边形套索（逐点闭合）、单行 / 单列选框、铅笔（硬边勾线）、魔术橡皮擦（容差擦透明）
 - ✂️ **调整边缘**：平滑 / 羽化 / 扩展收缩实时预览，确定后写入选区；**快速蒙版**一笔涂抹即转选区
@@ -131,10 +144,10 @@
 
 ## 🤖 让 AI 来操作它（MCP）
 
-> ✅ **已由作者亲身测试：AI 已接入 MCP，实测可修图。**
+> ✅ **已由作者亲身测试：AI 已接入 MCP，实测可修图，也能排版出图。**
 >
 > 把 Claude Desktop、Cursor 这类支持 MCP 的客户端连上 `mcp/strata-mcp.mjs`，
-> AI 就能打开图片、调色、上滤镜、抠图、合成、打光、导出——**不是演示，是真改像素**。
+> AI 就能打开图片、调色、上滤镜、抠图、合成、打光、导出，还能拿文字 / 形状 / 矢量路径拼版式——**不是演示，是真改像素**。
 
 一个 **stdio JSON-RPC** 的独立进程：不开端口、不联网、不随安装包常驻。AI 操作的是本地文件，图片依然不出本机。
 
@@ -142,6 +155,8 @@
 |------|------|
 | 工程 / 图层 | `strata_capabilities`、`strata_read_project`、`strata_patch_layer`、`strata_add_layer`、`strata_remove_layer`、`strata_move_layer`、`strata_duplicate_layer`、`strata_validate` |
 | 修图管线 | `strata_open_image` → `strata_adjust_image`（15 种调色算子）→ `strata_filter_image` → `strata_cutout`（抠图）→ `strata_composite` / `strata_light` → `strata_export_image` |
+| 图层文档 / 排版 | `strata_doc_new`、`strata_doc_add_image`、`strata_doc_add_text`、`strata_doc_add_shape`、`strata_doc_adjust_layer`（含分区调色）、`strata_doc_drop_shadow`、`strata_doc_preview`、`strata_doc_export` |
+| 相册 / 质感 | `strata_doc_add_path`（矢量路径）、`strata_doc_transform_layer`（关节变换）、`strata_doc_add_contour`（贴边虚线）、`strata_doc_layer_effect`（胶封）、`strata_doc_add_glow`、`strata_doc_add_glass`、`strata_doc_save`（存可续编工程） |
 | 一步到位 | `strata_edit_image`：打开 → 调色 → 滤镜 → 导出 |
 
 接进 Claude Desktop（`%APPDATA%\Claude\claude_desktop_config.json`）：
@@ -157,7 +172,7 @@
 }
 ```
 
-先 `cd mcp && npm install`，再 `node strata-mcp.mjs --selftest` 自检（应输出「已注册 20 个工具」）。完整工具表见 [mcp/README.md](mcp/README.md)。
+先 `cd mcp && npm install`，再 `npm run selftest` 自检（应输出「已注册 35 个工具」）；`npm test` 跑底层图元单测。完整工具表见 [mcp/README.md](mcp/README.md)。
 
 **边界说清楚**：MCP 是「外部 AI 遥控本地文件」，不是内嵌 AI。软件自己不上传、不联网、不调用任何云模型。
 
@@ -170,7 +185,7 @@
 - ✅ **本地优先**：图片不出本机，零上传、零遥测
 - ✅ **中文原生**：界面 100% 中文，不是外挂汉化包
 - ✅ **轻量**：体积硬性红线 **100MB 以内**，不做几百兆的巨无霸
-- ✅ **软件零 AI**：自身不内嵌任何模型推理，保持纯粹与可控；但开放 MCP 让外部 AI 驱动（作者已亲测可修图）
+- ✅ **软件零 AI**：自身不内嵌任何模型推理，保持纯粹与可控；但开放 MCP 让外部 AI 驱动（作者已亲测可修图、可排版）
 - ✅ **不糊弄**：没做的功能置灰并说明，绝不放假按钮
 
 ---

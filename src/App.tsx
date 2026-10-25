@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import StartPage from "./ui/StartPage";
 import EditorShell from "./ui/EditorShell";
 import { useTheme } from "./stores/theme";
@@ -6,6 +7,8 @@ import { loadAppInfo, type AppInfo } from "./core/appInfo";
 import { applyEntry, captureDoc, History } from "./core/history";
 import { zh } from "./i18n/zh-CN";
 import type { StrataDoc } from "./core/document";
+import { IMAGE_EXTENSIONS, extOf } from "./engine/image";
+import { STRATA_EXTENSION } from "./engine/project";
 
 /**
  * 应用根组件。
@@ -21,6 +24,8 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   /** 撤销栈状态变更的计数器：History 是可变对象，靠它触发重渲染 */
   const [revision, setRevision] = useState(0);
+  /** 启动时被命令行参数指定的待打开文件（双击 .strata 等场景）。 */
+  const [launchPath, setLaunchPath] = useState<string | null>(null);
 
   const stacks = useRef(new Map<string, History>());
   const activeRef = useRef<string | null>(null);
@@ -33,6 +38,26 @@ export default function App() {
     loadAppInfo().then((it) => {
       if (alive) setInfo(it);
     });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 启动参数里若带着一个可打开的文件（双击 .strata / 图片触发），
+  // 交给开始页面按对应方式打开。读不到参数就静默跳过，不影响正常启动。
+  useEffect(() => {
+    let alive = true;
+    invoke<string[]>("initial_open_args")
+      .then((args) => {
+        if (!alive) return;
+        const hit = args.find(
+          (a) =>
+            IMAGE_EXTENSIONS.includes(extOf(a)) ||
+            a.toLowerCase().endsWith(`.${STRATA_EXTENSION}`),
+        );
+        if (hit) setLaunchPath(hit);
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -142,6 +167,7 @@ export default function App() {
       themeMode={mode}
       onToggleTheme={toggle}
       onOpenDoc={openDoc}
+      initialPath={launchPath}
     />
   );
 }

@@ -104,6 +104,16 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 返回进程启动时的命令行参数。
+///
+/// 用于「双击 .strata 文件用 Strata 打开」：Windows 会把被双击文件的完整路径
+/// 作为命令行参数传给应用，前端从这里取到路径后，经由开始页面按工程方式打开。
+/// 与 Tauri 的其它内置能力不同，这里直接用标准库的 env::args，不必再引一个插件。
+#[tauri::command]
+fn initial_open_args() -> Vec<String> {
+    std::env::args().collect()
+}
+
 /// 启动 Strata。
 pub fn run() {
     tauri::Builder::default()
@@ -115,7 +125,8 @@ pub fn run() {
             local_app_data,
             files_stat,
             quit_app,
-            app_info
+            app_info,
+            initial_open_args
         ])
         .run(tauri::generate_context!())
         .expect("Strata 启动失败");

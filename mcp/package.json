@@ -12,8 +12,13 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "selftest": "node strata-mcp.mjs --selftest",
+    "test": "node test/primitives.test.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@napi-rs/canvas": "^1.0.13",
     "jpeg-js": "^0.4.4",
     "zod": "^4.6.5"
   }

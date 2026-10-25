@@ -4027,6 +4027,27 @@ export default function EditorShell({
         onRedo();
         return;
       }
+      // 编辑区通用快捷键：全选 / 复制 / 剪切 / 粘贴 / 重做（之前只绑了 Z/Y，A/C/X/V 缺失）
+      if (k === "a") {
+        e.preventDefault();
+        doSelectAll();
+        return;
+      }
+      if (k === "c") {
+        e.preventDefault();
+        doCopy(false);
+        return;
+      }
+      if (k === "x") {
+        e.preventDefault();
+        doCut();
+        return;
+      }
+      if (k === "v") {
+        e.preventDefault();
+        doPaste();
+        return;
+      }
       if (k === "0") {
         e.preventDefault();
         fit();

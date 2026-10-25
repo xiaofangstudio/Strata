@@ -1372,3 +1372,281 @@ export function vignette(base, { strength = 0.35, extent = 0.75 } = {}) {
   }
   return out;
 }
+
+/* ==================================================== 相册套件（Mark 5）
+ *
+ * 挂钩链子相册需要的四块像素层支撑：旋转（关节）、轮廓跟踪（虚线贴边）、
+ * 弧长虚线描边、胶封质感。
+ */
+
+/**
+ * 旋转图层（双线性采样 + 扩画布）。
+ * 关节变换的底层算子：以中心为轴转 deg 度，画布自动扩到能容纳。
+ * alpha 一并插值，所以边缘是半透明过渡，不会出硬锯齿。
+ */
+export function rotateImage(img, deg = 0) {
+  const { width: w, height: h, data } = img;
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const nw = Math.max(1, Math.ceil(Math.abs(w * cos) + Math.abs(h * sin)));
+  const nh = Math.max(1, Math.ceil(Math.abs(w * sin) + Math.abs(h * cos)));
+  const out = new Uint8ClampedArray(nw * nh * 4);
+  const cx = w / 2;
+  const cy = h / 2;
+  const ncx = nw / 2;
+  const ncy = nh / 2;
+  for (let y = 0; y < nh; y += 1) {
+    for (let x = 0; x < nw; x += 1) {
+      // 逆映射：目标像素 → 源像素（转回 -deg）
+      const dx = x - ncx;
+      const dy = y - ncy;
+      const sx = cx + dx * cos + dy * sin;
+      const sy = cy - dx * sin + dy * cos;
+      const o = (y * nw + x) * 4;
+      if (sx < 0 || sy < 0 || sx >= w - 1 || sy >= h - 1) continue;
+      const x0 = Math.floor(sx);
+      const y0 = Math.floor(sy);
+      const fx = sx - x0;
+      const fy = sy - y0;
+      for (let c = 0; c < 4; c += 1) {
+        const p00 = data[(y0 * w + x0) * 4 + c];
+        const p01 = data[(y0 * w + x0 + 1) * 4 + c];
+        const p10 = data[((y0 + 1) * w + x0) * 4 + c];
+        const p11 = data[((y0 + 1) * w + x0 + 1) * 4 + c];
+        out[o + c] = lerp(lerp(p00, p01, fx), lerp(p10, p11, fx), fy);
+      }
+    }
+  }
+  return { width: nw, height: nh, data: out };
+}
+
+/**
+ * 从 alpha 通道提取主体轮廓（marching squares）。
+ *
+ * 之前试过「边界像素集合 + 贪心走环」：胡须、毛发孔洞和对角接触会让走环
+ * 在结构间跳来跳去，走出穿过猫脸的乱线。Marching squares 是确定性的：
+ * 对每个 2×2 单元按四角 in/out 状态查表出线段，再把线段按端点接成闭环 ——
+ * 所有顶点度数恰为 2，接出来必然是整齐的闭合折线。
+ *
+ * 返回若干条闭合折线 [[[x,y],…], …]（含内部孔洞的轮廓，按面积过滤）。
+ */
+export function marchingSquaresContours(img, threshold = 30) {
+  const { width: w, height: h, data } = img;
+  const m = (x, y) =>
+    x < 0 || y < 0 || x >= w || y >= h ? 0 : data[(y * w + x) * 4 + 3] > threshold ? 1 : 0;
+  const MID = {
+    T: (x, y) => [x + 0.5, y],
+    R: (x, y) => [x + 1, y + 0.5],
+    B: (x, y) => [x + 0.5, y + 1],
+    L: (x, y) => [x, y + 0.5],
+  };
+  // 16 种四角状态的查表（TL=1 TR=2 BR=4 BL=8）
+  const CASES = {
+    1: [["L", "T"]],
+    2: [["T", "R"]],
+    3: [["L", "R"]],
+    4: [["R", "B"]],
+    5: [["L", "T"], ["R", "B"]],
+    6: [["T", "B"]],
+    7: [["L", "B"]],
+    8: [["L", "B"]],
+    9: [["T", "B"]],
+    10: [["T", "R"], ["L", "B"]],
+    11: [["R", "B"]],
+    12: [["L", "R"]],
+    13: [["T", "R"]],
+    14: [["L", "T"]],
+  };
+  const segs = [];
+  for (let y = -1; y < h; y += 1) {
+    for (let x = -1; x < w; x += 1) {
+      const idx = m(x, y) * 1 + m(x + 1, y) * 2 + m(x + 1, y + 1) * 4 + m(x, y + 1) * 8;
+      if (idx === 0 || idx === 15) continue;
+      for (const [ea, eb] of CASES[idx]) segs.push([MID[ea](x, y), MID[eb](x, y)]);
+    }
+  }
+  if (segs.length === 0) return [];
+  // 按端点接环：每个中点恰好被两个相邻单元共享 → 度数 2 → 全是闭环
+  const key = (p) => `${Math.round(p[0] * 2)}_${Math.round(p[1] * 2)}`;
+  const adj = new Map();
+  segs.forEach((sg, i) => {
+    sg.forEach((pt, ei) => {
+      const k = key(pt);
+      if (!adj.has(k)) adj.set(k, []);
+      adj.get(k).push([i, ei]);
+    });
+  });
+  const used = new Uint8Array(segs.length);
+  const polys = [];
+  for (let i = 0; i < segs.length; i += 1) {
+    if (used[i]) continue;
+    used[i] = 1;
+    const poly = [segs[i][0], segs[i][1]];
+    const startKey = key(segs[i][0]);
+    let cur = segs[i][1];
+    while (key(cur) !== startKey) {
+      const cands = (adj.get(key(cur)) ?? []).filter(([si]) => !used[si]);
+      if (cands.length === 0) break;
+      const [si, ei] = cands[0];
+      used[si] = 1;
+      cur = segs[si][1 - ei];
+      poly.push(cur);
+    }
+    if (poly.length >= 4) polys.push(poly);
+  }
+  return polys;
+}
+
+/** 鞋带公式算闭合折线围的面积（有符号）。 */
+export function polylineArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i += 1) {
+    const [x1, y1] = poly[i];
+    const [x2, y2] = poly[(i + 1) % poly.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+/**
+ * 取「最大外轮廓」：面积最大的那条闭合折线 —— 就是猫的剪影。
+ * 内部孔洞（毛发吃穿的小洞）的轮廓面积小，天然被排除。
+ */
+export function outerContour(img, threshold = 30) {
+  const polys = marchingSquaresContours(img, threshold);
+  let best = null;
+  let bestA = 0;
+  for (const p of polys) {
+    const a = Math.abs(polylineArea(p));
+    if (a > bestA) {
+      bestA = a;
+      best = p;
+    }
+  }
+  return best ?? [];
+}
+
+/**
+ * 沿轮廓弧长画虚线：dashOn 像素实、dashOff 像素空，循环往复。
+ * 输入 alphaRing 的点列，输出一张透明底 RGBA（就是那圈贴边虚线）。
+ * 笔画用小圆盘点出来，宽度自然圆润。
+ */
+export function strokeRingDashed(
+  ring,
+  { stroke = [255, 255, 255], strokeWidth = 2, dashOn = 14, dashOff = 10 } = {},
+) {
+  if (!ring || ring.length < 2) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const pad = Math.ceil(strokeWidth) + 2;
+  const w = Math.ceil(maxX - minX) + 1 + pad * 2;
+  const h = Math.ceil(maxY - minY) + 1 + pad * 2;
+  const data = new Uint8ClampedArray(w * h * 4);
+  const ox = -minX + pad;
+  const oy = -minY + pad;
+  const [r, g, b] = stroke;
+  const pts = ring.map(([x, y]) => [x + ox, y + oy]);
+  pts.push(pts[0]); // 闭环
+  const period = Math.max(1, dashOn + dashOff);
+  const hw = Math.max(0.5, strokeWidth / 2);
+  const dot = (px, py) => {
+    const x0 = Math.floor(px - hw);
+    const x1 = Math.ceil(px + hw);
+    const y0 = Math.floor(py - hw);
+    const y1 = Math.ceil(py + hw);
+    for (let yy = y0; yy <= y1; yy += 1) {
+      for (let xx = x0; xx <= x1; xx += 1) {
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const dx = xx - px;
+        const dy = yy - py;
+        if (dx * dx + dy * dy <= hw * hw) {
+          const i = (yy * w + xx) * 4;
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+          data[i + 3] = 255;
+        }
+      }
+    }
+  };
+  let acc = 0;
+  for (let i = 1; i < pts.length; i += 1) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const d = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.max(1, Math.ceil(d));
+    for (let s = 0; s <= steps; s += 1) {
+      const t = s / steps;
+      const phase = ((acc + d * t) % period + period) % period;
+      if (phase < dashOn) dot(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+    }
+    acc += d;
+  }
+  return { width: w, height: h, data };
+}
+
+/**
+ * 胶封质感（树脂封层）：边缘暗环 + 定向高光 + 局部对比微调。
+ *
+ * 「照片被胶封起来」的视觉线索有三个：
+ *  1. 边缘一圈比中间暗（胶的体积把边缘压出一道暗环）—— 用 alpha 梯度当边缘图；
+ *  2. 表面有一道从左上来的定向反光 —— 按位置叠一层柔和的 screen 提亮；
+ *  3. 整体对比略增（封层让颜色更「实」）。
+ * 只动 RGB，不碰 alpha。
+ */
+export function glossLayer(img, { rim = 0.55, sheen = 0.4, strength = 1 } = {}) {
+  const { width: w, height: h, data } = img;
+  const out = { width: w, height: h, data: new Uint8ClampedArray(data) };
+  const d = out.data;
+  const a = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) a[i] = data[i * 4 + 3] / 255;
+  const edge = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      const i = y * w + x;
+      const gx = -a[i - w - 1] - 2 * a[i - 1] - a[i + w - 1] + a[i - w + 1] + 2 * a[i + 1] + a[i + w + 1];
+      const gy = -a[i - w - 1] - 2 * a[i - w] - a[i - w + 1] + a[i + w - 1] + 2 * a[i + w] + a[i + w + 1];
+      edge[i] = Math.min(1, (Math.sqrt(gx * gx + gy * gy) / 4) * 2);
+    }
+  }
+  const diagonal = Math.hypot(w, h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      const al = a[i];
+      if (al <= 0) continue;
+      const o = i * 4;
+      const e = edge[i];
+      // 1) 边缘暗环
+      if (e > 0) {
+        const k = 1 - Math.min(0.8, e * rim * strength);
+        d[o] = Math.round(d[o] * k);
+        d[o + 1] = Math.round(d[o + 1] * k);
+        d[o + 2] = Math.round(d[o + 2] * k);
+      }
+      // 2) 左上定向反光（离左上角越近越亮，边缘处减弱）
+      const t = 1 - Math.min(1, Math.hypot(x, y) / (diagonal * 0.55));
+      const sv = Math.pow(t, 1.8) * sheen * strength * al * (1 - e * 0.6);
+      if (sv > 0) {
+        d[o] = Math.round(d[o] + (255 - d[o]) * sv * 0.45);
+        d[o + 1] = Math.round(d[o + 1] + (255 - d[o + 1]) * sv * 0.45);
+        d[o + 2] = Math.round(d[o + 2] + (255 - d[o + 2]) * sv * 0.45);
+      }
+      // 3) 轻微 S 对比（封层感）
+      for (let c = 0; c < 3; c += 1) {
+        const v = d[o + c] / 255;
+        d[o + c] = Math.round((v + (v - 0.5) * 0.12 * strength) * 255);
+      }
+    }
+  }
+  return out;
+}

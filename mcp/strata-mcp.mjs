@@ -29,6 +29,7 @@ import {
   PROTOCOL_VERSION,
   SERVER_NAME,
   SERVER_VERSION,
+  BLEND_IDS,
   buildCapabilities,
 } from "./lib/capabilities.mjs";
 import {
@@ -447,10 +448,15 @@ import {
   FILTERS,
   backgroundFloodMask,
   bilinearResize,
+  crop as cropImage,
+  glossLayer,
+  outerContour,
+  rotateImage,
   compositeOver,
   cutout,
   decodeImage,
   encodeImageJpeg,
+  gaussianBlur,
   encodeImagePng,
   inpaintFill,
   largestIsland,
@@ -458,8 +464,29 @@ import {
   radialGlow,
   resize,
   softShadow,
+  strokeRingDashed,
   vignette,
 } from "./lib/imageOps.mjs";
+import {
+  BLEND_MODES,
+  addLayer,
+  createDoc,
+  flatten,
+  layerIndex,
+  mixByMask,
+  regionMask,
+  replaceLayer,
+  summarizeDoc,
+} from "./lib/doc.mjs";
+import {
+  renderEllipse,
+  renderGlass,
+  renderGradient,
+  renderPath,
+  renderRadialGlow,
+  renderRect,
+  renderText,
+} from "./lib/draw.mjs";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve as resolvePath, dirname, isAbsolute } from "node:path";
 
@@ -990,6 +1017,817 @@ server.registerTool(
       payload.previewBase64 = encodeImagePng(resize(img, 320)).toString("base64");
     }
     return ok(payload);
+  }),
+);
+
+/* ------------------------------------------------- 图层文档（插画排版） */
+
+/**
+ * 文档会话：与图片会话分开存，因为文档是「多层栈」，导出时才压平。
+ * docId 形如 doc-3-xxxx，与 img-* 互不影响。
+ */
+const docs = new Map();
+let docSeq = 0;
+
+function newDocSession(doc, source) {
+  docSeq += 1;
+  const id = `doc-${docSeq}-${Date.now().toString(36)}`;
+  docs.set(id, { doc, source });
+  return id;
+}
+
+function sessionDoc(docId) {
+  if (typeof docId !== "string" || !docs.has(docId)) {
+    throw new ToolError(`文档不存在：${docId}。先用 strata_doc_new 建一份。`);
+  }
+  return docs.get(docId);
+}
+
+/** 把来源（图片会话 / 磁盘文件 / 纯色）统一取成 RGBA。 */
+function sourceImage(spec) {
+  if (spec.sessionId) return sessionImage(spec.sessionId).img;
+  if (spec.path) return decodeImage(readFileSync(resolveImagePath(spec.path, true)));
+  if (spec.color) {
+    const [r, g, b, a] = spec.color;
+    const img = { width: 4, height: 4, data: new Uint8ClampedArray(4 * 4 * 4) };
+    for (let i = 0; i < 16; i += 1) {
+      img.data[i * 4] = r;
+      img.data[i * 4 + 1] = g;
+      img.data[i * 4 + 2] = b;
+      img.data[i * 4 + 3] = a ?? 255;
+    }
+    return img;
+  }
+  throw new ToolError("图层来源必须给 sessionId / path / color 之一");
+}
+
+const docSourceArg = z
+  .object({
+    sessionId: z.string().optional().describe("图片会话 id"),
+    path: z.string().optional().describe("图片文件绝对路径"),
+    color: z.array(z.number()).length(4).optional().describe("纯色 [r,g,b,a]"),
+  })
+  .describe("图层来源，三选一");
+
+server.registerTool(
+  "strata_doc_new",
+  {
+    title: "新建图层文档",
+    description:
+      "建一份分层插画文档（后续所有 strata_doc_* 工具都基于它）。" +
+      "background 给 [r,g,b] 时自动铺一层背景层；省略则透明。返回 docId 与图层摘要。",
+    inputSchema: {
+      width: z.number().int().min(8).max(16384),
+      height: z.number().int().min(8).max(16384),
+      background: z
+        .array(z.number())
+        .min(3)
+        .max(4)
+        .optional()
+        .describe("背景色 [r,g,b] 或 [r,g,b,a]；省略=透明"),
+    },
+  },
+  guard(async ({ width, height, background }) => {
+    const doc = createDoc(width, height, background ? background.slice(0, 4) : null);
+    const id = newDocSession(doc, "new");
+    return ok({ ok: true, docId: id, ...summarizeDoc(doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_image",
+  {
+    title: "往文档加图片层",
+    description:
+      "把一个图片会话 / 磁盘图片 / 纯色作为新图层放到文档上（默认加到最上层）。" +
+      "width 可指定等比缩放宽度；blend 支持 normal/multiply/screen/overlay/softLight/" +
+      "darken/lighten/add；opacity 0–1。返回新的图层摘要。",
+    inputSchema: {
+      docId: z.string(),
+      source: docSourceArg,
+      x: z.number().int().optional().describe("左上角 x，默认 0"),
+      y: z.number().int().optional().describe("左上角 y，默认 0"),
+      width: z.number().int().min(2).max(16384).optional().describe("等比缩放宽度"),
+      blend: z.string().optional().describe("混合模式，默认 normal"),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional().describe("图层名"),
+      crop: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          width: z.number(),
+          height: z.number(),
+        })
+        .optional()
+        .describe("从来源里先裁一块（拆局部图层用，比如把脸单独拆出来）"),
+    },
+  },
+  guard(async ({ docId, source, x, y, width, blend, opacity, name, crop }) => {
+    const entry = sessionDoc(docId);
+    let img = sourceImage(source);
+    if (crop) img = cropImage(img, crop);
+    if (width && width !== img.width) {
+      const h = Math.max(1, Math.round((img.height * width) / img.width));
+      img = bilinearResize(img, width, h);
+    }
+    entry.doc = addLayer(entry.doc, img, { x, y, blend, opacity, name });
+    return ok({ ok: true, docId, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_text",
+  {
+    title: "加文字层",
+    description:
+      "排一行/多行文字（支持中文，字体走系统：思源黑 / 微软雅黑 / 黑体）。" +
+      "size 字号、weight 字重、letterSpacing 字距、lineHeight 行高倍数、align 对齐、" +
+      "shadow 阴影 {color,blur,x,y}、stroke 描边 + strokeWidth。x/y 是文字框左上角落点。",
+    inputSchema: {
+      docId: z.string(),
+      text: z.string().describe("文字内容，\\n 换行"),
+      x: z.number().int().optional(),
+      y: z.number().int().optional(),
+      size: z.number().min(6).max(600).optional().describe("字号，默认 64"),
+      weight: z.number().min(100).max(900).optional().describe("字重，默认 700"),
+      color: z.string().optional().describe("颜色，默认 #ffffff"),
+      font: z.string().optional().describe("字体族，可选"),
+      letterSpacing: z.number().optional().describe("字距（像素），默认 0"),
+      lineHeight: z.number().min(0.8).max(3).optional(),
+      align: z.enum(["left", "center", "right"]).optional(),
+      italic: z.boolean().optional(),
+      shadow: z
+        .object({
+          color: z.string().optional(),
+          blur: z.number().optional(),
+          x: z.number().optional(),
+          y: z.number().optional(),
+          alpha: z.number().optional(),
+        })
+        .optional(),
+      stroke: z.string().optional().describe("描边色"),
+      strokeWidth: z.number().optional().describe("描边宽"),
+      blend: z.string().optional(),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional(),
+    },
+  },
+  guard(async (args) => {
+    const entry = sessionDoc(args.docId);
+    const img = renderText(args);
+    entry.doc = addLayer(entry.doc, img, {
+      x: args.x ?? 0,
+      y: args.y ?? 0,
+      blend: args.blend,
+      opacity: args.opacity,
+      name: args.name ?? `文字:${String(args.text).slice(0, 12)}`,
+    });
+    return ok({ ok: true, docId: args.docId, textSize: `${img.width}×${img.height}`, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_shape",
+  {
+    title: "加形状层（虚线框 / 椭圆 / 渐变）",
+    description:
+      "画形状层：shape=rect（可 radius 圆角、dash 虚线、fill 填充）、ellipse（可 dash 虚线圈）、" +
+      "gradient（需 stops:[{at,color}] 与 angle）。dash 传 [实,虚] 像素数组，例如 [14,10]。 " +
+      "blur 可对形状做高斯模糊（做光斑/软阴影底）。",
+    inputSchema: {
+      docId: z.string(),
+      shape: z.enum(["rect", "ellipse", "gradient"]),
+      x: z.number().int().optional(),
+      y: z.number().int().optional(),
+      width: z.number().int().min(2),
+      height: z.number().int().min(2),
+      stroke: z.string().optional(),
+      strokeWidth: z.number().optional(),
+      dash: z.array(z.number()).optional(),
+      fill: z.string().optional(),
+      radius: z.number().optional(),
+      stops: z.array(z.object({ at: z.number(), color: z.string() })).optional(),
+      angle: z.number().optional().describe("渐变角度，0=从左到右，90=从上到下"),
+      blur: z.number().optional().describe("高斯模糊半径（软阴影 / 光斑）"),
+      blend: z.string().optional(),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional(),
+    },
+  },
+  guard(async (args) => {
+    const entry = sessionDoc(args.docId);
+    let img;
+    if (args.shape === "rect") {
+      img = renderRect({
+        width: args.width,
+        height: args.height,
+        stroke: args.stroke ?? "#ffffff",
+        strokeWidth: args.strokeWidth ?? 4,
+        dash: args.dash ?? null,
+        radius: args.radius ?? 0,
+        fill: args.fill ?? null,
+      });
+    } else if (args.shape === "ellipse") {
+      img = renderEllipse({
+        width: args.width,
+        height: args.height,
+        stroke: args.stroke ?? "#ffffff",
+        strokeWidth: args.strokeWidth ?? 4,
+        dash: args.dash ?? null,
+        fill: args.fill ?? null,
+      });
+    } else {
+      img = renderGradient({
+        width: args.width,
+        height: args.height,
+        stops: args.stops ?? [{ at: 0, color: "#ffffff" }, { at: 1, color: "#000000" }],
+        angle: args.angle ?? 90,
+      });
+    }
+    if (args.blur && args.blur > 0) img = gaussianBlur(img, args.blur);
+    entry.doc = addLayer(entry.doc, img, {
+      x: args.x ?? 0,
+      y: args.y ?? 0,
+      blend: args.blend,
+      opacity: args.opacity,
+      name: args.name ?? `${args.shape} ${args.width}×${args.height}`,
+    });
+    return ok({ ok: true, docId: args.docId, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_adjust_layer",
+  {
+    title: "给单层调色（可限定区域）",
+    description:
+      "对某一层施加调色算子 / 滤镜；给 region 时只在该区域内生效（矩形或椭圆，带 feather 羽化），" +
+      "这就是「分区调色」：只给猫脸加暖、只给背景压暗。region 用文档坐标。" +
+      "region 写法：{type:'rect', x,y,width,height, feather} 或 {type:'ellipse', cx,cy,rx,ry, feather}。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]).describe("图层序号或名字"),
+      ops: z.array(z.object({ type: z.string() }).passthrough()).optional(),
+      filters: z.array(z.object({ filter: z.string() }).passthrough()).optional(),
+      region: z
+        .object({
+          type: z.enum(["rect", "ellipse"]).optional(),
+          x: z.number().optional(),
+          y: z.number().optional(),
+          width: z.number().optional(),
+          height: z.number().optional(),
+          cx: z.number().optional(),
+          cy: z.number().optional(),
+          rx: z.number().optional(),
+          ry: z.number().optional(),
+          feather: z.number().optional(),
+        })
+        .optional()
+        .describe("作用区域（文档坐标）；省略=整层"),
+    },
+  },
+  guard(async ({ docId, layer, ops, filters, region }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    let img = target.img;
+
+    for (const op of ops ?? []) {
+      const adj = ADJUSTERS[op.type];
+      if (!adj) throw new ToolError(`未知调色算子：${op.type}`);
+      img = adj.run(img, op);
+    }
+    for (const spec of filters ?? []) {
+      const f = FILTERS[spec.filter];
+      if (!f) throw new ToolError(`未知滤镜：${spec.filter}`);
+      img = f.run(img, spec);
+    }
+
+    if (region) {
+      // 文档坐标 → 图层局部坐标，再按蒙版混合（羽化边界不出现硬切）
+      const local = {
+        ...region,
+        x: region.x !== undefined ? region.x - target.x : undefined,
+        y: region.y !== undefined ? region.y - target.y : undefined,
+        cx: region.cx !== undefined ? region.cx - target.x : undefined,
+        cy: region.cy !== undefined ? region.cy - target.y : undefined,
+      };
+      const maskDoc = regionMask(
+        { width: img.width, height: img.height },
+        local,
+      );
+      img = mixByMask(target.img, img, maskDoc);
+    }
+    entry.doc = replaceLayer(entry.doc, idx, img);
+    return ok({ ok: true, docId, layer: idx, name: target.name, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_drop_shadow",
+  {
+    title: "给图层加投影（阴影感）",
+    description:
+      "按某一层的轮廓生成投影：alpha 膨胀模糊 + 偏移，插到该层下方，默认 multiply。" +
+      "这是「让主体从背景里立起来」的关键一步。dx/dy 偏移、blur 模糊、opacity 浓度。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]),
+      dx: z.number().optional().describe("水平偏移，默认 0"),
+      dy: z.number().optional().describe("垂直偏移，默认 18"),
+      blur: z.number().optional().describe("模糊半径，默认 22"),
+      opacity: z.number().min(0).max(1).optional().describe("投影浓度，默认 0.45"),
+      color: z.string().optional().describe("投影颜色，默认 #000000"),
+      blend: z.string().optional().describe("混合模式，默认 multiply"),
+      spread: z.number().optional().describe("膨胀像素（让影子更厚），默认 0"),
+    },
+  },
+  guard(async ({ docId, layer, dx, dy, blur, opacity, color, blend, spread }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    const { width: w, height: h } = target.img;
+
+    // 由目标层 alpha 造剪影
+    const sil = { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+    const c = color ?? "#000000";
+    const hex = c.replace("#", "");
+    const cr = parseInt(hex.slice(0, 2), 16) || 0;
+    const cg = parseInt(hex.slice(2, 4), 16) || 0;
+    const cb = parseInt(hex.slice(4, 6), 16) || 0;
+    for (let i = 0; i < w * h; i += 1) {
+      const a = target.img.data[i * 4 + 3];
+      sil.data[i * 4] = cr;
+      sil.data[i * 4 + 1] = cg;
+      sil.data[i * 4 + 2] = cb;
+      sil.data[i * 4 + 3] = a;
+    }
+    let shadow = blur && blur > 0 ? gaussianBlur(sil, blur) : sil;
+    if (spread && spread > 0) {
+      // 用模糊 + 阈值近似膨胀，让影子更厚一点
+      shadow = gaussianBlur(shadow, spread);
+      for (let i = 0; i < w * h; i += 1) {
+        const a = shadow.data[i * 4 + 3];
+        shadow.data[i * 4 + 3] = Math.min(255, a * 1.35);
+      }
+    }
+    const layers = entry.doc.layers.slice();
+    layers.splice(idx, 0, {
+      name: `${target.name} 投影`,
+      img: shadow,
+      x: target.x + (dx ?? 0),
+      y: target.y + (dy ?? 18),
+      blend: blend && BLEND_MODES[blend] ? blend : "multiply",
+      opacity: opacity ?? 0.45,
+      visible: true,
+    });
+    entry.doc = { ...entry.doc, layers };
+    return ok({ ok: true, docId, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_preview",
+  {
+    title: "预览图层文档",
+    description: "把文档压平并缩到指定边长，回传 base64 PNG（不落盘）。",
+    inputSchema: {
+      docId: z.string(),
+      maxSide: z.number().int().min(32).max(2048).optional().describe("默认 480"),
+    },
+  },
+  guard(async ({ docId, maxSide }) => {
+    const entry = sessionDoc(docId);
+    const flat = flatten(entry.doc);
+    const small = resize(flat, maxSide ?? 480);
+    return ok({
+      docId,
+      width: small.width,
+      height: small.height,
+      base64: encodeImagePng(small).toString("base64"),
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_export",
+  {
+    title: "导出图层文档",
+    description: "把文档压平后写成 PNG / JPEG（扩展名决定格式，quality 管 JPEG 质量）。",
+    inputSchema: {
+      docId: z.string(),
+      path: z.string().describe("导出文件绝对路径"),
+      quality: z.number().min(1).max(100).optional(),
+      maxSide: z.number().int().optional().describe("导出前等比缩小"),
+    },
+  },
+  guard(async ({ docId, path, quality, maxSide }) => {
+    const entry = sessionDoc(docId);
+    let flat = flatten(entry.doc);
+    if (maxSide) flat = resize(flat, maxSide);
+    const ext = extOf(path);
+    if (!EXPORT_EXTS.includes(ext)) {
+      throw new ToolError(`导出扩展名必须是 ${EXPORT_EXTS.join(" / ")}（收到 .${ext || "无"}）`);
+    }
+    const abs = resolveImagePath(path, false);
+    const bytes = ext === "png" ? encodeImagePng(flat) : encodeImageJpeg(flat, quality ?? 92);
+    writeFileSync(abs, bytes);
+    return ok({
+      ok: true,
+      docId,
+      path: abs,
+      format: ext,
+      bytes: bytes.length,
+      width: flat.width,
+      height: flat.height,
+      layers: entry.doc.layers.length,
+    });
+  }),
+);
+
+/**
+ * 把文档单层烘焙成「全画幅 surface」的 base64 PNG。
+ * 文档图层用 (x,y) 偏移定位，而 .strata 的像素层 surface 是整画布尺寸，
+ * 所以这里按偏移把图层像素贴进一张透明全画幅缓冲再编码。
+ */
+function encodeDocLayerSurface(W, H, layer) {
+  const buf = new Uint8ClampedArray(W * H * 4);
+  const { img, x: ox = 0, y: oy = 0 } = layer;
+  const sw = img.width;
+  const sh = img.height;
+  for (let sy = 0; sy < sh; sy += 1) {
+    const dy = oy + sy;
+    if (dy < 0 || dy >= H) continue;
+    for (let sx = 0; sx < sw; sx += 1) {
+      const dx = ox + sx;
+      if (dx < 0 || dx >= W) continue;
+      const si = (sy * sw + sx) * 4;
+      const di = (dy * W + dx) * 4;
+      buf[di] = img.data[si];
+      buf[di + 1] = img.data[si + 1];
+      buf[di + 2] = img.data[si + 2];
+      buf[di + 3] = img.data[si + 3];
+    }
+  }
+  return encodeImagePng({ width: W, height: H, data: buf }).toString("base64");
+}
+
+server.registerTool(
+  "strata_doc_save",
+  {
+    title: "保存图层文档为 .strata 工程",
+    description:
+      "把当前分层文档存成可编辑的 .strata 工程文件：每层作为独立像素层保存，" +
+      "保留不透明度（0–100）与混合模式，图层按自身坐标烘焙进全画幅 surface。" +
+      "可用 Strata 打开后继续编辑（移动 / 调色 / 撤销等）。" +
+      "path 可省略 .strata 扩展名，会自动补。",
+    inputSchema: {
+      docId: z.string(),
+      path: z.string().describe("保存的 .strata 绝对路径（扩展名可省略，自动补 .strata）"),
+      name: z.string().optional().describe("工程名（省略=文档默认名）"),
+    },
+  },
+  guard(async ({ docId, path, name }) => {
+    const entry = sessionDoc(docId);
+    const doc = entry.doc;
+    const { width: W, height: H } = doc;
+    const layers = doc.layers.map((layer, li) => ({
+      name: layer.name && layer.name.length ? layer.name : `图层 ${li + 1}`,
+      visible: layer.visible !== false,
+      opacity: Math.round((typeof layer.opacity === "number" ? layer.opacity : 1) * 100),
+      blend: BLEND_IDS.includes(layer.blend) ? layer.blend : "normal",
+      kind: "pixel",
+      surface: encodeDocLayerSurface(W, H, layer),
+    }));
+    const manifest = {
+      name: name && name.length ? name : "Strata 文档",
+      width: W,
+      height: H,
+      active: layers.length - 1,
+      layers,
+    };
+    const built = buildProjectFile(manifest);
+    if (!built.ok) {
+      throw new ToolError("工程规范化失败：" + built.errors.join("；"));
+    }
+    const out = writeProjectFile(path, built.file);
+    return ok({
+      ok: true,
+      docId,
+      path: out.abs,
+      bytes: out.bytes,
+      layers: layers.length,
+      width: W,
+      height: H,
+    });
+  }),
+);
+
+/* ------------------------------------------------ 相册套件工具（Mark 5） */
+
+server.registerTool(
+  "strata_doc_add_path",
+  {
+    title: "加矢量路径层（手绘挂钩 / 链子 / 任意图形）",
+    description:
+      "用绘图指令序列画一个图形层：M 落笔、L 直线、C 三次贝塞尔、Q 二次贝塞尔、" +
+      "A 椭圆弧（rx/ry/rot/large/sweep/x/y）、Z 闭合。stroke/strokeWidth/dash=[on,off]/fill。" +
+      "路径坐标就是文档坐标（x/y 再整体平移）。挂钩、链子、花边、任何插画元素都靠它。",
+    inputSchema: {
+      docId: z.string(),
+      commands: z
+        .array(
+          z.object({ op: z.enum(["M", "L", "C", "Q", "A", "Z"]) }).passthrough(),
+        )
+        .min(1)
+        .describe("绘图指令序列"),
+      x: z.number().optional().describe("整层平移 x，默认 0"),
+      y: z.number().optional().describe("整层平移 y，默认 0"),
+      stroke: z.string().optional(),
+      strokeWidth: z.number().optional().describe("默认 6"),
+      dash: z.array(z.number()).optional(),
+      fill: z.string().optional().describe("填充色；省略=只描边"),
+      blend: z.string().optional(),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional(),
+    },
+  },
+  guard(async (args) => {
+    const entry = sessionDoc(args.docId);
+    const img = renderPath({
+      commands: args.commands,
+      stroke: args.stroke ?? "#ffffff",
+      strokeWidth: args.strokeWidth ?? 6,
+      dash: args.dash ?? null,
+      fill: args.fill ?? null,
+    });
+    entry.doc = addLayer(entry.doc, img, {
+      // renderPath 会裁到路径包围盒；originX/Y 是「路径原点在图层内的位置」，
+      // 用 x + originX 定位就能让路径坐标直接当文档坐标用。
+      x: Math.round((args.x ?? 0) + (img.originX ?? 0)),
+      y: Math.round((args.y ?? 0) + (img.originY ?? 0)),
+      blend: args.blend,
+      opacity: args.opacity,
+      name: args.name ?? `路径 ${img.width}×${img.height}`,
+    });
+    return ok({ ok: true, docId: args.docId, pathSize: `${img.width}×${img.height}`, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_transform_layer",
+  {
+    title: "变换图层（放大缩小 / 旋转 / 关节枢轴）",
+    description:
+      "对文档里的某一层做等比/非等比缩放和旋转。pivot 是关节（枢轴）的图层局部坐标 —— " +
+      "比如挂在链子上的照片，关节就是顶部挂环：旋转缩放都绕它，照片像真的挂在钉子上。" +
+      "变换后关节点的文档位置保持不动。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]).describe("图层序号或名字"),
+      scaleX: z.number().min(0.05).max(20).optional().describe("默认 1"),
+      scaleY: z.number().min(0.05).max(20).optional().describe("默认 = scaleX"),
+      angle: z.number().min(-360).max(360).optional().describe("旋转角度（度，顺时针），默认 0"),
+      pivot: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("关节的图层局部坐标；省略 = 图层中心"),
+    },
+  },
+  guard(async ({ docId, layer, scaleX, scaleY, angle, pivot }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    const sx = scaleX ?? 1;
+    const sy = scaleY ?? sx;
+    const deg = angle ?? 0;
+    let img = target.img;
+    if (sx !== 1 || sy !== 1) {
+      img = bilinearResize(img, Math.max(1, Math.round(img.width * sx)), Math.max(1, Math.round(img.height * sy)));
+    }
+    if (deg !== 0) img = rotateImage(img, deg);
+    // 关节点的文档位置在变换前后保持不动
+    const px = pivot ? pivot.x : target.img.width / 2;
+    const py = pivot ? pivot.y : target.img.height / 2;
+    // 缩放后的关节（图层局部坐标）
+    const spx = px * sx;
+    const spy = py * sy;
+    // 旋转：目标 = 新中心 + R(-θ)·(源 - 源中心)
+    const rad = (deg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    // 真实几何：旋转前图层内容中心 = 缩放图中心；旋转扩边后中心不变
+    const scaledW = target.img.width * sx;
+    const scaledH = target.img.height * sy;
+    const cxS = scaledW / 2;
+    const cyS = scaledH / 2;
+    const rvx = spx - cxS;
+    const rvy = spy - cyS;
+    const rotX = rvx * cos - rvy * sin;
+    const rotY = rvx * sin + rvy * cos;
+    const newCx = img.width / 2;
+    const newCy = img.height / 2;
+    const pivotNewX = newCx + rotX;
+    const pivotNewY = newCy + rotY;
+    const docPivotX = target.x + px;
+    const docPivotY = target.y + py;
+    const newX = Math.round(docPivotX - pivotNewX);
+    const newY = Math.round(docPivotY - pivotNewY);
+    const layers = entry.doc.layers.slice();
+    layers[idx] = { ...layers[idx], img, x: newX, y: newY };
+    entry.doc = { ...entry.doc, layers };
+    return ok({
+      ok: true,
+      docId,
+      layer: idx,
+      name: target.name,
+      newSize: `${img.width}×${img.height}`,
+      at: [newX, newY],
+      pivotDoc: [Math.round(docPivotX), Math.round(docPivotY)],
+      ...summarizeDoc(entry.doc),
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_contour",
+  {
+    title: "加贴边虚线轮廓（描着图层剪影走）",
+    description:
+      "从某一图层的 alpha 提取最大外轮廓（marching squares），沿弧长画虚线，" +
+      "自动对齐到该图层的位置 —— 虚线紧贴着主体边缘，不是独立方框。" +
+      "dashOn/dashOff 是实/空段长度（像素），strokeWidth 是线宽。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]).describe("要描轮廓的图层"),
+      stroke: z.string().optional().describe("默认 #ffffff"),
+      strokeWidth: z.number().min(1).max(40).optional().describe("默认 3"),
+      dashOn: z.number().min(2).max(400).optional().describe("实线段长，默认 18"),
+      dashOff: z.number().min(1).max(400).optional().describe("空白段长，默认 12"),
+      threshold: z.number().min(1).max(250).optional().describe("alpha 阈值，默认 30"),
+      name: z.string().optional(),
+    },
+  },
+  guard(async ({ docId, layer, stroke, strokeWidth, dashOn, dashOff, threshold, name }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    const ring = outerContour(target.img, threshold ?? 30);
+    if (ring.length < 4) throw new ToolError("该图层没有可描的轮廓（alpha 可能全空或全实）");
+    const sw = strokeWidth ?? 3;
+    const dash = strokeRingDashed(ring, {
+      stroke: hexToRgbArr(stroke ?? "#ffffff"),
+      strokeWidth: sw,
+      dashOn: dashOn ?? 18,
+      dashOff: dashOff ?? 12,
+    });
+    // dash 图左上角相对图层左上角的偏移：ring bbox 最小值 - pad
+    const pad = sw + 2;
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const [x, y] of ring) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+    }
+    entry.doc = addLayer(entry.doc, dash, {
+      x: Math.round(target.x + minX - pad),
+      y: Math.round(target.y + minY - pad),
+      name: name ?? `${target.name} 虚线轮廓`,
+    });
+    return ok({
+      ok: true,
+      docId,
+      contourPoints: ring.length,
+      dashSize: `${dash.width}×${dash.height}`,
+      ...summarizeDoc(entry.doc),
+    });
+  }),
+);
+
+/** #rrggbb → [r,g,b]（contour 工具内部用）。 */
+function hexToRgbArr(color) {
+  const hex = String(color ?? "#ffffff").replace("#", "");
+  const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex.slice(0, 6);
+  return [
+    parseInt(full.slice(0, 2), 16) || 0,
+    parseInt(full.slice(2, 4), 16) || 0,
+    parseInt(full.slice(4, 6), 16) || 0,
+  ];
+}
+
+server.registerTool(
+  "strata_doc_layer_effect",
+  {
+    title: "图层质感效果（胶封 / 高光）",
+    description:
+      "给某一层加材质效果。effect=gloss：胶封质感 —— 边缘暗环（rim）+ 左上定向反光" +
+      "（sheen）+ 对比微调，让照片像被树脂封起来。rim/sheen/strength 都可调。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]),
+      effect: z.enum(["gloss"]).describe("效果类型"),
+      rim: z.number().min(0).max(2).optional().describe("边缘暗环强度，默认 0.55"),
+      sheen: z.number().min(0).max(2).optional().describe("定向反光强度，默认 0.4"),
+      strength: z.number().min(0).max(2).optional().describe("整体强度，默认 1"),
+    },
+  },
+  guard(async ({ docId, layer, effect, rim, sheen, strength }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    if (effect !== "gloss") throw new ToolError(`未知效果：${effect}`);
+    const img = glossLayer(target.img, { rim, sheen, strength });
+    entry.doc = replaceLayer(entry.doc, idx, img);
+    return ok({ ok: true, docId, layer: idx, effect, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_glow",
+  {
+    title: "加光晕层（给整个画面打光）",
+    description:
+      "在文档任意高度加一团径向光晕（透明底，独立图层）：cx/cy 圆心（文档坐标）、" +
+      "radius 半径、color 颜色、strength 强度、falloff 衰减。混合模式建议 screen（提亮）" +
+      "或 overlay。全局打光就是放大半径、降低强度；局部聚光就缩小半径。",
+    inputSchema: {
+      docId: z.string(),
+      cx: z.number().describe("圆心 x（文档坐标）"),
+      cy: z.number().describe("圆心 y（文档坐标）"),
+      radius: z.number().min(8).describe("半径"),
+      color: z.string().optional().describe("默认 #ffe0a0 暖金"),
+      strength: z.number().min(0).max(1).optional().describe("默认 0.5"),
+      falloff: z.number().min(0.5).max(6).optional().describe("默认 2"),
+      blend: z.string().optional().describe("默认 screen"),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional(),
+    },
+  },
+  guard(async (args) => {
+    const entry = sessionDoc(args.docId);
+    const { width: w, height: h } = entry.doc;
+    const img = renderRadialGlow({
+      width: w,
+      height: h,
+      cx: args.cx,
+      cy: args.cy,
+      radius: args.radius,
+      color: args.color ?? "#ffe0a0",
+      strength: args.strength ?? 0.5,
+      falloff: args.falloff ?? 2,
+    });
+    entry.doc = addLayer(entry.doc, img, {
+      x: 0,
+      y: 0,
+      blend: args.blend ?? "screen",
+      opacity: args.opacity,
+      name: args.name ?? `光晕 (${Math.round(args.cx)},${Math.round(args.cy)})`,
+    });
+    return ok({ ok: true, docId: args.docId, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_add_glass",
+  {
+    title: "加玻璃膜（明玻璃质感覆盖层）",
+    description:
+      "在文档最上面盖一层玻璃膜：极淡冷色底 + 斜向白色反光带 + 四边厚度高光。" +
+      "strength 控制整体强度（0.1 轻、0.3 重），streaks 反光带条数，tint 玻璃色。" +
+      "这就是「照片外面那块玻璃」。",
+    inputSchema: {
+      docId: z.string(),
+      tint: z.string().optional().describe("玻璃色，默认 #dceef8 冷白"),
+      strength: z.number().min(0).max(1).optional().describe("默认 0.22"),
+      streaks: z.number().int().min(0).max(5).optional().describe("反光带条数，默认 3"),
+      blend: z.string().optional().describe("默认 screen"),
+      opacity: z.number().min(0).max(1).optional(),
+      name: z.string().optional(),
+    },
+  },
+  guard(async (args) => {
+    const entry = sessionDoc(args.docId);
+    const { width: w, height: h } = entry.doc;
+    const img = renderGlass({
+      width: w,
+      height: h,
+      tint: args.tint ?? "#dceef8",
+      strength: args.strength ?? 0.22,
+      streaks: args.streaks ?? 3,
+    });
+    entry.doc = addLayer(entry.doc, img, {
+      x: 0,
+      y: 0,
+      blend: args.blend ?? "screen",
+      opacity: args.opacity,
+      name: args.name ?? "玻璃膜",
+    });
+    return ok({ ok: true, docId: args.docId, ...summarizeDoc(entry.doc) });
   }),
 );
 

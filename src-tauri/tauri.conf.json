@@ -32,6 +32,14 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "fileAssociations": [
+      {
+        "ext": ["strata"],
+        "name": "Strata 工程文件",
+        "description": "小方工作室 Strata 图像处理软件工程文件",
+        "role": "Editor"
+      }
+    ],
     "publisher": "小方工作室",
     "copyright": "小方工作室 · MIT License",
     "category": "GraphicsAndDesign",

@@ -8,6 +8,7 @@ import {
   fileStat,
   loadImage,
   makeThumbnail,
+  readFileBytes,
 } from "../engine/image";
 import {
   baseName,
@@ -15,6 +16,17 @@ import {
   docFromBlank,
   type StrataDoc,
 } from "../core/document";
+import {
+  composeDoc,
+} from "../engine/compositor";
+import {
+  createSurface,
+} from "../engine/surface";
+import {
+  decodeProject,
+  isStrataPath,
+  STRATA_EXTENSION,
+} from "../engine/project";
 import {
   DEFAULT_DPI,
   MAX_DPI,
@@ -55,6 +67,8 @@ interface Props {
   themeMode: "light" | "dark";
   onToggleTheme: () => void;
   onOpenDoc: (doc: StrataDoc) => void;
+  /** 启动时被命令行参数指定的待打开文件（双击 .strata 等场景）。 */
+  initialPath?: string | null;
 }
 
 function msgOf(e: unknown): string {
@@ -63,6 +77,16 @@ function msgOf(e: unknown): string {
 
 function isImagePath(p: string): boolean {
   return IMAGE_EXTENSIONS.includes(extOf(p));
+}
+
+/** 是否为 Strata 工程文件（.strata）。 */
+function isProjectPath(p: string): boolean {
+  return isStrataPath(p);
+}
+
+/** 开始页面能直接打开的文件：图片或 Strata 工程。 */
+function isOpenablePath(p: string): boolean {
+  return isImagePath(p) || isProjectPath(p);
 }
 
 function toInt(v: string): number {
@@ -81,6 +105,7 @@ export default function StartPage({
   themeMode,
   onToggleTheme,
   onOpenDoc,
+  initialPath,
 }: Props) {
   const { items: recentItems, push, patch, remove, clear } = useRecentFiles();
 
@@ -94,25 +119,39 @@ export default function StartPage({
   const [busy, setBusy] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
 
-  /** 打开一个本地文件并进入编辑壳。 */
+  /** 打开一个本地文件并进入编辑壳。图片走位图解码，.strata 工程走工程解码。 */
   const openPath = useCallback(
     async (path: string) => {
       setError(null);
       setBusy(true);
       setOpening(path);
       try {
-        const bitmap = await loadImage(path);
-        // 缩略图与文件属性顺手取好，下次进开始页面就不用再解一遍大图。
-        const [stat, thumb] = await Promise.all([
-          fileStat(path),
-          makeThumbnail(bitmap),
-        ]);
+        // 文件属性先取好（图片与工程通用），缩略图稍后按需生成。
+        const stat = await fileStat(path);
+        let next: StrataDoc;
+        let thumb: string | undefined;
+        if (isProjectPath(path)) {
+          const bytes = await readFileBytes(path);
+          const decoded = await decodeProject(bytes);
+          decoded.sourcePath = path;
+          next = decoded;
+          // 工程缩略图：把图层栈合成到一张离屏画布，再缩成 96×96 的方块。
+          const surface = createSurface(decoded.width, decoded.height);
+          composeDoc(decoded, surface);
+          const preview = await createImageBitmap(surface);
+          thumb = await makeThumbnail(preview);
+          preview.close();
+        } else {
+          const bitmap = await loadImage(path);
+          thumb = await makeThumbnail(bitmap);
+          next = docFromBitmap(bitmap, baseName(path), path);
+        }
         push(path, {
           thumb: thumb || undefined,
           mtime: stat.modified ?? undefined,
           size: stat.exists ? stat.size : undefined,
         });
-        onOpenDoc(docFromBitmap(bitmap, baseName(path), path));
+        onOpenDoc(next);
       } catch (e) {
         setError(`${zh.error.openFailed}：${msgOf(e)}`);
       } finally {
@@ -123,13 +162,26 @@ export default function StartPage({
     [onOpenDoc, push],
   );
 
+  // 启动参数带进来的待打开文件（双击 .strata / 图片）：只在挂载时打开一次。
+  const launched = useRef(false);
+  useEffect(() => {
+    if (launched.current || !initialPath) return;
+    launched.current = true;
+    void openPath(initialPath);
+  }, [initialPath, openPath]);
+
   const pickFile = useCallback(async () => {
     try {
       const picked = await open({
         title: zh.dialog.openTitle,
         multiple: false,
         directory: false,
-        filters: [{ name: "图片", extensions: [...IMAGE_EXTENSIONS] }],
+        filters: [
+          {
+            name: "图片 / Strata 工程",
+            extensions: [...IMAGE_EXTENSIONS, STRATA_EXTENSION],
+          },
+        ],
       });
       if (typeof picked === "string") {
         await openPath(picked);
@@ -304,7 +356,8 @@ export default function StartPage({
           } else if (ev.payload.type === "drop") {
             setDragging(false);
             const paths = ev.payload.paths;
-            const target = paths.find(isImagePath) ?? paths[0];
+            const target =
+              paths.find(isOpenablePath) ?? paths[0];
             if (target) void openPath(target);
           }
         });
