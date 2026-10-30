@@ -6,7 +6,7 @@
  */
 import { cloneSurface, createSurface, mustCtx } from "../engine/surface";
 import { composeDoc, paintSurface } from "../engine/compositor";
-import { clipBaseOf } from "../engine/styles";
+import { clipBaseOf, paintStyledLayer } from "../engine/styles";
 import { isPixelAdjust, applyPixelAdjust } from "../engine/adjustPixels";
 import {
   adjustDef,
@@ -25,6 +25,12 @@ import {
   type StyleId,
 } from "./layer";
 import { activeLayer, type StrataDoc } from "./document";
+import {
+  decontaminateData,
+  defringeData,
+  removeBlackMatteData,
+  removeWhiteMatteData,
+} from "./matte";
 import {
   contractSelection,
   expandSelection,
@@ -1205,5 +1211,146 @@ export function clearLayerStyle(doc: StrataDoc): StrataDoc {
   const cur = activeLayer(doc);
   if (!cur || !cur.styles?.length) return doc;
   return updateLayer(doc, cur.id, { styles: [] });
+}
+
+/* ---------------------------------------------- 清理 / 填充层 / 修边 / 背景 */
+
+/** 清空剪贴板（编辑 > 清理 > 剪贴板）。 */
+export function clearClipboard(): void {
+  clip = null;
+}
+
+/** 对活动像素图层做一次原地像素改写；不可编辑时原样返回。 */
+function editActiveSurface(
+  doc: StrataDoc,
+  fn: (data: Uint8ClampedArray, w: number, h: number) => void,
+): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
+  const surface = cloneSurface(cur.surface);
+  const ctx = mustCtx(surface);
+  const img = ctx.getImageData(0, 0, surface.width, surface.height);
+  fn(img.data, surface.width, surface.height);
+  ctx.putImageData(img, 0, 0);
+  return updateLayer(doc, cur.id, { surface });
+}
+
+/** 新建渐变填充图层（线性，按角度从 from 到 to）。 */
+export function addGradientFillLayer(
+  doc: StrataDoc,
+  from: string,
+  to: string,
+  angleDeg = 90,
+  name?: string,
+): StrataDoc {
+  const surface = createSurface(doc.width, doc.height);
+  const ctx = mustCtx(surface);
+  const rad = (angleDeg * Math.PI) / 180;
+  const cx = doc.width / 2;
+  const cy = doc.height / 2;
+  const half = Math.hypot(doc.width, doc.height) / 2;
+  const g = ctx.createLinearGradient(
+    cx - Math.cos(rad) * half,
+    cy - Math.sin(rad) * half,
+    cx + Math.cos(rad) * half,
+    cy + Math.sin(rad) * half,
+  );
+  g.addColorStop(0, from);
+  g.addColorStop(1, to);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, doc.width, doc.height);
+  const layer = {
+    ...createLayer(doc.width, doc.height, name ?? `渐变填充 ${doc.layers.length + 1}`),
+    surface,
+  };
+  return spliceAbove(doc, layer);
+}
+
+/** 新建图案填充图层（棋盘格，两色 + 格子大小）。 */
+export function addPatternFillLayer(
+  doc: StrataDoc,
+  color1: string,
+  color2: string,
+  cell = 16,
+  name?: string,
+): StrataDoc {
+  const c = Math.max(2, Math.round(cell));
+  const surface = createSurface(doc.width, doc.height);
+  const ctx = mustCtx(surface);
+  ctx.fillStyle = color1;
+  ctx.fillRect(0, 0, doc.width, doc.height);
+  ctx.fillStyle = color2;
+  for (let y = 0; y < doc.height; y += c) {
+    for (let x = 0; x < doc.width; x += c) {
+      if ((Math.floor(x / c) + Math.floor(y / c)) % 2 === 0) {
+        ctx.fillRect(x, y, Math.min(c, doc.width - x), Math.min(c, doc.height - y));
+      }
+    }
+  }
+  const layer = {
+    ...createLayer(doc.width, doc.height, name ?? `图案填充 ${doc.layers.length + 1}`),
+    surface,
+  };
+  return spliceAbove(doc, layer);
+}
+
+/** 去除黑边：按 alpha 反预乘黑色背景（PS 图层 > 修边 > 移去黑色杂边）。 */
+export function removeBlackMatte(doc: StrataDoc): StrataDoc {
+  return editActiveSurface(doc, (d) => removeBlackMatteData(d));
+}
+
+/** 去除白边：按 alpha 反预乘白色背景（PS 移去白色杂边）。 */
+export function removeWhiteMatte(doc: StrataDoc): StrataDoc {
+  return editActiveSurface(doc, (d) => removeWhiteMatteData(d));
+}
+
+/** 去边：半透明边缘像素取最近不透明邻居的颜色（PS 图层 > 修边 > 去边）。 */
+export function defringeLayer(doc: StrataDoc, radius = 2): StrataDoc {
+  return editActiveSurface(doc, (d, w, h) => defringeData(d, w, h, radius));
+}
+
+/** 净化颜色：半透明像素按透明度向邻域更不透明的颜色靠拢。 */
+export function colorDecontaminate(doc: StrataDoc): StrataDoc {
+  return editActiveSurface(doc, (d, w, h) => decontaminateData(d, w, h));
+}
+
+/** 由背景图层转为普通图层（解锁）。 */
+export function layerFromBackground(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel") return doc;
+  return updateLayer(doc, cur.id, {
+    locked: false,
+    name: cur.name === "背景" ? "图层 0" : cur.name,
+  });
+}
+
+/** 由普通图层转为背景（透明处补白、锁定、改名）。 */
+export function backgroundFromLayer(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel") return doc;
+  const surface = cloneSurface(cur.surface);
+  const ctx = mustCtx(surface);
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, surface.width, surface.height);
+  ctx.globalCompositeOperation = "source-over";
+  return updateLayer(doc, cur.id, { surface, locked: true, name: "背景" });
+}
+
+/** 把当前图层的样式烘焙成上方一个新像素图层（PS 图层 > 图层样式 > 创建图层）。 */
+export function bakeStyledLayer(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || !cur.styles?.length) return doc;
+  const surface = createSurface(doc.width, doc.height);
+  paintStyledLayer(mustCtx(surface), { ...cur, opacity: 100, blend: "normal" });
+  const baked = {
+    ...createLayer(doc.width, doc.height, `${cur.name} 样式`),
+    surface,
+  };
+  const cleared = updateLayer(doc, cur.id, { styles: [] });
+  const at = indexOf(cleared, cur.id);
+  const layers = [...cleared.layers];
+  layers.splice(at + 1, 0, baked);
+  return { ...cleared, layers, activeLayerId: baked.id, dirty: true };
 }
 

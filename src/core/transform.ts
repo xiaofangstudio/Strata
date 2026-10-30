@@ -272,3 +272,39 @@ export function applyFreeTransform(doc: StrataDoc, t: FreeTransform): StrataDoc 
   };
   return { ...doc, layers, dirty: true };
 }
+
+/**
+ * 任意角度旋转整幅画布（PS 图像 > 图像旋转 > 任意角度）。
+ *
+ * 画布按旋转后的外接矩形扩张；所有像素层、蒙版与选区用同一套变换，
+ * 保证图层之间不错位。落在新画布外的部分自然被裁掉。
+ */
+export function rotateDocumentArbitrary(doc: StrataDoc, deg: number): StrataDoc {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const w = Math.max(1, Math.round(doc.width * cos + doc.height * sin));
+  const h = Math.max(1, Math.round(doc.width * sin + doc.height * cos));
+  const turn = (src: HTMLCanvasElement): HTMLCanvasElement => {
+    const out = createSurface(w, h);
+    const ctx = mustCtx(out);
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(src, -doc.width / 2, -doc.height / 2);
+    return out;
+  };
+  const layers = doc.layers.map((l) => {
+    if (l.kind !== "pixel") {
+      return { ...l, mask: l.mask ? turn(l.mask) : l.mask };
+    }
+    return { ...l, surface: turn(l.surface), mask: l.mask ? turn(l.mask) : l.mask };
+  });
+  return {
+    ...doc,
+    width: w,
+    height: h,
+    layers,
+    selection: doc.selection ? turn(doc.selection) : null,
+    dirty: true,
+  };
+}

@@ -10,35 +10,54 @@
  */
 import {
   addNoise,
+  average,
   boxBlur,
+  clouds,
   convolve3x3,
   crystallize,
+  deInterlace,
+  differenceClouds,
+  diffuse,
   dustAndScratch,
   emboss,
+  extrude,
+  facet,
+  fibers,
   findEdges,
   fragment,
   gaussianBlur,
   grain,
   halftone,
+  highPass,
+  maximum,
   median,
   mezzotint,
+  minimum,
   motionBlur,
   mosaic,
+  ntscColors,
+  offset,
   oilPaint,
   patchwork,
   pinch,
+  pointillize,
+  polarCoordinates,
   radialSpin,
   radialZoom,
   reduceNoise,
   ripple,
   sharpenKernel,
+  shear,
   solarize,
   surfaceBlur,
+  tiles,
+  traceContour,
   twirl,
   unsharpMask,
   wave,
   watercolor,
   wind,
+  zigZag,
   type RgbaBuffer,
 } from "./kernels";
 
@@ -66,7 +85,10 @@ export type FilterGroup =
   | "stylize"
   | "sketch"
   | "texture"
-  | "artistic";
+  | "artistic"
+  | "other"
+  | "render"
+  | "video";
 
 export interface FilterDef {
   /** 全局唯一 id，同时是菜单 id（filter.blur.gaussianBlur 等） */
@@ -483,15 +505,278 @@ const ARTISTIC_DEFS: FilterDef[] = [
   },
 ];
 
-/** 全部已注册滤镜（试点 3 件 + 第一批 + 二三批）。 */
+/* ------------------------------------------------------- 第三批：补齐菜单条目 */
+
+const BLUR_EXTRA_DEFS: FilterDef[] = [
+  {
+    id: "filter.blur.average",
+    label: "平均",
+    group: "blur",
+    params: [],
+    apply: (b) => average(b),
+  },
+];
+
+const OTHER_DEFS: FilterDef[] = [
+  {
+    id: "filter.other.highPass",
+    label: "高反差保留",
+    group: "other",
+    params: [
+      { id: "radius", label: "半径", min: 0.1, max: 250, step: 0.1, def: 4, dec: 1, unit: " 像素" },
+    ],
+    apply: (b, p) => highPass(b, p.radius),
+  },
+  {
+    id: "filter.other.maximum",
+    label: "最大值",
+    group: "other",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 10, step: 1, def: 1, unit: " 像素" },
+    ],
+    apply: (b, p) => maximum(b, p.radius),
+  },
+  {
+    id: "filter.other.minimum",
+    label: "最小值",
+    group: "other",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 10, step: 1, def: 1, unit: " 像素" },
+    ],
+    apply: (b, p) => minimum(b, p.radius),
+  },
+  {
+    id: "filter.other.offset",
+    label: "位移",
+    group: "other",
+    params: [
+      { id: "dx", label: "水平", min: -500, max: 500, step: 1, def: 100, unit: " 像素" },
+      { id: "dy", label: "垂直", min: -500, max: 500, step: 1, def: 0, unit: " 像素" },
+    ],
+    apply: (b, p) => offset(b, p.dx, p.dy),
+  },
+  {
+    id: "filter.other.custom",
+    label: "自定",
+    group: "other",
+    params: [
+      { id: "k0", label: "核 1", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k1", label: "核 2", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k2", label: "核 3", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k3", label: "核 4", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k4", label: "核 5（中心）", min: -20, max: 20, step: 1, def: 1 },
+      { id: "k5", label: "核 6", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k6", label: "核 7", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k7", label: "核 8", min: -20, max: 20, step: 1, def: 0 },
+      { id: "k8", label: "核 9", min: -20, max: 20, step: 1, def: 0 },
+      { id: "divisor", label: "缩放", min: -50, max: 50, step: 1, def: 1 },
+      { id: "bias", label: "位移量", min: -255, max: 255, step: 1, def: 0 },
+    ],
+    apply: (b, p) =>
+      convolve3x3(
+        b,
+        [p.k0, p.k1, p.k2, p.k3, p.k4, p.k5, p.k6, p.k7, p.k8],
+        p.divisor,
+        p.bias,
+      ),
+  },
+];
+
+const PIXELATE_EXTRA_DEFS: FilterDef[] = [
+  {
+    id: "filter.pixelate.facet",
+    label: "多面体",
+    group: "pixelate",
+    params: [
+      { id: "threshold", label: "阈值", min: 1, max: 50, step: 1, def: 10, unit: " 色阶" },
+    ],
+    apply: (b, p) => facet(b, p.threshold),
+  },
+  {
+    id: "filter.pixelate.pointillize",
+    label: "点状化",
+    group: "pixelate",
+    params: [
+      { id: "size", label: "单元格大小", min: 2, max: 100, step: 1, def: 8, unit: " 像素" },
+    ],
+    apply: (b, p) => pointillize(b, p.size),
+  },
+];
+
+const DISTORT_EXTRA_DEFS: FilterDef[] = [
+  {
+    id: "filter.distort.zigZag",
+    label: "锯齿",
+    group: "distort",
+    params: [
+      { id: "amount", label: "数量", min: 1, max: 100, step: 1, def: 10, unit: " 像素" },
+      { id: "ridges", label: "起伏", min: 1, max: 20, step: 1, def: 5 },
+    ],
+    apply: (b, p) => zigZag(b, p.amount, p.ridges),
+  },
+  {
+    id: "filter.distort.shear",
+    label: "切变",
+    group: "distort",
+    params: [
+      { id: "amount", label: "数量", min: 0, max: 200, step: 1, def: 20, unit: " 像素" },
+      { id: "phase", label: "相位", min: -180, max: 180, step: 1, def: 0, unit: "°" },
+    ],
+    apply: (b, p) => shear(b, p.amount, p.phase),
+  },
+  {
+    id: "filter.distort.polarCoordinates",
+    label: "极坐标",
+    group: "distort",
+    params: [
+      {
+        id: "mode",
+        label: "方式",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "矩形到极坐标", value: 0 },
+          { label: "极坐标到矩形", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => polarCoordinates(b, p.mode),
+  },
+];
+
+const STYLIZE_EXTRA_DEFS: FilterDef[] = [
+  {
+    id: "filter.stylize.diffuse",
+    label: "扩散",
+    group: "stylize",
+    params: [
+      { id: "amount", label: "数量", min: 1, max: 20, step: 1, def: 3, unit: " 像素" },
+      {
+        id: "mode",
+        label: "方式",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "正常", value: 0 },
+          { label: "变暗", value: 1 },
+          { label: "变亮", value: 2 },
+        ],
+      },
+    ],
+    apply: (b, p) => diffuse(b, p.amount, p.mode),
+  },
+  {
+    id: "filter.stylize.tiles",
+    label: "拼贴",
+    group: "stylize",
+    params: [
+      { id: "size", label: "拼贴大小", min: 2, max: 100, step: 1, def: 12, unit: " 像素" },
+      { id: "offset", label: "偏移", min: 0, max: 100, step: 1, def: 6, unit: " 像素" },
+    ],
+    apply: (b, p) => tiles(b, p.size, p.offset),
+  },
+  {
+    id: "filter.stylize.traceContour",
+    label: "等高线",
+    group: "stylize",
+    params: [
+      { id: "level", label: "色阶", min: 0, max: 255, step: 1, def: 128 },
+    ],
+    apply: (b, p) => traceContour(b, p.level),
+  },
+  {
+    id: "filter.stylize.extrude",
+    label: "凸出",
+    group: "stylize",
+    params: [
+      { id: "size", label: "大小", min: 2, max: 100, step: 1, def: 12, unit: " 像素" },
+      { id: "depth", label: "深度", min: 1, max: 50, step: 1, def: 8, unit: " 像素" },
+    ],
+    apply: (b, p) => extrude(b, p.size, p.depth),
+  },
+];
+
+const RENDER_DEFS: FilterDef[] = [
+  {
+    id: "filter.render.clouds",
+    label: "云彩",
+    group: "render",
+    params: [
+      { id: "scale", label: "缩放", min: 1, max: 20, step: 1, def: 4 },
+    ],
+    apply: (b, p) => clouds(b, p.scale),
+  },
+  {
+    id: "filter.render.differenceClouds",
+    label: "分层云彩",
+    group: "render",
+    params: [
+      { id: "scale", label: "缩放", min: 1, max: 20, step: 1, def: 4 },
+    ],
+    apply: (b, p) => differenceClouds(b, p.scale),
+  },
+  {
+    id: "filter.render.fibers",
+    label: "纤维",
+    group: "render",
+    params: [
+      { id: "strength", label: "强度", min: 1, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "variance", label: "差异", min: 0, max: 50, step: 1, def: 10 },
+    ],
+    apply: (b, p) => fibers(b, p.strength, p.variance),
+  },
+];
+
+const VIDEO_DEFS: FilterDef[] = [
+  {
+    id: "filter.video.ntscColors",
+    label: "NTSC 颜色",
+    group: "video",
+    params: [],
+    apply: (b) => ntscColors(b),
+  },
+  {
+    id: "filter.video.deInterlace",
+    label: "逐行",
+    group: "video",
+    params: [
+      {
+        id: "field",
+        label: "消除",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "偶数行", value: 0 },
+          { label: "奇数行", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => deInterlace(b, p.field),
+  },
+];
+
+/** 全部已注册滤镜（试点 3 件 + 第一批 + 二三批 + 第三批补齐）。 */
 export const FILTER_DEFS: readonly FilterDef[] = [
   ...BLUR_DEFS,
+  ...BLUR_EXTRA_DEFS,
   ...SHARPEN_DEFS,
   ...NOISE_DEFS,
   ...PIXELATE_DEFS,
+  ...PIXELATE_EXTRA_DEFS,
   ...DISTORT_DEFS,
+  ...DISTORT_EXTRA_DEFS,
   ...STYLIZE_DEFS,
+  ...STYLIZE_EXTRA_DEFS,
   ...SKETCH_DEFS,
   ...TEXTURE_DEFS,
   ...ARTISTIC_DEFS,
+  ...OTHER_DEFS,
+  ...RENDER_DEFS,
+  ...VIDEO_DEFS,
 ];

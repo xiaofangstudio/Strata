@@ -41,6 +41,9 @@ const GROUP_LABELS: Record<FilterGroup, string> = {
   sketch: "素描",
   texture: "纹理",
   artistic: "艺术效果",
+  other: "其他",
+  render: "渲染",
+  video: "视频",
 };
 
 const GROUP_ORDER: FilterGroup[] = [
@@ -53,6 +56,9 @@ const GROUP_ORDER: FilterGroup[] = [
   "sketch",
   "texture",
   "artistic",
+  "render",
+  "other",
+  "video",
 ];
 
 export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onClose }: Props) {

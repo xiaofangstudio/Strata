@@ -94,6 +94,14 @@ export default function App() {
     setRevision((n) => n + 1);
   }, []);
 
+  /** 清理某份文档的历史记录（编辑 > 清理 > 历史记录）。当前状态成为新的起点。 */
+  const clearHistory = useCallback((id: string) => {
+    const stack = stacks.current.get(id);
+    const d = docsRef.current.find((x) => x.id === id);
+    if (stack && d) stack.reset(captureDoc(d, "清理历史记录"));
+    setRevision((n) => n + 1);
+  }, []);
+
   /** 落一步可撤销的改动：先入栈，再更新文档。 */
   const commit = useCallback((next: StrataDoc, label: string) => {
     stacks.current.get(next.id)?.commit(captureDoc(next, label));
@@ -146,6 +154,7 @@ export default function App() {
         onSelectDoc={selectDoc}
         onCloseDoc={closeDoc}
         onCloseAll={closeAll}
+        onClearHistory={clearHistory}
         onOpenDoc={openDoc}
         onCommit={commit}
         onPreview={preview}

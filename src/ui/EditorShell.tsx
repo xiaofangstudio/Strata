@@ -82,6 +82,16 @@ import {
   trimToSelection,
   ungroupLayers,
   updateLayer,
+  addGradientFillLayer,
+  addPatternFillLayer,
+  backgroundFromLayer,
+  bakeStyledLayer,
+  clearClipboard,
+  colorDecontaminate,
+  defringeLayer,
+  layerFromBackground,
+  removeBlackMatte,
+  removeWhiteMatte,
   type StrokePosition,
 } from "../core/layerOps";
 import {
@@ -299,6 +309,8 @@ interface Props {
   onCloseDoc: (id: string) => void;
   /** 一次关掉全部分档标签（关闭全部文档） */
   onCloseAll: () => void;
+  /** 清空当前文档的历史记录（编辑 > 清理） */
+  onClearHistory: (id: string) => void;
   /** 打开一份新文档（打开图片 / 打开工程都走这里） */
   onOpenDoc: (doc: StrataDoc) => void;
   /** 落一步可撤销的改动 */
@@ -405,6 +417,7 @@ export default function EditorShell({
   onSelectDoc,
   onCloseDoc,
   onCloseAll,
+  onClearHistory,
   onOpenDoc,
   onCommit,
   onPreview,
@@ -450,6 +463,16 @@ export default function EditorShell({
   const [gallery, setGallery] = useState(false);
   /** 滤镜参数弹窗：值为滤镜菜单 id（filter.blur.gaussianBlur 等），null 关闭 */
   const [filterFx, setFilterFx] = useState<string | null>(null);
+  /** 上一次应用的滤镜 id（滤镜 > 上次滤镜）。 */
+  const lastFilterRef = useRef<string | null>(null);
+  /** 上一次自由变换的相对参数（编辑 > 变换 > 再次）。 */
+  const lastTransformRef = useRef<{
+    sx: number;
+    sy: number;
+    dAngle: number;
+    flipH: boolean;
+    flipV: boolean;
+  } | null>(null);
   /** 液化：面板内自己拖着涂，确定才把形变后的像素写回图层 */
   const [liquify, setLiquify] = useState(false);
   /** 视图 > 网格：纯装饰浮层，不影响像素，也不进历史 */
@@ -2226,6 +2249,14 @@ export default function EditorShell({
   const commitFreeTransform = useCallback(() => {
     const t = freeTRef.current;
     if (!t) return false;
+    // 记下相对变换，供「再次变换」复用（初始角度为 0，故角度即相对角）
+    lastTransformRef.current = {
+      sx: t.w / t.src.width,
+      sy: t.h / t.src.height,
+      dAngle: t.angle,
+      flipH: t.flipH,
+      flipV: t.flipV,
+    };
     freeTRef.current = null;
     freeDragRef.current = null;
     setFreeActive(false);
@@ -3784,6 +3815,132 @@ export default function EditorShell({
         case "window.theme.toggle":
           return { run: () => onSetTheme(themeMode === "dark" ? "light" : "dark") };
 
+        /* ---------------------------------------------- 第四批：利用现成内核补齐 */
+        case "layer.new.groupFromLayers":
+          return {
+            run: () => onCommit(groupLayers(doc), zh.menu.group),
+            hint: "Ctrl+G",
+          };
+        case "layer.hideLayers": {
+          const cur = doc.layers[at];
+          if (!cur) return undefined;
+          return {
+            run: () =>
+              onCommit(
+                updateLayer(doc, cur.id, { visible: !cur.visible }),
+                cur.visible ? "隐藏图层" : "显示图层",
+              ),
+            checked: !cur.visible,
+          };
+        }
+        case "layer.lockLayers": {
+          const cur = doc.layers[at];
+          if (!cur) return undefined;
+          return {
+            run: () =>
+              onCommit(
+                updateLayer(doc, cur.id, { locked: !cur.locked }),
+                cur.locked ? "解锁图层" : "锁定图层",
+              ),
+            checked: cur.locked,
+          };
+        }
+        case "edit.pasteSpecial.pasteInPlace":
+          return canPaste ? { run: doPaste } : undefined;
+
+        /* ------------------------------- 第五批：变换 / 修边 / 清理 / 填充层 */
+        case "edit.transform.scale":
+        case "edit.transform.rotate":
+          // PS 的「缩放 / 旋转」都是进入同一套变换手柄
+          return { run: beginFreeTransform };
+        case "edit.transform.again": {
+          const last = lastTransformRef.current;
+          const base = initialFreeTransform(doc);
+          if (!last || !base) return undefined;
+          return {
+            run: () => {
+              const t: FreeTransform = {
+                ...base,
+                w: base.w * last.sx,
+                h: base.h * last.sy,
+                angle: base.angle + last.dAngle,
+                flipH: base.flipH !== last.flipH,
+                flipV: base.flipV !== last.flipV,
+              };
+              onCommit(applyFreeTransform(doc, t), "再次变换");
+            },
+          };
+        }
+        case "filter.lastFilter": {
+          const last = lastFilterRef.current;
+          return last ? { run: () => setFilterFx(last) } : undefined;
+        }
+        case "edit.pasteSpecial.pasteInto":
+          if (!canPaste || !hasSelection) return undefined;
+          return {
+            run: () => {
+              const pasted = pasteFromClipboard(doc, "贴入");
+              onCommit(addMaskFromSelection(pasted), "贴入");
+            },
+          };
+        case "edit.pasteSpecial.pasteOutside":
+          if (!canPaste || !hasSelection) return undefined;
+          return {
+            run: () => {
+              const pasted = pasteFromClipboard(doc, "贴出");
+              onCommit(invertMask(addMaskFromSelection(pasted)), "贴出");
+            },
+          };
+        case "layer.matting.defringe":
+          return { run: () => onCommit(defringeLayer(doc, 2), "去边") };
+        case "layer.matting.removeBlackMatte":
+          return { run: () => onCommit(removeBlackMatte(doc), "移去黑色杂边") };
+        case "layer.matting.removeWhiteMatte":
+          return { run: () => onCommit(removeWhiteMatte(doc), "移去白色杂边") };
+        case "layer.matting.colorDecontaminate":
+          return { run: () => onCommit(colorDecontaminate(doc), "净化颜色") };
+        case "layer.layerStyle.createLayer":
+          return doc.layers[at]?.styles?.length
+            ? { run: () => onCommit(bakeStyledLayer(doc), "创建图层") }
+            : undefined;
+        case "layer.newFillLayer.gradient":
+          return {
+            run: () => onCommit(addGradientFillLayer(doc, fg, bg, 90), "渐变填充"),
+          };
+        case "layer.newFillLayer.pattern":
+          return {
+            run: () => onCommit(addPatternFillLayer(doc, fg, bg, 16), "图案填充"),
+          };
+        case "layer.new.layerFromBackground":
+          return { run: () => onCommit(layerFromBackground(doc), "由背景图层") };
+        case "layer.new.backgroundFromLayer":
+          return { run: () => onCommit(backgroundFromLayer(doc), "转为背景图层") };
+        case "edit.purge.clipboard":
+          return {
+            run: () => {
+              clearClipboard();
+              setToast("已清理剪贴板");
+            },
+          };
+        case "edit.purge.undo":
+        case "edit.purge.histories":
+          return {
+            run: () => {
+              onClearHistory(doc.id);
+              setToast("已清理历史记录");
+            },
+          };
+        case "edit.purge.all":
+          return {
+            run: () => {
+              clearClipboard();
+              onClearHistory(doc.id);
+              setToast("已清理剪贴板与历史记录");
+            },
+          };
+        case "edit.purge.videoCache":
+          return { run: () => setToast("Strata 不缓存视频，无需清理") };
+
         default: {
           // 已注册的滤镜统一进参数弹窗（实时预览 + 确定才落盘）
           const fx = filterDef(id);
@@ -3876,6 +4033,7 @@ export default function EditorShell({
   }, [
     at,
     beginFreeTransform,
+    bg,
     brushPanelOpen,
     canPaste,
     canRedo,
@@ -3912,6 +4070,7 @@ export default function EditorShell({
     mergeOk,
     moveLayerToEdge,
     newCanvas,
+    onClearHistory,
     onCloseDoc,
     onCommit,
     onQuit,
@@ -5076,6 +5235,7 @@ export default function EditorShell({
           filterId={filterFx}
           onPreview={onPreview}
           onApply={(next) => {
+            lastFilterRef.current = filterFx;
             setFilterFx(null);
             onCommit(next, filterDef(filterFx)?.label ?? zh.dialog.filterTitle);
           }}
