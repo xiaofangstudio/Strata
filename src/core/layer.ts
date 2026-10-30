@@ -1117,7 +1117,11 @@ export type StyleId =
   | "outerglow"
   | "innerglow"
   | "stroke"
-  | "coloroverlay";
+  | "coloroverlay"
+  | "bevelemboss"
+  | "satin"
+  | "gradientoverlay"
+  | "patternoverlay";
 
 /** 一种样式的可调范围与默认值。 */
 export interface StyleDef {
@@ -1231,6 +1235,66 @@ export const STYLE_DEFS: readonly StyleDef[] = [
     angle0: 0,
     blend0: "normal",
   },
+  {
+    id: "bevelemboss",
+    label: "斜面和浮雕",
+    size: true,
+    sizeLabel: "大小",
+    sizeMax: 60,
+    offset: true,
+    position: false,
+    color: "#000000",
+    size0: 8,
+    opacity0: 60,
+    distance0: 4,
+    angle0: 135,
+    blend0: "normal",
+  },
+  {
+    id: "satin",
+    label: "缎纹",
+    size: true,
+    sizeLabel: "大小",
+    sizeMax: 120,
+    offset: true,
+    position: false,
+    color: "#000000",
+    size0: 12,
+    opacity0: 35,
+    distance0: 12,
+    angle0: 135,
+    blend0: "multiply",
+  },
+  {
+    id: "gradientoverlay",
+    label: "渐变叠加",
+    size: false,
+    sizeLabel: "",
+    sizeMax: 0,
+    offset: false,
+    position: false,
+    color: "#ffffff",
+    size0: 0,
+    opacity0: 70,
+    distance0: 0,
+    angle0: 90,
+    blend0: "normal",
+  },
+  {
+    id: "patternoverlay",
+    label: "图案叠加",
+    size: true,
+    sizeLabel: "图案大小",
+    sizeMax: 64,
+    offset: false,
+    position: false,
+    color: "#000000",
+    size0: 12,
+    opacity0: 60,
+    distance0: 0,
+    angle0: 0,
+    blend0: "normal",
+  },
 ];
 
 /** 描边位置：外 / 内 / 居中。 */
@@ -1335,8 +1399,15 @@ export interface StrataLayer {
    * 合成时按下层合成结果的 alpha 做 destination-in，等价于 PS 的「创建剪贴蒙版」。
    */
   clip?: boolean;
-  /** 图层样式（投影 / 内阴影 / 外发光 / 内发光 / 描边 / 颜色叠加），未设置时视为空 */
+  /** 图层样式（投影 / 内阴影 / 外发光 / 内发光 / 描边 / 颜色叠加 / 斜面和浮雕 / 缎纹 / 渐变叠加 / 图案叠加），未设置时视为空 */
   styles?: LayerStyle[];
+  /**
+   * 智能对象：原始像素的 data URL（PNG）。
+   *
+   * 用字符串而不是画布，是为了能直接随工程 JSON 落盘（见 engine/project.ts），
+   * 打开工程后仍可「栅格化」拿回原始内容。未设置表示普通像素层。
+   */
+  smart?: string;
 }
 
 let layerSeq = 0;

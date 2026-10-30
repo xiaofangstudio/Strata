@@ -58,6 +58,8 @@ interface FileLayer {
   surface?: string;
   /** 蒙版的 base64 PNG；未创建蒙版时没有 */
   mask?: string;
+  /** 智能对象原始像素的 data URL；普通图层省略 */
+  smart?: string;
 }
 
 /** 落盘的整个工程。 */
@@ -134,6 +136,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     // 调整图层与组都不占像素，不写 surface，省下整幅空白（或 1×1 占位）PNG
     if (l.kind === "pixel") fl.surface = canvasToB64(l.surface);
     if (l.mask) fl.mask = canvasToB64(l.mask);
+    if (l.smart) fl.smart = l.smart;
     layers.push(fl);
   });
   const active = Math.max(
@@ -197,6 +200,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
       maskActive: fl.maskActive,
       clip: !!fl.clip,
       styles: fl.styles ? fl.styles.map(cloneStyle) : [],
+      smart: fl.smart,
     };
     if (fl.kind === "adjust" && fl.adjust) {
       layers.push({ ...createAdjustLayer(fl.name, fl.adjust), ...common });

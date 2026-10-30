@@ -92,6 +92,11 @@ import {
   layerFromBackground,
   removeBlackMatte,
   removeWhiteMatte,
+  warpActiveLayer,
+  convertToSmartObject,
+  rasterizeSmartObject,
+  newSmartObjectViaCopy,
+  convertSmartObjectToLayers,
   type StrokePosition,
 } from "../core/layerOps";
 import {
@@ -101,6 +106,7 @@ import {
   freeTransformSurface,
   initialFreeTransform,
   rotateDocument,
+  rotateDocumentArbitrary,
   rotateLayerHalf,
   transformCorners,
   type FreeTransform,
@@ -472,6 +478,13 @@ export default function EditorShell({
     dAngle: number;
     flipH: boolean;
     flipV: boolean;
+  } | null>(null);
+  /** 任意角度旋转对话框（角度，度）。 */
+  const [rotateDialog, setRotateDialog] = useState<{ angle: string } | null>(null);
+  /** 四点变形对话框（四个角的 X/Y 百分比）。 */
+  const [quadDialog, setQuadDialog] = useState<{
+    mode: "skew" | "distort" | "perspective" | "warp";
+    v: string[];
   } | null>(null);
   /** 液化：面板内自己拖着涂，确定才把形变后的像素写回图层 */
   const [liquify, setLiquify] = useState(false);
@@ -3941,6 +3954,76 @@ export default function EditorShell({
         case "edit.purge.videoCache":
           return { run: () => setToast("Strata 不缓存视频，无需清理") };
 
+        /* ------------------------------- 第六批：四点变形 / 任意角度 / 样式扩展 */
+        case "image.rotation.arbitrary":
+          return { run: () => setRotateDialog({ angle: "15" }) };
+        case "edit.transform.skew":
+          return {
+            run: () =>
+              setQuadDialog({
+                mode: "skew",
+                v: ["8", "0", "8", "0", "0", "0", "0", "0"],
+              }),
+          };
+        case "edit.transform.distort":
+          return {
+            run: () =>
+              setQuadDialog({
+                mode: "distort",
+                v: ["0", "0", "0", "0", "0", "0", "0", "0"],
+              }),
+          };
+        case "edit.transform.perspective":
+          return {
+            run: () =>
+              setQuadDialog({
+                mode: "perspective",
+                v: ["10", "0", "-10", "0", "0", "0", "0", "0"],
+              }),
+          };
+        case "edit.transform.warp":
+          return {
+            run: () =>
+              setQuadDialog({
+                mode: "warp",
+                v: ["0", "0", "0", "0", "0", "0", "0", "0"],
+              }),
+          };
+        case "layer.layerStyle.bevelEmboss":
+          return layerStyleMenu("bevelemboss");
+        case "layer.layerStyle.satin":
+          return layerStyleMenu("satin");
+        case "layer.layerStyle.gradientOverlay":
+          return layerStyleMenu("gradientoverlay");
+        case "layer.layerStyle.patternOverlay":
+          return layerStyleMenu("patternoverlay");
+
+        /* ------------------------------- 智能对象（最小集） */
+        case "layer.smartObjects.convertToSmartObject": {
+          const cur = doc.layers[at];
+          return cur && cur.kind === "pixel" && !cur.smart
+            ? { run: () => onCommit(convertToSmartObject(doc), "转为智能对象") }
+            : undefined;
+        }
+        case "layer.smartObjects.rasterize":
+        case "layer.rasterize.smartObject":
+          return doc.layers[at]?.smart
+            ? { run: () => onCommit(rasterizeSmartObject(doc), "栅格化智能对象") }
+            : undefined;
+        case "layer.smartObjects.newSmartObjectViaCopy":
+          return doc.layers[at]?.smart
+            ? {
+                run: () =>
+                  onCommit(newSmartObjectViaCopy(doc), "通过拷贝新建智能对象"),
+              }
+            : undefined;
+        case "layer.smartObjects.convertToLayers":
+          return doc.layers[at]?.smart
+            ? {
+                run: () => onCommit(convertSmartObjectToLayers(doc), "转换为图层"),
+              }
+            : undefined;
+
         default: {
           // 已注册的滤镜统一进参数弹窗（实时预览 + 确定才落盘）
           const fx = filterDef(id);
@@ -4910,6 +4993,159 @@ export default function EditorShell({
               </span>
             </label>
           </div>
+        </Modal>
+      )}
+      {/* 图像 > 图像旋转 > 任意角度 */}
+      {rotateDialog && (
+        <Modal
+          title="任意角度旋转"
+          onClose={() => setRotateDialog(null)}
+          width={400}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setRotateDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const v = Number.parseFloat(rotateDialog.angle);
+                  if (!Number.isFinite(v) || v === 0) {
+                    setToast("请输入有效的旋转角度");
+                    return;
+                  }
+                  onCommit(rotateDocumentArbitrary(doc, v), "任意角度旋转");
+                  setRotateDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            输入旋转角度（度，顺时针为正）。画布会按旋转后的外接矩形扩张。
+          </p>
+          <label className="field">
+            <span className="field-label">角度</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={1}
+                autoFocus
+                value={rotateDialog.angle}
+                onChange={(e) => setRotateDialog({ angle: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const v = Number.parseFloat(rotateDialog.angle);
+                  if (!Number.isFinite(v) || v === 0) return;
+                  onCommit(rotateDocumentArbitrary(doc, v), "任意角度旋转");
+                  setRotateDialog(null);
+                }}
+              />
+              <span className="field-unit">°</span>
+            </span>
+          </label>
+        </Modal>
+      )}
+      {/* 编辑 > 变换 > 斜切 / 透视 / 扭曲 / 变形（四点） */}
+      {quadDialog && (
+        <Modal
+          title={
+            quadDialog.mode === "skew"
+              ? "斜切"
+              : quadDialog.mode === "perspective"
+                ? "透视"
+                : quadDialog.mode === "distort"
+                  ? "扭曲"
+                  : "变形"
+          }
+          onClose={() => setQuadDialog(null)}
+          width={520}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setQuadDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const nums = quadDialog.v.map((s) => Number.parseFloat(s) || 0);
+                  const offs: [number, number][] = [];
+                  for (let i = 0; i < 4; i += 1) {
+                    offs.push([nums[i * 2] / 100, nums[i * 2 + 1] / 100]);
+                  }
+                  onCommit(warpActiveLayer(doc, offs), "变形");
+                  setQuadDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            按百分比设置四个角的偏移（左上 / 右上 / 右下 / 左下）；正 X 向右、正 Y 向下。
+          </p>
+          {["左上", "右上", "右下", "左下"].map((label, i) => (
+            <div className="field-row" key={label}>
+              <span className="field-label" style={{ minWidth: 40 }}>
+                {label}
+              </span>
+              <label className="field">
+                <span className="field-label">X %</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={quadDialog.v[i * 2]}
+                    onChange={(e) =>
+                      setQuadDialog((cur) =>
+                        cur
+                          ? {
+                              ...cur,
+                              v: cur.v.map((x, j) =>
+                                j === i * 2 ? e.target.value : x,
+                              ),
+                            }
+                          : cur,
+                      )
+                    }
+                  />
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">Y %</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={quadDialog.v[i * 2 + 1]}
+                    onChange={(e) =>
+                      setQuadDialog((cur) =>
+                        cur
+                          ? {
+                              ...cur,
+                              v: cur.v.map((x, j) =>
+                                j === i * 2 + 1 ? e.target.value : x,
+                              ),
+                            }
+                          : cur,
+                      )
+                    }
+                  />
+                </span>
+              </label>
+            </div>
+          ))}
         </Modal>
       )}
       {/* 编辑 > 描边：宽度 / 颜色 / 位置 / 不透明度 */}

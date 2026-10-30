@@ -31,6 +31,8 @@ import {
   removeBlackMatteData,
   removeWhiteMatteData,
 } from "./matte";
+import { offsetQuad, rectQuad } from "./homography";
+import { contentBounds, warpQuadSurface } from "../engine/warp";
 import {
   contractSelection,
   expandSelection,
@@ -55,6 +57,7 @@ export type LayerPatch = Partial<
     | "adjust"
     | "clip"
     | "styles"
+    | "smart"
     | "parent"
   >
 >;
@@ -1352,5 +1355,67 @@ export function bakeStyledLayer(doc: StrataDoc): StrataDoc {
   const layers = [...cleared.layers];
   layers.splice(at + 1, 0, baked);
   return { ...cleared, layers, activeLayerId: baked.id, dirty: true };
+}
+
+/**
+ * 以四点偏移对活动图层做透视变形（斜切 / 透视 / 扭曲 / 变形共用）。
+ *
+ * offsets 是每个角相对文档宽高的比例，顺序：左上、右上、右下、左下。
+ * 只改这一个图层；蒙版用同一套四边形同步变形，避免错位。
+ */
+export function warpActiveLayer(
+  doc: StrataDoc,
+  offsets: readonly (readonly [number, number])[],
+): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
+  const bbox = contentBounds(cur.surface);
+  if (!bbox) return doc;
+  const base = rectQuad(bbox.x, bbox.y, bbox.w, bbox.h);
+  const px = offsets.map(([fx, fy]) => [fx * doc.width, fy * doc.height] as const);
+  const quad = offsetQuad(base, px);
+  const surface = warpQuadSurface(cur.surface, bbox, quad, doc.width, doc.height);
+  const mask = cur.mask
+    ? warpQuadSurface(cur.mask, bbox, quad, doc.width, doc.height)
+    : cur.mask;
+  return updateLayer(doc, cur.id, { surface, mask });
+}
+
+/* ---------------------------------------------- 智能对象（最小集） */
+
+/** 转为智能对象：把当前像素存成 data URL，原像素保持不变。 */
+export function convertToSmartObject(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
+  const smart = cur.surface.toDataURL("image/png");
+  return updateLayer(doc, cur.id, {
+    smart,
+    name: cur.name.includes("智能对象") ? cur.name : `${cur.name}（智能对象）`,
+  });
+}
+
+/** 栅格化智能对象：丢弃原始数据，保留当前像素。 */
+export function rasterizeSmartObject(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || !cur.smart) return doc;
+  return {
+    ...doc,
+    layers: doc.layers.map((l) =>
+      l.id === cur.id ? { ...l, smart: undefined } : l,
+    ),
+    dirty: true,
+  };
+}
+
+/** 通过拷贝新建智能对象：复制一层，连同原始数据。 */
+export function newSmartObjectViaCopy(doc: StrataDoc): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || !cur.smart) return doc;
+  return duplicateLayer(doc);
+}
+
+/** 转换为图层：等同栅格化（丢弃智能对象原始数据）。 */
+export function convertSmartObjectToLayers(doc: StrataDoc): StrataDoc {
+  return rasterizeSmartObject(doc);
 }
 

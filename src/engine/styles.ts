@@ -253,6 +253,86 @@ function drawStyle(
       commit(buf);
       break;
     }
+    case "gradientoverlay": {
+      // 用颜色到透明的线性渐变铺满轮廓
+      const buf = slot(1, w, h);
+      const bc = mustCtx(buf);
+      const g = bc.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, s.color);
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      bc.fillStyle = g;
+      bc.fillRect(0, 0, w, h);
+      bc.globalCompositeOperation = "destination-in";
+      bc.drawImage(eff, 0, 0);
+      bc.globalCompositeOperation = "source-over";
+      commit(buf);
+      break;
+    }
+    case "patternoverlay": {
+      // 棋盘图案铺满轮廓（单元格 = 大小）
+      const buf = slot(1, w, h);
+      const bc = mustCtx(buf);
+      const cell = Math.max(2, Math.round(s.size || 8));
+      bc.fillStyle = s.color;
+      bc.fillRect(0, 0, w, h);
+      bc.fillStyle = "rgba(255,255,255,0.55)";
+      for (let y = 0; y < h; y += cell) {
+        for (let x = 0; x < w; x += cell) {
+          if ((Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0) {
+            bc.fillRect(x, y, Math.min(cell, w - x), Math.min(cell, h - y));
+          }
+        }
+      }
+      bc.globalCompositeOperation = "destination-in";
+      bc.drawImage(eff, 0, 0);
+      bc.globalCompositeOperation = "source-over";
+      commit(buf);
+      break;
+    }
+    case "bevelemboss": {
+      // 高光朝光源、暗部背光，两侧都裁在轮廓内 → 浮雕感
+      const [dx, dy] = offsetOf(s.angle, Math.max(1, s.distance));
+      const hi = slot(1, w, h);
+      tint(hi, eff, "#ffffff");
+      const sh = slot(2, w, h);
+      tint(sh, eff, s.color);
+      const blur = s.size > 0 ? `blur(${s.size}px)` : "none";
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.8;
+      ctx.globalCompositeOperation = "screen";
+      ctx.filter = blur;
+      ctx.drawImage(hi, dx, dy);
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.8;
+      ctx.globalCompositeOperation = "multiply";
+      ctx.filter = blur;
+      ctx.drawImage(sh, -dx, -dy);
+      ctx.restore();
+      break;
+    }
+    case "satin": {
+      // 近似：轮廓外填色 → 按角度偏移模糊 → 裁回轮廓内，形成缎面暗部
+      const outside = slot(1, w, h);
+      const oc = mustCtx(outside);
+      oc.fillStyle = s.color;
+      oc.fillRect(0, 0, w, h);
+      oc.globalCompositeOperation = "destination-out";
+      oc.drawImage(eff, 0, 0);
+      oc.globalCompositeOperation = "source-over";
+
+      const out = slot(2, w, h);
+      const ouc = mustCtx(out);
+      const [dx, dy] = offsetOf(s.angle, s.distance);
+      ouc.filter = s.size > 0 ? `blur(${s.size}px)` : "none";
+      ouc.drawImage(outside, dx, dy);
+      ouc.filter = "none";
+      ouc.globalCompositeOperation = "destination-in";
+      ouc.drawImage(eff, 0, 0);
+      ouc.globalCompositeOperation = "source-over";
+      commit(out);
+      break;
+    }
   }
 }
 
