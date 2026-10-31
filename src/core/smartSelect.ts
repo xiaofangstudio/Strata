@@ -116,7 +116,11 @@ export function subjectHit(d: Uint8ClampedArray, w: number, h: number): Uint8Arr
     varSum += dr * dr + dg * dg + db * db;
   }
   const sigma = Math.sqrt(varSum / rs.length);
-  const thr = sigma * 4 + 40;
+  // 阈值要点：边框本身也可能有好几种颜色（天空/白墙/地面），
+  // 那样 sigma 会很大，若直接按 sigma×4 放大会把整张图都判成「背景」。
+  // 这里给上限封顶，并且用真实欧氏距离比较（而不是 ThR²×3）。
+  const thr = Math.min(120, sigma * 2 + 40);
+  const thr2 = thr * thr;
   const hit = new Uint8Array(w * h);
   let count = 0;
   for (let p = 0; p < w * h; p += 1) {
@@ -124,7 +128,7 @@ export function subjectHit(d: Uint8ClampedArray, w: number, h: number): Uint8Arr
     const dr = d[i] - br;
     const dg = d[i + 1] - bg;
     const db = d[i + 2] - bb;
-    if (dr * dr + dg * dg + db * db > thr * thr * 3) {
+    if (dr * dr + dg * dg + db * db > thr2) {
       hit[p] = 1;
       count += 1;
     }

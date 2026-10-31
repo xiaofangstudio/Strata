@@ -26,6 +26,7 @@ import {
   uniTransfer,
   type CurvePoint,
 } from "../engine/filters";
+import type { TextLayerState } from "../engine/text";
 
 /**
  * 混合模式。
@@ -1387,6 +1388,15 @@ export interface StrataLayer {
   /** kind === "adjust" 时的参数 */
   adjust?: AdjustState;
   /**
+   * 可编辑文本层的状态（Type 组 45 项的基础）。
+   *
+   * 有 `text` 的像素图层 = 文本层：surface 只是它的渲染缓存，改字号/字距/对齐/
+   * 抗锯齿/OpenType 时按 state 重新栅格化；「转换为文字图层/栅格化文字」就是
+   * 加上或去掉这个字段。之所以仍用 kind = "pixel"，是为了让合成、变换、
+   * 混合模式、图层样式、蒙版这些既有通路**一行都不用改**。
+   */
+  text?: TextLayerState;
+  /**
    * 图层蒙版：一张只有 alpha 有用的画布，不透明处显示、透明处遮住。
    * 之所以用 alpha 而不是灰度，是为了能直接喂给 destination-in，
    * 一次绘制搞定，不必逐像素换算。未创建时为 null。
@@ -1394,6 +1404,17 @@ export interface StrataLayer {
   mask: HTMLCanvasElement | null;
   /** 蒙版是否参与合成（停用时按没有蒙版处理，便于对比效果） */
   maskActive: boolean;
+  /**
+   * 蒙版是否与图层内容「链接」（默认链接）。
+   * 链接时移动图层内容蒙版跟着走；取消链接后只动内容、蒙版留在原处 ——
+   * 这就是 PS 里蒙版缩略图之间那个链条按钮的实际作用。
+   */
+  maskLinked?: boolean;
+  /**
+   * 图层链接组：同一 linkId 的图层算「链接图层」，一起移动/一起选中。
+   * 对应 Layer > Link Layers / Select Linked Layers。
+   */
+  linkId?: string;
   /**
    * 剪贴蒙版：开启后本层只在下层像素的不透明范围内显示。
    * 合成时按下层合成结果的 alpha 做 destination-in，等价于 PS 的「创建剪贴蒙版」。
@@ -1408,6 +1429,31 @@ export interface StrataLayer {
    * 打开工程后仍可「栅格化」拿回原始内容。未设置表示普通像素层。
    */
   smart?: string;
+  /**
+   * 链接型智能对象指向的磁盘路径（Layer > Smart Objects > Convert to Linked）。
+   * 有值 = 链接（内容随文件更新），无值 = 内嵌。
+   */
+  smartPath?: string;
+  /**
+   * 智能滤镜栈（Layer > Smart Filter）。
+   * 有它的图层，surface 由「smartBase 原始像素 + 依次施加的滤镜」现算出来，
+   * 滤镜因此是非破坏的：关掉/清掉就能回到原样。
+   */
+  smartFilters?: {
+    id: string;
+    params: Record<string, number>;
+    enabled: boolean;
+  }[];
+  /** 画板边界（只有组才可能有；见 core/artboard.ts） */
+  artboard?: { x: number; y: number; w: number; h: number };
+  /** 智能滤镜的原始像素（内存里的基准副本，重新渲染从它出发） */
+  smartBase?: HTMLCanvasElement;
+  /** 智能滤镜蒙版（应用滤镜时若有选区，就用选区当蒙版） */
+  smartFilterMask?: HTMLCanvasElement | null;
+  /** 智能滤镜蒙版是否参与 */
+  smartFilterMaskActive?: boolean;
+  /** 视频（帧序列）层的状态：Layer > Video Layers 那些操作都改它 */
+  video?: import("./videoLayer").VideoState;
 }
 
 let layerSeq = 0;

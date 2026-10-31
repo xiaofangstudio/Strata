@@ -96,6 +96,8 @@ import {
 } from "../../core/channelOps";
 import ColorChip from "./ColorChip";
 import RangeInput from "./RangeInput";
+import MiniHistogram from "./MiniHistogram";
+import Popover from "./Popover";
 import "./LayersPanel.css";
 
 interface Props {
@@ -341,78 +343,84 @@ function ChannelTab({
       <div className="ly-foot ch-foot">
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={!flat || isChannelViewDefault(vis, active)}
           title={zh.panel.channelReset}
+          aria-label={zh.panel.channelReset}
           onClick={() => onChannel(DEFAULT_CHANNEL_VIS, "rgb")}
         >
-          {zh.panel.channelReset}
+          <IconReset />
         </button>
-        <span className="ly-foot-gap" />
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={!flat}
           title={zh.panel.channelLoadHint}
+          aria-label={zh.panel.channelLoadHint}
           onClick={loadChannel}
         >
-          {zh.panel.channelLoad}
+          <IconEye />
         </button>
-        <span className="ly-foot-gap" />
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={!flat}
           title="把当前选区存成 Alpha 通道"
+          aria-label="把当前选区存成 Alpha 通道"
           onClick={onSaveSelection}
         >
-          {zh.panel.channelSave}
+          <IconSave />
         </button>
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={channels.length === 0}
           title="把某个 Alpha 通道载回选区"
+          aria-label="把某个 Alpha 通道载回选区"
           onClick={onLoadSelection}
         >
-          {zh.panel.channelLoad}
+          <IconMarquee />
         </button>
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={channels.length < 2}
           title="两个 Alpha 通道逐像素运算"
+          aria-label="通道计算"
           onClick={onChannelCalc}
         >
-          {zh.dialog.channelCalcTitle}
+          <IconCalc />
         </button>
         <span className="ly-foot-gap" />
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={!current}
           title="复制当前查看的通道"
+          aria-label="复制通道"
           onClick={duplicateSelected}
         >
-          {zh.panel.channelDuplicate}
+          <IconDup />
         </button>
         <button
           type="button"
-          className="ch-act is-danger"
+          className="ch-act is-icon is-danger"
           disabled={!current}
           title="删除当前查看的通道"
+          aria-label="删除通道"
           onClick={deleteSelected}
         >
-          {zh.panel.channelDelete}
+          <IconTrash />
         </button>
         <button
           type="button"
-          className="ch-act"
+          className="ch-act is-icon"
           disabled={!flat}
           title="新建一张空白通道"
+          aria-label="新建通道"
           onClick={newBlank}
         >
-          {zh.panel.channelNew}
+          <IconPlus />
         </button>
       </div>
     </Fragment>
@@ -916,8 +924,8 @@ function AdjustMenu({ onAdd }: { onAdd: (id: AdjustId) => void }) {
       >
         fx
       </button>
-      {open && (
-        <div className="ly-menu" role="menu">
+      {open && boxRef.current && (
+        <Popover anchor={boxRef.current} onClose={() => setOpen(false)} width={200}>
           {FAMILY_ORDER.map((fam) => {
             const items = ADJUST_DEFS.filter((d) => d.family === fam);
             if (items.length === 0) return null;
@@ -941,7 +949,7 @@ function AdjustMenu({ onAdd }: { onAdd: (id: AdjustId) => void }) {
               </Fragment>
             );
           })}
-        </div>
+        </Popover>
       )}
     </div>
   );
@@ -953,11 +961,16 @@ export function AdjustProps({
   layer,
   onChange,
   onPreview,
+  compSource,
+  compVersion = 0,
 }: {
   doc: StrataDoc;
   layer: StrataLayer;
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
+  /** 合成画布：色阶类调整拿它算直方图 */
+  compSource?: HTMLCanvasElement | null;
+  compVersion?: number;
 }) {
   const st = layer.adjust;
   if (!st) return null;
@@ -991,6 +1004,18 @@ export function AdjustProps({
           ↺
         </button>
       </div>
+
+      {/* 色阶类调整先给一张亮度直方图：不看分布盲调滑杆很难受 */}
+      {(st.id === "levels" || st.id === "channellevels" || st.id === "bc") && (
+        <MiniHistogram
+          source={compSource ?? null}
+          version={compVersion}
+          black={st.params.black}
+          white={st.params.white}
+          gamma={st.params.gamma}
+          height={62}
+        />
+      )}
 
       {st.id === "curves" && (
         <CurveEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={onPreview} />
@@ -1107,8 +1132,8 @@ export function StyleProps({
           >
             +
           </button>
-          {pick && (
-            <div className="ly-menu is-down" role="menu">
+          {pick && boxRef.current && (
+            <Popover anchor={boxRef.current} onClose={() => setPick(false)} preferUp width={168}>
               {missing.length === 0 ? (
                 <span className="ly-menu-group">{zh.layers.styleAllAdded}</span>
               ) : (
@@ -1127,7 +1152,7 @@ export function StyleProps({
                   </button>
                 ))
               )}
-            </div>
+            </Popover>
           )}
         </div>
       </div>
@@ -2063,3 +2088,90 @@ function UngroupIcon() {
     </svg>
   );
 }
+
+/* ------------------------------------------------- 通道页脚的图标 */
+
+/** 统一 16×16 线性图标，与工具轨同一套笔触。 */
+const icoProps = {
+  width: 15,
+  height: 15,
+  viewBox: "0 0 16 16",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.5,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+  "aria-hidden": true,
+} as const;
+
+function IconReset() {
+  return (
+    <svg {...icoProps}>
+      <path d="M13 8a5 5 0 1 1-1.6-3.7" />
+      <path d="M13 2.6V5.4h-2.8" />
+    </svg>
+  );
+}
+
+function IconEye() {
+  return (
+    <svg {...icoProps}>
+      <path d="M1.8 8s2.4-3.6 6.2-3.6S14.2 8 14.2 8s-2.4 3.6-6.2 3.6S1.8 8 1.8 8Z" />
+      <circle cx="8" cy="8" r="1.8" />
+    </svg>
+  );
+}
+
+function IconSave() {
+  return (
+    <svg {...icoProps}>
+      <path d="M3 2.8h7.2L13 5.6V13H3Z" />
+      <path d="M8 5.2v4.2M6.2 7.8 8 9.6l1.8-1.8" />
+    </svg>
+  );
+}
+
+function IconMarquee() {
+  return (
+    <svg {...icoProps} strokeDasharray="2.6 2">
+      <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1.2" />
+    </svg>
+  );
+}
+
+function IconCalc() {
+  return (
+    <svg {...icoProps}>
+      <circle cx="6" cy="8" r="3.4" />
+      <circle cx="10" cy="8" r="3.4" />
+    </svg>
+  );
+}
+
+function IconDup() {
+  return (
+    <svg {...icoProps}>
+      <rect x="2.6" y="2.6" width="7.4" height="7.4" rx="1.2" />
+      <path d="M6 13.4h6.2a1.2 1.2 0 0 0 1.2-1.2V6" />
+    </svg>
+  );
+}
+
+function IconTrash() {
+  return (
+    <svg {...icoProps}>
+      <path d="M2.8 4.4h10.4" />
+      <path d="M6 4.4V2.8h4v1.6" />
+      <path d="M4.2 4.4 4.9 13h6.2l.7-8.6" />
+    </svg>
+  );
+}
+
+function IconPlus() {
+  return (
+    <svg {...icoProps}>
+      <path d="M8 3.4v9.2M3.4 8h9.2" />
+    </svg>
+  );
+}
+

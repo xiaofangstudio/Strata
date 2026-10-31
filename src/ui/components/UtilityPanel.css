@@ -1,0 +1,104 @@
+/**
+ * 辅助面板（信息 / 色板 / 样式 / 图层复合 …）的通用排版。
+ * 表格、色块网格、按钮流都是同一套节奏，避免每个面板各写一遍。
+ */
+
+.util-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.util-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.util-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.util-table td:first-child {
+  color: var(--text-3);
+  width: 38%;
+}
+
+.util-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.util-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.util-swatch:hover {
+  transform: scale(1.08);
+}
+
+.util-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.util-chip {
+  padding: 3px 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+}
+
+.util-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+.util-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.util-h {
+  margin: 0 0 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.util-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  vertical-align: -2px;
+}
+
+/* 选中的虚拟页签按钮（时间轴帧号） */
+.btn-ghost.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}

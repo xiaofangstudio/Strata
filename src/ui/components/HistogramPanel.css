@@ -11,6 +11,8 @@
 }
 .hist-canvas {
   display: block;
+  /* 同上：canvas 不许被 flex 压缩 */
+  flex: none;
   width: 100%;
   height: 110px;
   background:

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import Splash from "./ui/Splash";
 import "./styles/tokens.css";
+import "./styles/themes.css";
 import "./styles/global.css";
 
 const container = document.getElementById("root");

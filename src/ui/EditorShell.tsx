@@ -19,6 +19,7 @@ import {
   IMAGE_EXTENSIONS,
   encodePng,
   loadImage,
+  decodeImage,
   readFileBytes,
   writeFileBytes,
 } from "../engine/image";
@@ -38,9 +39,12 @@ import {
   addFillLayer,
   addLayer,
   addLayerStyle,
+  addMask,
   addMaskFromSelection,
   addMaskFromTransparency,
-  addMask,
+  removeLayerStyle,
+  setBlend,
+  setOpacity,
   applyAdjustToLayer,
   applyMask,
   canShiftLayer,
@@ -67,6 +71,7 @@ import {
   moveLayer,
   pasteFromClipboard,
   pasteLayerStyle,
+  insertAboveActive,
   placeRaster,
   removeLayers,
   removeLayer,
@@ -134,10 +139,72 @@ import {
   setLayerSelection,
 } from "../core/imageOps";
 import ImageOpsDialog, { type ImageOpsKind } from "./components/ImageOpsDialog";
-import { autoAlignLayers, autoBlendLayers } from "../core/stackOps";
+import TextPanel, { type TextPanelTab } from "./components/TextPanel";
+import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
+import { applyStackModeToDoc, autoAlignLayers, autoBlendLayers } from "../core/stackOps";
+import { applyStackMode, type StackMode } from "../core/stackModes";
+import { contentBounds } from "../engine/warp";
+import { alignLayers, distributeLayers, type AlignEdge, type DistributeEdge } from "../core/arrange";
+import { clearSmartFilters, deleteFilterMask, toggleFilterMask, toggleSmartFilters } from "../core/filterOps";
+import { isArtboard, newArtboard, sliceFromLayer } from "../core/artboard";
+import {
+  cropToContent,
+  deleteEmptyLayers,
+  fitImage,
+  flattenAllMasks,
+  flattenAllStyles,
+  placeAsSmart,
+} from "../core/batchOps";
+import { combineShapes, type CombineOp } from "../core/shapeCombine";
+import {
+  activeVideoLayer,
+  deleteFrame,
+  duplicateFrame,
+  insertBlankFrame,
+  makeVideoLayer,
+  rasterizeVideoLayer,
+  reloadFrame,
+  replaceFootage,
+  restoreAllFrames,
+  restoreFrame,
+  setFrameRate,
+  setShowAltered,
+  videoSummary,
+} from "../core/videoLayer";
 import { PROFILE_LABELS } from "../core/colorProfile";
+import { buildPdf } from "../core/pdf";
+import { computeHistogram } from "./components/HistogramPanel";
+import {
+  DEFAULT_PROOF,
+  applyProof,
+  gamutWarning,
+  type ProofKind,
+  type ProofSettings,
+} from "../core/proof";
+import {
+  activeTextLayer,
+  hasText,
+  makeTextLayer,
+  rasterizeTextLayer,
+  textLayerAt,
+  textLayerName,
+  textOutlineSurface,
+  toParagraphText,
+  toPointText,
+  updateText,
+  updateTextSettings,
+} from "../core/textLayer";
+import { defaultTextState, type TextLayerState } from "../engine/text";
 import { definePattern, latestPattern, loadPatterns } from "../core/patterns";
-import { adjustDef, newAdjustState, type AdjustId, type AdjustState, type StyleId } from "../core/layer";
+import {
+  BLEND_MODES,
+  STYLE_DEFS,
+  adjustDef,
+  newAdjustState,
+  type AdjustId,
+  type AdjustState,
+  type StyleId,
+} from "../core/layer";
 import {
   borderSelection,
   cloneSelection,
@@ -198,8 +265,9 @@ import {
 } from "../engine/shapes";
 import {
   DEFAULT_TEXT,
+  TEXT_FAMILIES,
+  WARP_STYLES,
   fontString,
-  rasterizeText,
   type TextSettings,
 } from "../engine/text";
 import {
@@ -214,7 +282,7 @@ import {
   type ToolGroupId,
   type ToolId,
 } from "../tools/catalog";
-import type { ThemeMode } from "../stores/theme";
+import { THEMES, type ThemeMode, type ThemeSkin } from "../stores/theme";
 import {
   addCustomBrush,
   normalizeBrush,
@@ -222,6 +290,7 @@ import {
   toBrushPrefs,
   usePrefs,
   type BrushPrefs,
+  type Prefs,
 } from "../stores/prefs";
 import { clearStoredRecent } from "../stores/recent";
 import { useRecentFiles } from "../stores/recent";
@@ -347,6 +416,10 @@ interface Props {
   themeMode: ThemeMode;
   /** 由偏好设置切换主题 */
   onSetTheme: (m: ThemeMode) => void;
+  /** 当前皮肤 id（窗口 > 主题） */
+  themeSkin: ThemeSkin;
+  /** 选一套主题（皮肤 + 底色） */
+  onSetThemeId: (id: ThemeSkin) => void;
   onSelectDoc: (id: string) => void;
   onCloseDoc: (id: string) => void;
   /** 一次关掉全部分档标签（关闭全部文档） */
@@ -459,6 +532,8 @@ export default function EditorShell({
   info,
   themeMode,
   onSetTheme,
+  themeSkin,
+  onSetThemeId,
   onSelectDoc,
   onCloseDoc,
   onCloseAll,
@@ -546,6 +621,54 @@ export default function EditorShell({
   const [puppet, setPuppet] = useState<"similarity" | "affine" | null>(null);
   /** 视图 > 网格：纯装饰浮层，不影响像素，也不进历史 */
   const [showGrid, setShowGrid] = useState(false);
+  /* ---------------- 视图：像素长宽比 / 屏幕模式 / 显示开关 ---------------- */
+  /** 显示用像素长宽比（1 = 方形像素）。只影响显示，不改像素。 */
+  const [pixelAspect, setPixelAspect] = useState(1);
+  /** 是否启用长宽比校正（关掉则按方形像素显示） */
+  const [aspectCorrection, setAspectCorrection] = useState(false);
+  const [screenMode, setScreenMode] = useState<"standard" | "fullscreenMenu" | "fullscreen">(
+    "standard",
+  );
+  const [showLayerEdges, setShowLayerEdges] = useState(false);
+  const [showSlicesOverlay, setShowSlicesOverlay] = useState(true);
+  const [showCountersOverlay, setShowCountersOverlay] = useState(true);
+  const [pixelArtPreview, setPixelArtPreview] = useState(false);
+  const [viewFlipped, setViewFlipped] = useState(false);
+  const [snapLayers, setSnapLayers] = useState(false);
+  const [snapSlices, setSnapSlices] = useState(false);
+  const [slicesLocked, setSlicesLocked] = useState(false);
+  /** 校样：色盲模拟（CSS feColorMatrix）+ 校样开关 */
+  const [proof, setProof] = useState<"none" | "protanopia" | "deuteranopia">("none");
+  const [proofOn, setProofOn] = useState(false);
+  /* ---------------- 校样（视图 > 校样设置 / 校样颜色 / 色域警告） ---------------- */
+  const [proofSet, setProofSet] = useState<ProofSettings>(DEFAULT_PROOF);
+  const [proofActive, setProofActive] = useState(false);
+  const [gamutOn, setGamutOn] = useState(false);
+  /** 32 位预览的显示补偿（曝光档 + 伽马），纯显示 */
+  const [preview32, setPreview32] = useState({ on: false, exposure: 0, gamma: 1 });
+  const [preview32Dialog, setPreview32Dialog] = useState(false);
+  /** 显示开关：注释 / 目标路径 */
+  const [showNotes, setShowNotes] = useState(true);
+  const [showTargetPath, setShowTargetPath] = useState(true);
+  /** 变形时的网格 / 钉子显示（视图 > 显示 > 网格 / 编辑钉） */
+  const [showWarpMesh, setShowWarpMesh] = useState(true);
+  const [showWarpPins, setShowWarpPins] = useState(true);
+  const [extrasDialog, setExtrasDialog] = useState(false);
+  const [patternPreviewOn, setPatternPreviewOn] = useState(false);
+  /** 图案预览用的数据 URL（只在开关打开时算一次） */
+  const patternPreviewUrl = useMemo(() => {
+    if (!patternPreviewOn) return null;
+    const p = latestPattern();
+    return p ? p.toDataURL("image/png") : null;
+  }, [patternPreviewOn]);
+  const proofCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** 当前图层内容外接框（「显示图层边缘」用；只在开关打开时算） */
+  const layerEdges = useMemo(() => {
+    if (!showLayerEdges) return null;
+    const l = doc.layers.find((x) => x.id === doc.activeLayerId);
+    if (!l || l.kind !== "pixel") return null;
+    return contentBounds(l.surface);
+  }, [showLayerEdges, doc.layers, doc.activeLayerId]);
   /** 视图 > 标尺：同上，只是刻度条 */
   const [showRulers, setShowRulers] = useState(false);
   /** 视图 > 参考线：标尺里拖出来的对齐线，与网格同属「看」的浮层 */
@@ -605,6 +728,34 @@ export default function EditorShell({
   const [menusDialog, setMenusDialog] = useState(false);
   /** 色彩配置：settings / assign / convert 三种用法共用一套面板 */
   const [profileDialog, setProfileDialog] = useState<"settings" | "assign" | "convert" | null>(null);
+  /** 文件 > 脚本 > 统计 */
+  const [statsDialog, setStatsDialog] = useState<{
+    pixels: number;
+    mean: string;
+    median: string;
+    r: string;
+    g: string;
+    b: string;
+  } | null>(null);
+  /** 文件 > 文件简介 */
+  const [infoDialog, setInfoDialog] = useState<{ title: string; author: string; desc: string } | null>(
+    null,
+  );
+  /** 辅助面板（窗口 > 面板） */
+  const [utilPanel, setUtilPanel] = useState<PanelKind | null>(null);
+  /** 信息面板要显示的指针坐标（只在信息面板打开时更新） */
+  const [cursorDoc, setCursorDoc] = useState<{ x: number; y: number } | null>(null);
+  /** 工具轨 / 选项栏可见性（窗口 > 面板 > 工具 / 选项） */
+  const [showToolRail, setShowToolRail] = useState(true);
+  const [showOptionsBar, setShowOptionsBar] = useState(true);
+  /** 图层样式：混合选项 / 全局光 / 缩放效果 */
+  const [styleDialog, setStyleDialog] = useState<"blend" | "light" | "scale" | null>(null);
+  const [styleAngle, setStyleAngle] = useState("120");
+  const [styleScale, setStyleScale] = useState("100");
+  /** 文字面板停在哪一页 */
+  const [textPanel, setTextPanel] = useState<TextPanelTab | null>(null);
+  /** 弯曲文字对话框 */
+  const [warpTextDialog, setWarpTextDialog] = useState<{ warp: string; amount: string } | null>(null);
   const [profilePick, setProfilePick] = useState<NonNullable<StrataDoc["profile"]>>("srgb");
 
   // 偏好里的「视图外观」直接落到根节点：棋盘格大小 + 界面密度。
@@ -619,6 +770,68 @@ export default function EditorShell({
   useEffect(() => {
     loadPatterns();
   }, []);
+
+  /**
+   * 校样渲染：把合成结果按校样设置重算一遍，画到一张覆盖层画布上。
+   *
+   * 为什么是「覆盖层」而不是改主画布：主画布是合成器的产物，每次重绘都会覆盖；
+   * 校样是纯显示效果，盖在上面最省事，也不会污染任何像素。
+   *
+   * 性能：只在「文档变化 / 校样设置变化 / 缩放变化」时重算，不跟帧循环走。
+   * 超大文档（> 4M 像素）按 2048 边长降采样校样 —— 反正是预览，缩放本来就是模糊的。
+   */
+  useEffect(() => {
+    const wantProof = proofActive && proofSet.kind !== "none";
+    const wantTone = preview32.on && (preview32.exposure !== 0 || preview32.gamma !== 1);
+    const canvas = proofCanvasRef.current;
+    if (!canvas) return;
+    if (!wantProof && !wantTone && !gamutOn) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      const src = canvasRef.current;
+      if (!src) return;
+      const w = src.width;
+      const h = src.height;
+      if (w === 0 || h === 0) return;
+      const maxSide = 2048;
+      const k = Math.min(1, maxSide / Math.max(w, h));
+      const pw = Math.max(1, Math.round(w * k));
+      const ph = Math.max(1, Math.round(h * k));
+      const stage = createSurface(pw, ph);
+      const sctx = mustCtx(stage);
+      sctx.imageSmoothingQuality = "medium";
+      sctx.drawImage(src, 0, 0, pw, ph);
+      const img = sctx.getImageData(0, 0, pw, ph);
+      let buf: { data: Uint8ClampedArray; width: number; height: number } = {
+        data: img.data,
+        width: pw,
+        height: ph,
+      };
+      if (wantProof || wantTone) {
+        buf = applyProof(buf, wantProof ? proofSet : { ...DEFAULT_PROOF }, {
+          exposure: wantTone ? preview32.exposure : 0,
+          gamma: wantTone ? preview32.gamma : 1,
+        });
+      }
+      if (gamutOn) {
+        // 色域警告叠在校样结果上：超出印刷色域的像素刷成警示色
+        buf = gamutWarning(buf, proofSet).buf;
+      }
+      canvas.width = pw;
+      canvas.height = ph;
+      const pctx = mustCtx(canvas);
+      pctx.putImageData(new ImageData(new Uint8ClampedArray(buf.data), pw, ph), 0, 0);
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [proofActive, proofSet, gamutOn, preview32, doc, scale]);
   /** 画笔设置面板（F5）：一个面板里容纳 PhotoCraft 的全部笔刷 section */
   const [brushPanelOpen, setBrushPanelOpen] = useState(false);
   /** 右侧面板坞的开关：由「窗口 > 颜色 / 属性 / 图层 / 历史」直接控制。 */
@@ -678,9 +891,13 @@ export default function EditorShell({
    * 文字不改图层模型 —— 确认的一瞬间整段栅格化成像素，之后与画笔画的没两样，
    * 混合模式 / 图层样式 / 蒙版 / 选区全都照旧生效。
    */
-  const [textEdit, setTextEdit] = useState<{ x: number; y: number; value: string } | null>(
-    null,
-  );
+  const [textEdit, setTextEdit] = useState<{
+    x: number;
+    y: number;
+    value: string;
+    /** 有值表示在编辑已有的文本层 */
+    layerId?: string;
+  } | null>(null);
   /** 是否处于自由变换态（浮层画手柄框、Enter 应用 / Esc 取消） */
   const [freeActive, setFreeActive] = useState(false);
 
@@ -767,6 +984,32 @@ export default function EditorShell({
   const zoom = useCallback((next: number) => {
     setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, next)));
   }, []);
+
+  /**
+   * 屏幕模式。三种模式在 Tauri 里都落到窗口 fullscreen 上：
+   * - 标准：退出全屏
+   * - 带菜单栏全屏 / 全屏：进入全屏（菜单栏是我们自己的 UI，全屏后仍在）
+   * 浏览器里（非 Tauri 环境）没有窗口 API，直接忽略并把状态记下来。
+   */
+  const applyScreenMode = useCallback(
+    async (mode: "standard" | "fullscreenMenu" | "fullscreen") => {
+      setScreenMode(mode);
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().setFullscreen(mode !== "standard");
+      } catch {
+        /* 非 Tauri 环境：只改状态 */
+      }
+      setToast(
+        mode === "standard"
+          ? "标准屏幕模式"
+          : mode === "fullscreenMenu"
+            ? "全屏（保留菜单栏）"
+            : "全屏模式",
+      );
+    },
+    [],
+  );
 
   // 切换文档时还原它自己的视图；首次打开则适应窗口
   useEffect(() => {
@@ -1054,9 +1297,13 @@ export default function EditorShell({
       const c = canvasRef.current;
       if (!c) return { x: 0, y: 0 };
       const r = c.getBoundingClientRect();
-      return { x: (clientX - r.left) / scale, y: (clientY - r.top) / scale };
+      // 像素长宽比校正会把画布横向拉伸，坐标换算要一并除以拉伸倍数
+      const ax = aspectCorrection ? pixelAspect : 1;
+      const raw = (clientX - r.left) / (scale * ax);
+      // 视图水平翻转（视图 > 水平翻转）只镜像显示，坐标要折回来
+      return { x: viewFlipped ? docW - raw : raw, y: (clientY - r.top) / scale };
     },
-    [scale],
+    [scale, aspectCorrection, pixelAspect, viewFlipped, docW],
   );
 
   const docPoint = useCallback(
@@ -1253,9 +1500,24 @@ export default function EditorShell({
       setToast(zh.options.textEmpty);
       return;
     }
-    const ink = rasterizeText(docW, docH, content, textSet, x, y, fg, doc.selection);
-    onCommit(placeRaster(doc, zh.tools.text, ink), zh.options.textPlaced);
-    setToast(doc.selection ? zh.options.textInSelection : zh.options.textPlaced);
+    // 编辑已有文本层 → 直接改它的状态（surface 会重新栅格化）
+    if (textEdit.layerId) {
+      const target = doc.layers.find((l) => l.id === textEdit.layerId);
+      if (target && hasText(target)) {
+        onCommit(updateText(doc, target.id, { content }), "编辑文字");
+        return;
+      }
+    }
+    // 新建文本层：真图层，之后还能再改字号/字距/对齐/抗锯齿
+    const state: TextLayerState = {
+      ...defaultTextState(x, y),
+      content,
+      settings: { ...textSet },
+      color: fg,
+    };
+    const layer = makeTextLayer(docW, docH, state, textLayerName(content));
+    onCommit(insertAboveActive(doc, layer), zh.options.textPlaced);
+    setToast(zh.options.textPlaced);
   }, [textEdit, docW, docH, textSet, fg, doc, onCommit]);
 
   // 切走文字工具：还没确认的文本框随手收掉，不留半截浮层在画布上
@@ -1932,6 +2194,12 @@ export default function EditorShell({
         panRef.current = { x: e.clientX, y: e.clientY };
         return;
       }
+      // 信息面板打开时才跟踪指针坐标（避免每帧重渲染）
+      if (utilPanel === "info") {
+        const q = docPoint(e);
+        setCursorDoc({ x: q.x, y: q.y });
+      }
+
       // 标尺拖动：只更新浮层里那一段，不进历史
       const ms = measureStartRef.current;
       if (ms && tool === "ruler") {
@@ -2664,6 +2932,19 @@ export default function EditorShell({
    */
   const selRadius = feather;
 
+  /** 取当前活动文本层（没有就提示）。 */
+  const withText = useCallback(
+    (fn: (layer: NonNullable<ReturnType<typeof activeTextLayer>>) => void) => () => {
+      const t = activeTextLayer(doc);
+      if (!t) {
+        setToast("先选中一个文本层（或用文字工具打一段字）");
+        return;
+      }
+      fn(t);
+    },
+    [doc],
+  );
+
   /**
    * 渐隐：按百分比把「上一步之后」混回「上一步之前」。
    * 不撤销 —— 结果是新的一步，历史里能看到「渐隐 60%」。
@@ -2678,6 +2959,194 @@ export default function EditorShell({
       onCommit(fadeDocument(before, doc, percent), `渐隐 ${percent}%`);
     },
     [doc, historyIndex, onCommit, onPeekHistory],
+  );
+
+
+  /* ---------------------------------------------------------- 文件批处理 */
+
+  /** 置入图像：内嵌或链接（链接会记下路径，可用「更新」重读）。 */
+  const placeImage = useCallback(
+    async (linked: boolean) => {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (!picked || Array.isArray(picked)) return;
+      try {
+        const bytes = await readFileBytes(picked);
+        const mime = /\.jpe?g$/i.test(picked) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const name = picked.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+        const layer = placeAsSmart(doc, img, name, linked ? picked : undefined);
+        onCommit(insertAboveActive(doc, layer), linked ? "置入链接的智能对象" : "置入嵌入的智能对象");
+        setToast(linked ? `已链接置入：${name}` : `已嵌入置入：${name}`);
+      } catch {
+        setToast("这张图读不出来");
+      }
+    },
+    [doc, onCommit],
+  );
+
+  /** 把每个图层导出成单独的 PNG，写进用户选的文件夹。 */
+  const exportLayersToFiles = useCallback(async () => {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    let n = 0;
+    for (const l of doc.layers) {
+      if (l.kind !== "pixel") continue;
+      const canvas = cropToContent(l.surface);
+      const bytes = await encodePng(canvas);
+      const safe = l.name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) || `layer-${n + 1}`;
+      await writeFileBytes(`${dir}/${safe}.png`, bytes);
+      n += 1;
+    }
+    setToast(n > 0 ? `已导出 ${n} 个图层到所选文件夹` : "没有可导出的像素层");
+  }, [doc]);
+
+  /* ------------------------------------------------------- 视频（帧序列） */
+
+  /** 载入一张磁盘图片，按文档尺寸缩放后返回画布。 */
+  const loadImageCanvas = useCallback(
+    async (path: string): Promise<HTMLCanvasElement | null> => {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const surface = createSurface(doc.width, doc.height);
+        mustCtx(surface).drawImage(img, 0, 0, doc.width, doc.height);
+        return surface;
+      } catch {
+        setToast("这张图读不出来");
+        return null;
+      }
+    },
+    [doc.width, doc.height],
+  );
+
+  /** 新建视频层（可选：从一张图片开始）。 */
+  const newVideoLayer = useCallback(
+    async (fromFile: boolean) => {
+      let path: string | undefined;
+      let first: HTMLCanvasElement | undefined;
+      if (fromFile) {
+        const picked = await open({
+          multiple: false,
+          filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+        });
+        if (!picked || Array.isArray(picked)) return;
+        const canvas = await loadImageCanvas(picked);
+        if (!canvas) return;
+        path = picked;
+        first = canvas;
+      }
+      const name = fromFile ? "视频图层" : "空白视频图层";
+      const layer = makeVideoLayer(doc.width, doc.height, name, first, path);
+      onCommit(insertAboveActive(doc, layer), "新建视频图层");
+      setToast("视频图层按「帧序列」工作：一帧就是一张画面，可用菜单增删帧");
+    },
+    [doc, loadImageCanvas, onCommit],
+  );
+
+  /* -------------------------------------------------------- 智能对象 IO */
+
+  /** 取当前活动的智能对象图层；不是智能对象时给提示并返回 null。 */
+  const smartLayer = useCallback(() => {
+    const l = activeLayer(doc);
+    if (!l || !l.smart) {
+      setToast("当前图层不是智能对象");
+      return null;
+    }
+    return l;
+  }, [doc]);
+
+  /** 把智能对象里存的内嵌 PNG 导出成文件。 */
+  const exportSmartContents = useCallback(async () => {
+    const l = smartLayer();
+    if (!l?.smart) return;
+    const target = await save({
+      defaultPath: `${l.name}.png`,
+      filters: [{ name: "PNG", extensions: ["png"] }],
+    });
+    if (!target) return;
+    const b64 = l.smart.split(",")[1] ?? "";
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    await writeFileBytes(target, bytes);
+    setToast("智能对象内容已导出");
+  }, [smartLayer]);
+
+  /**
+   * 用一张磁盘图片替换智能对象内容。
+   * 传 relink=true 时同时把路径记下来（变成链接型智能对象）。
+   */
+  const replaceSmartContents = useCallback(
+    async (relink: boolean) => {
+      const l = smartLayer();
+      if (!l) return;
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (!picked || Array.isArray(picked)) return;
+      const bytes = await readFileBytes(picked);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+      const mime = /\.jpe?g$/i.test(picked) ? "image/jpeg" : "image/png";
+      const dataUrl = `data:${mime};base64,${btoa(bin)}`;
+      const img = await decodeImage(bytes, mime);
+      const surface = createSurface(doc.width, doc.height);
+      mustCtx(surface).drawImage(img, 0, 0, doc.width, doc.height);
+      onCommit(
+        updateLayer(doc, l.id, {
+          smart: dataUrl,
+          surface,
+          ...(relink ? { smartPath: picked } : {}),
+        }),
+        relink ? "链接到文件" : "替换智能对象内容",
+      );
+      setToast(relink ? "已链接到所选文件" : "智能对象内容已替换");
+    },
+    [doc, onCommit, smartLayer],
+  );
+
+  /** 从链接路径重新读取内容（更新修改过的内容）。 */
+  const refreshLinked = useCallback(
+    async (all: boolean) => {
+      const targets = all
+        ? doc.layers.filter((l) => l.smart && l.smartPath)
+        : [activeLayer(doc)].filter((l): l is NonNullable<typeof l> => Boolean(l?.smart && l.smartPath));
+      if (targets.length === 0) {
+        setToast(all ? "文档里没有链接型智能对象" : "当前图层不是链接型智能对象");
+        return;
+      }
+      let next = doc;
+      let n = 0;
+      for (const l of targets) {
+        if (!l.smartPath) continue;
+        try {
+          const bytes = await readFileBytes(l.smartPath);
+          let bin = "";
+          for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+          const mime = /\.jpe?g$/i.test(l.smartPath) ? "image/jpeg" : "image/png";
+          const dataUrl = `data:${mime};base64,${btoa(bin)}`;
+          const img = await decodeImage(bytes, mime);
+          const surface = createSurface(doc.width, doc.height);
+          mustCtx(surface).drawImage(img, 0, 0, doc.width, doc.height);
+          next = updateLayer(next, l.id, { smart: dataUrl, surface });
+          n += 1;
+        } catch {
+          /* 单个文件读不到就跳过 */
+        }
+      }
+      if (n === 0) {
+        setToast("链接的文件都读不到");
+        return;
+      }
+      onCommit(next, all ? "更新所有智能对象" : "更新智能对象内容");
+      setToast(`已从磁盘更新 ${n} 个智能对象`);
+    },
+    [doc, onCommit],
   );
 
   /** 预设导出：把画笔默认参数与自定义画笔写成一份 JSON。 */
@@ -3079,6 +3548,10 @@ export default function EditorShell({
 
   /** 「窗口 > 面板」开关：右侧坞由菜单直接控制。 */
   const toggleDock = useCallback((id: DockGroupId) => {
+    if (prefs.workspaceLocked) {
+      setToast("工作区已锁定（窗口 > 工作区 > 锁定工作区 可解锁）");
+      return;
+    }
     setDockOpen((v) => ({ ...v, [id]: !v[id] }));
   }, []);
 
@@ -3534,6 +4007,1687 @@ export default function EditorShell({
           return { run: () => { setProfilePick(doc.profile ?? "srgb"); setProfileDialog("convert"); } };
         case "edit.menus":
           return { run: () => setMenusDialog(true) };
+
+        /* ---------------------- 第十三批：Layer 组（排列 / 合并 / 堆栈） */
+        case "layer.align.topEdges":
+          return { run: () => onCommit(alignLayers(doc, "top" as AlignEdge), "对齐图层") };
+        case "layer.align.verticalCenters":
+          return { run: () => onCommit(alignLayers(doc, "verticalCenters" as AlignEdge), "对齐图层") };
+        case "layer.align.bottomEdges":
+          return { run: () => onCommit(alignLayers(doc, "bottom" as AlignEdge), "对齐图层") };
+        case "layer.align.leftEdges":
+          return { run: () => onCommit(alignLayers(doc, "left" as AlignEdge), "对齐图层") };
+        case "layer.align.horizontalCenters":
+          return { run: () => onCommit(alignLayers(doc, "horizontalCenters" as AlignEdge), "对齐图层") };
+        case "layer.align.rightEdges":
+          return { run: () => onCommit(alignLayers(doc, "right" as AlignEdge), "对齐图层") };
+        case "layer.distribute.topEdges":
+          return { run: () => onCommit(distributeLayers(doc, "topEdges" as DistributeEdge), "分布图层") };
+        case "layer.distribute.verticalCenters":
+          return { run: () => onCommit(distributeLayers(doc, "verticalCenters" as DistributeEdge), "分布图层") };
+        case "layer.distribute.bottomEdges":
+          return { run: () => onCommit(distributeLayers(doc, "bottomEdges" as DistributeEdge), "分布图层") };
+        case "layer.distribute.leftEdges":
+          return { run: () => onCommit(distributeLayers(doc, "leftEdges" as DistributeEdge), "分布图层") };
+        case "layer.distribute.horizontalCenters":
+          return { run: () => onCommit(distributeLayers(doc, "horizontalCenters" as DistributeEdge), "分布图层") };
+        case "layer.distribute.rightEdges":
+          return { run: () => onCommit(distributeLayers(doc, "rightEdges" as DistributeEdge), "分布图层") };
+        case "layer.distribute.horizontally":
+          return { run: () => onCommit(distributeLayers(doc, "horizontally" as DistributeEdge), "分布图层") };
+        case "layer.distribute.vertically":
+          return { run: () => onCommit(distributeLayers(doc, "vertically" as DistributeEdge), "分布图层") };
+        case "layer.combineShapes.unite":
+          return { run: () => onCommit(combineShapes(doc, "unite" as CombineOp), "合并形状") };
+        case "layer.combineShapes.subtractFrontShape":
+          return { run: () => onCommit(combineShapes(doc, "subtract" as CombineOp), "减去顶层形状") };
+        case "layer.combineShapes.intersectShapeAreas":
+          return { run: () => onCommit(combineShapes(doc, "intersect" as CombineOp), "与形状区域相交") };
+        case "layer.combineShapes.excludeOverlappingShapes":
+          return { run: () => onCommit(combineShapes(doc, "exclude" as CombineOp), "排除重叠形状") };
+        case "layer.combineShapes.mergeShapeComponents":
+          return { run: () => onCommit(combineShapes(doc, "unite"), "合并形状组件") };
+        case "layer.smartObjects.stackMode.entropy":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "entropy" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：熵");
+            },
+          };
+        case "layer.smartObjects.stackMode.kurtosis":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "kurtosis" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：峰度");
+            },
+          };
+        case "layer.smartObjects.stackMode.maximum":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "maximum" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：最大值");
+            },
+          };
+        case "layer.smartObjects.stackMode.mean":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "mean" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：平均值");
+            },
+          };
+        case "layer.smartObjects.stackMode.median":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "median" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：中间值");
+            },
+          };
+        case "layer.smartObjects.stackMode.minimum":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "minimum" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：最小值");
+            },
+          };
+        case "layer.smartObjects.stackMode.range":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "range" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：范围");
+            },
+          };
+        case "layer.smartObjects.stackMode.skewness":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "skewness" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：偏度");
+            },
+          };
+        case "layer.smartObjects.stackMode.standardDeviation":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "standardDeviation" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：标准偏差");
+            },
+          };
+        case "layer.smartObjects.stackMode.summation":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "summation" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：总和");
+            },
+          };
+        case "layer.smartObjects.stackMode.variance":
+          return {
+            run: () => {
+              const next = applyStackModeToDoc(doc, "variance" as StackMode, applyStackMode);
+              if (next === doc) {
+                setToast("堆栈模式至少需要两层可见像素层（或先多选图层）");
+                return;
+              }
+              onCommit(next, "堆栈模式：方差");
+            },
+          };
+
+        /* ---------- 第十四批：栅格化 / 蒙版 / 链接 / 内容选项 ---------- */
+        case "layer.rasterize.type":
+          return {
+            run: () => {
+              const t = activeTextLayer(doc);
+              if (!t) { setToast("当前图层不是文本层"); return; }
+              onCommit(rasterizeTextLayer(doc, t.id), "栅格化文字");
+            },
+          };
+        case "layer.rasterize.layerStyle":
+          return {
+            run: () => {
+              const next = bakeStyledLayer(doc);
+              if (next === doc) { setToast("当前图层没有图层样式"); return; }
+              onCommit(next, "栅格化图层样式");
+            },
+          };
+        case "layer.rasterize.layer":
+          return {
+            run: () => {
+              let next = bakeStyledLayer(doc);
+              const t = activeTextLayer(next);
+              if (t) next = rasterizeTextLayer(next, t.id);
+              const cur0 = activeLayer(next);
+              if (cur0 && cur0.mask) next = applyMask(next);
+              if (next === doc) { setToast("这一层已经没有可栅格化的内容"); return; }
+              onCommit(next, "栅格化图层");
+            },
+          };
+        case "layer.rasterize.allLayers":
+          return { run: () => onCommit(flattenImage(doc), "栅格化所有图层") };
+        case "layer.rasterize.shape":
+          return { run: () => setToast("Strata 的形状本来就画在像素层上，已经是栅格状态") };
+        case "layer.rasterize.fillContent":
+          return { run: () => setToast("填充图层本身就是像素，没有需要栅格化的内容") };
+        case "layer.rasterize.vectorMask":
+          return { run: () => setToast("蒙版本身就是像素蒙版，已经是栅格状态") };
+        case "layer.rasterize.video":
+          return { run: () => setToast("当前层不是视频层") };
+        case "layer.vectorMask.revealAll":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (cur0?.mask) {
+                const m = createSurface(doc.width, doc.height);
+                const mc = mustCtx(m);
+                mc.fillStyle = "#ffffff";
+                mc.fillRect(0, 0, doc.width, doc.height);
+                onCommit(updateLayer(doc, cur0.id, { mask: m, maskActive: true }), "蒙版显示全部");
+                return;
+              }
+              onCommit(addMask(doc, "reveal"), "添加蒙版（显示全部）");
+            },
+          };
+        case "layer.vectorMask.hideAll":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (cur0?.mask) {
+                const m = createSurface(doc.width, doc.height);
+                onCommit(updateLayer(doc, cur0.id, { mask: m, maskActive: true }), "蒙版隐藏全部");
+                return;
+              }
+              onCommit(addMask(doc, "hide"), "添加蒙版（隐藏全部）");
+            },
+          };
+        case "layer.vectorMask.currentPath":
+          return { run: () => onCommit(addMaskFromSelection(doc), "由选区建立蒙版") };
+        case "layer.vectorMask.delete":
+          return { run: () => onCommit(removeMask(doc), "删除蒙版") };
+        case "layer.vectorMask.enabled":
+          return {
+            run: () => onCommit(toggleMaskActive(doc), "切换蒙版启用"),
+            checked: activeLayer(doc)?.maskActive !== false,
+          };
+        case "layer.vectorMask.linked":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (!cur0) return;
+              const nextLinked = cur0.maskLinked === false;
+              onCommit(updateLayer(doc, cur0.id, { maskLinked: nextLinked }), "矢量蒙版链接");
+              setToast(nextLinked ? "蒙版已与内容链接" : "蒙版已取消链接（移动内容时蒙版不动）");
+            },
+            checked: activeLayer(doc)?.maskLinked !== false,
+          };
+        case "layer.layerMask.linked":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (!cur0) return;
+              const nextLinked = cur0.maskLinked === false;
+              onCommit(updateLayer(doc, cur0.id, { maskLinked: nextLinked }), "蒙版链接");
+              setToast(nextLinked ? "蒙版已与内容链接" : "蒙版已取消链接（移动内容时蒙版不动）");
+            },
+            checked: activeLayer(doc)?.maskLinked !== false,
+          };
+        case "layer.maskAllObjects":
+          return {
+            run: () => {
+              const white = createSurface(doc.width, doc.height);
+              const wc = mustCtx(white);
+              wc.fillStyle = "#ffffff";
+              wc.fillRect(0, 0, doc.width, doc.height);
+              let n = 0;
+              const layers = doc.layers.map((l) => {
+                if (l.kind !== "pixel" || l.mask || !l.visible) return l;
+                n += 1;
+                return { ...l, mask: cloneSurface(white), maskActive: true };
+              });
+              if (n === 0) { setToast("可见像素层都已经有蒙版了"); return; }
+              onCommit({ ...doc, layers, dirty: true }, "为所有对象添加蒙版");
+              setToast(`已给 ${n} 个图层加上蒙版`);
+            },
+          };
+        case "layer.linkLayers":
+          return {
+            run: () => {
+              const ids = doc.selectedLayerIds ?? [doc.activeLayerId];
+              if (ids.length < 2) { setToast("先多选两个以上图层再链接"); return; }
+              const linkId = `lnk-${Date.now().toString(36)}`;
+              const layers = doc.layers.map((l) =>
+                ids.includes(l.id) ? { ...l, linkId } : l,
+              );
+              onCommit({ ...doc, layers, dirty: true }, "链接图层");
+              setToast(`已链接 ${ids.length} 个图层`);
+            },
+          };
+        case "layer.selectLinkedLayers":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (!cur0?.linkId) { setToast("当前图层没有链接其他图层"); return; }
+              const ids = doc.layers.filter((l) => l.linkId === cur0.linkId).map((l) => l.id);
+              onCommit(setLayerSelection(doc, ids), "选择链接图层");
+            },
+          };
+        case "layer.layerContentOptions":
+          return {
+            run: () => {
+              const t = activeTextLayer(doc);
+              if (t) { setTextPanel("character"); return; }
+              setToast("这一层没有可编辑的内容选项（文本层会打开文字面板）");
+            },
+          };
+
+        /* ---------------------- 第十五批：智能对象 IO ---------------------- */
+        case "layer.smartObjects.exportContents":
+          return { run: () => void exportSmartContents() };
+        case "layer.smartObjects.replaceContents":
+          return { run: () => void replaceSmartContents(false) };
+        case "layer.smartObjects.relinkToFile":
+        case "layer.smartObjects.convertToLinked":
+          return {
+            run: () => {
+              const l = smartLayer();
+              if (!l) return;
+              if (l.smartPath) {
+                setToast(`已经是链接型智能对象：${l.smartPath}`);
+                return;
+              }
+              void replaceSmartContents(true);
+            },
+          };
+        case "layer.smartObjects.convertToEmbedded":
+          return {
+            run: () => {
+              const l = smartLayer();
+              if (!l) return;
+              if (!l.smartPath) { setToast("当前已是内嵌型智能对象"); return; }
+              onCommit(updateLayer(doc, l.id, { smartPath: undefined }), "转换为内嵌");
+              setToast("已转为内嵌（内容固定下来，不再跟随磁盘文件）");
+            },
+          };
+        case "layer.smartObjects.updateModifiedContent":
+          return { run: () => void refreshLinked(false) };
+        case "layer.smartObjects.updateAllModifiedContent":
+          return { run: () => void refreshLinked(true) };
+        case "layer.smartObjects.revealInFinder":
+          return {
+            run: () => {
+              const l = smartLayer();
+              if (!l) return;
+              if (!l.smartPath) { setToast("内嵌型智能对象没有磁盘文件可定位"); return; }
+              const dir = l.smartPath.replace(/[\\/][^\\/]+$/, "");
+              void openUrl(`file:///${dir.replace(/\\/g, "/")}`);
+            },
+          };
+        case "layer.smartObjects.editContents":
+          return {
+            run: () => {
+              const l = smartLayer();
+              if (!l?.smart) return;
+              // 没有独立窗口模型：把内容摊成一层可编辑副本，改完可用「替换内容」回写
+              onCommit(placeRaster(doc, `${l.name} 内容副本`, l.surface), "编辑智能对象内容");
+              setToast("已把内容摊成可编辑图层；改完用「替换内容」写回智能对象");
+            },
+          };
+        case "layer.smartObjects.warp":
+          return {
+            run: () => {
+              const l = smartLayer();
+              if (!l) return;
+              setQuadDialog({ mode: "warp", v: ["0", "0", "0", "0", "0", "0", "0", "0"] });
+            },
+          };
+
+        /* ---------------------- 第十六批：图层样式三项 ---------------------- */
+        case "layer.layerStyle.blendingOptions":
+          return { run: () => setStyleDialog("blend") };
+        case "layer.layerStyle.globalLight":
+          return { run: () => setStyleDialog("light") };
+        case "layer.layerStyle.scaleEffects":
+          return { run: () => setStyleDialog("scale") };
+        case "layer.smartFilter.blendingOptions":
+          return { run: () => setStyleDialog("blend") };
+
+        /* ---------------------- 第十七批：视频图层（帧序列） ---------------- */
+        case "layer.videoLayers.newBlankVideoLayer":
+          return { run: () => void newVideoLayer(false) };
+        case "layer.videoLayers.newVideoLayerFromFile":
+          return { run: () => void newVideoLayer(true) };
+        case "layer.videoLayers.insertBlankFrame":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              const next = insertBlankFrame(doc, v.id);
+              const after = next.layers.find((l) => l.id === v.id);
+              onCommit(next, "插入空白帧");
+              if (after?.video) setToast(videoSummary(after as never));
+            },
+          };
+        case "layer.videoLayers.duplicateFrame":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              onCommit(duplicateFrame(doc, v.id), "复制帧");
+            },
+          };
+        case "layer.videoLayers.deleteFrame":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              const next = deleteFrame(doc, v.id);
+              if (next === doc) { setToast("只剩一帧，删不了"); return; }
+              onCommit(next, "删除帧");
+            },
+          };
+        case "layer.videoLayers.replaceFootage":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              void (async () => {
+                const picked = await open({
+                  multiple: false,
+                  filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+                });
+                if (!picked || Array.isArray(picked)) return;
+                const canvas = await loadImageCanvas(picked);
+                if (!canvas) return;
+                onCommit(replaceFootage(doc, v.id, canvas), "替换素材");
+              })();
+            },
+          };
+        case "layer.videoLayers.interpretFootage":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              const raw = window.prompt("帧率（fps，1-60）", String(v.video.fps));
+              if (raw === null) return;
+              const fps = Number.parseFloat(raw);
+              if (!Number.isFinite(fps) || fps <= 0) { setToast("请输入有效帧率"); return; }
+              onCommit(setFrameRate(doc, v.id, fps), "解释素材帧率");
+            },
+          };
+        case "layer.videoLayers.showAlteredVideo":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              const on = !v.video.showAltered;
+              onCommit(setShowAltered(doc, v.id, on), on ? "显示改动后画面" : "显示原始画面");
+            },
+            checked: activeVideoLayer(doc)?.video.showAltered === true,
+          };
+        case "layer.videoLayers.restoreFrame":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              onCommit(restoreFrame(doc, v.id), "还原帧");
+            },
+          };
+        case "layer.videoLayers.restoreAllFrames":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              onCommit(restoreAllFrames(doc, v.id), "还原所有帧");
+            },
+          };
+        case "layer.videoLayers.reloadFrame":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              if (!v.video.footagePath) { setToast("这一层没有磁盘素材可重载"); return; }
+              void (async () => {
+                const canvas = await loadImageCanvas(v.video.footagePath as string);
+                if (!canvas) return;
+                onCommit(reloadFrame(doc, v.id, canvas), "重载帧");
+              })();
+            },
+          };
+        case "layer.videoLayers.rasterize":
+          return {
+            run: () => {
+              const v = activeVideoLayer(doc);
+              if (!v) { setToast("当前图层不是视频层"); return; }
+              onCommit(rasterizeVideoLayer(doc, v.id), "栅格化视频图层");
+            },
+          };
+
+        /* ---------------------- 第十八批：智能滤镜 ------------------------- */
+        case "layer.smartFilter.clearSmartFilters":
+          return {
+            run: () => {
+              const next = clearSmartFilters(doc);
+              if (next === doc) { setToast("当前图层没有智能滤镜"); return; }
+              onCommit(next, "清除智能滤镜");
+            },
+          };
+        case "layer.smartFilter.disableSmartFilters":
+          return {
+            run: () => {
+              const next = toggleSmartFilters(doc);
+              if (next === doc) { setToast("当前图层没有智能滤镜（先在智能对象上应用滤镜）"); return; }
+              onCommit(next, "停用/启用智能滤镜");
+            },
+          };
+        case "layer.smartFilter.deleteFilterMask":
+          return {
+            run: () => {
+              const next = deleteFilterMask(doc);
+              if (next === doc) { setToast("没有智能滤镜蒙版（应用滤镜时先框一个选区就会生成）"); return; }
+              onCommit(next, "删除滤镜蒙版");
+            },
+          };
+        case "layer.smartFilter.disableFilterMask":
+          return {
+            run: () => {
+              const next = toggleFilterMask(doc);
+              if (next === doc) { setToast("没有智能滤镜蒙版"); return; }
+              onCommit(next, "停用/启用滤镜蒙版");
+            },
+            checked: activeLayer(doc)?.smartFilterMaskActive !== false,
+          };
+
+        /* ---------------------- 第十九批：画板 / 切片 ----------------------- */
+        case "layer.new.artboard":
+          return {
+            run: () => {
+              const next = newArtboard(doc, "blank");
+              if (next === doc) { setToast("先选中一个图层或组"); return; }
+              onCommit(next, "新建画板");
+            },
+          };
+        case "layer.new.artboardFromGroup":
+          return {
+            run: () => {
+              const next = newArtboard(doc, "fromGroup");
+              if (next === doc) { setToast("请先选中一个组"); return; }
+              onCommit(next, "由组建立画板");
+            },
+          };
+        case "layer.new.artboardFromLayers":
+          return {
+            run: () => {
+              const next = newArtboard(doc, "fromLayers");
+              if (next === doc) { setToast("先选中图层（可多选）"); return; }
+              onCommit(next, "由图层建立画板");
+            },
+          };
+        case "layer.new.frameFromLayers":
+          return {
+            run: () => {
+              const next = newArtboard(doc, "fromLayers");
+              if (next === doc) { setToast("先选中图层（可多选）"); return; }
+              onCommit(next, "由图层建立边框");
+            },
+          };
+        case "layer.newLayerBasedSlice":
+          return {
+            run: () => {
+              const res = sliceFromLayer(doc);
+              if (!res) { setToast("当前图层没有可切的像素内容"); return; }
+              onCommit(res.doc, "基于图层新建切片");
+              setToast(`已建切片「${res.slice.name}」（${Math.round(res.slice.w)}×${Math.round(res.slice.h)}）`);
+            },
+          };
+
+        /* ---------------------- 第二十四批：File 组（批处理/置入/导出）------- */
+        case "file.placeEmbedded":
+          return { run: () => void placeImage(false) };
+        case "file.placeLinked":
+          return { run: () => void placeImage(true) };
+        case "file.export.layersToFiles":
+          return { run: () => void exportLayersToFiles() };
+        case "file.export.exportPreferences":
+          return {
+            run: () => {
+              setPrefsPage("export");
+              setPrefsOpen(true);
+            },
+          };
+        case "file.scripts.deleteAllEmptyLayers":
+          return {
+            run: () => {
+              const res = deleteEmptyLayers(doc);
+              if (res.removed === 0) { setToast("没有空图层"); return; }
+              onCommit(res.doc, "删除所有空图层");
+              setToast(`已删除 ${res.removed} 个空图层`);
+            },
+          };
+        case "file.scripts.flattenAllLayerEffects":
+          return {
+            run: () => {
+              const res = flattenAllStyles(doc);
+              if (res.count === 0) { setToast("没有带样式的图层"); return; }
+              onCommit(res.doc, "拼合所有图层效果");
+              setToast(`已拼合 ${res.count} 个图层的效果`);
+            },
+          };
+        case "file.scripts.flattenAllMasks":
+          return {
+            run: () => {
+              const res = flattenAllMasks(doc);
+              if (res.count === 0) { setToast("没有带蒙版的图层"); return; }
+              onCommit(res.doc, "拼合所有蒙版");
+              setToast(`已拼合 ${res.count} 个图层的蒙版`);
+            },
+          };
+        case "file.automate.fitImage":
+          return {
+            run: () => {
+              const longest = Math.max(doc.width, doc.height);
+              const raw = window.prompt("长边缩放到多少像素（不放大）", String(longest));
+              if (raw === null) return;
+              const v = Number.parseInt(raw, 10);
+              if (!Number.isFinite(v) || v < 1) { setToast("请输入正整数"); return; }
+              const next = fitImage(doc, v);
+              if (next === doc) { setToast("当前已经很小于目标尺寸，保持原样"); return; }
+              onCommit(next, "适配图像");
+              setToast(`已缩放到 ${next.width}×${next.height}`);
+            },
+          };
+        case "file.automate.conditionalModeChange":
+          return {
+            run: () => {
+              setImageOps("indexed");
+            },
+          };
+        case "file.automate.lensCorrection":
+          return { run: () => setFilterFx("filter.lensCorrection") };
+        case "file.fileInfo":
+          return {
+            run: () => setInfoDialog({ title: doc.name, author: "", desc: "" }),
+          };
+        case "file.print":
+        case "file.printOneCopy":
+          return {
+            run: () => {
+              setToast("调用系统打印对话框…");
+              window.print();
+            },
+          };
+        case "window.arrange.consolidateAllToTabs":
+          return {
+            run: () => setToast(`当前 ${historyLabels.length >= 0 ? "所有文档" : ""}都已收在标签页里`),
+          };
+        case "window.arrange.matchZoom":
+        case "window.arrange.matchLocation":
+        case "window.arrange.matchRotation":
+        case "window.arrange.matchAll":
+          return {
+            run: () => {
+              // 把当前视图（缩放 + 平移）同步到所有打开的文档：
+              // Strata 的每个文档各有自己的视图缓存，这里统一刷成当前这份
+              for (const d of docs) views.current.set(d.id, { scale, pan });
+              setToast(`已把当前缩放与位置同步到 ${docs.length} 个文档`);
+            },
+          };
+
+        /* ---------------------- 第二十三批：Window 面板 --------------------- */
+        case "window.panel.tools":
+          return { run: () => setShowToolRail((v) => !v), checked: showToolRail };
+        case "window.panel.options":
+          return { run: () => setShowOptionsBar((v) => !v), checked: showOptionsBar };
+        case "window.panel.layers":
+          return {
+            run: () => setDockOpen((d) => ({ ...d, layers: true })),
+            checked: dockOpen.layers,
+          };
+        case "window.panel.history":
+          return {
+            run: () => setDockOpen((d) => ({ ...d, history: true })),
+            checked: dockOpen.history,
+          };
+        case "window.panel.channels":
+          return {
+            run: () => {
+              setDockOpen((d) => ({ ...d, layers: true }));
+              setToast("通道页签在右侧「图层」面板顶部（图层 / 通道 / 路径）");
+            },
+          };
+        case "window.panel.brushes":
+          return { run: () => setBrushPanelOpen(true), checked: brushPanelOpen };
+        case "window.panel.character":
+          return { run: () => setTextPanel("character") };
+        case "window.panel.paragraph":
+          return { run: () => setTextPanel("paragraph") };
+        case "window.panel.glyphs":
+          return { run: () => setTextPanel("glyphs") };
+        case "window.panel.characterStyles":
+          return { run: () => setTextPanel("charStyles") };
+        case "window.panel.paragraphStyles":
+          return { run: () => setTextPanel("paraStyles") };
+        case "window.panel.adjustments":
+          return { run: () => setUtilPanel("adjustments"), checked: utilPanel === "adjustments" };
+        case "window.panel.swatches":
+          return { run: () => setUtilPanel("swatches"), checked: utilPanel === "swatches" };
+        case "window.panel.styles":
+          return { run: () => setUtilPanel("styles"), checked: utilPanel === "styles" };
+        case "window.panel.patterns":
+          return { run: () => setUtilPanel("patterns"), checked: utilPanel === "patterns" };
+        case "window.panel.gradients":
+          return { run: () => setUtilPanel("gradients"), checked: utilPanel === "gradients" };
+        case "window.panel.shapes":
+          return { run: () => setUtilPanel("shapes"), checked: utilPanel === "shapes" };
+        case "window.panel.info":
+          return { run: () => setUtilPanel("info"), checked: utilPanel === "info" };
+        case "window.panel.measurementLog":
+          return { run: () => setUtilPanel("measurementLog"), checked: utilPanel === "measurementLog" };
+        case "window.panel.notes":
+          return { run: () => setUtilPanel("notes"), checked: utilPanel === "notes" };
+        case "window.panel.layerComps":
+          return { run: () => setUtilPanel("layerComps"), checked: utilPanel === "layerComps" };
+        case "window.panel.timeline":
+          return { run: () => setUtilPanel("timeline"), checked: utilPanel === "timeline" };
+        case "window.panel.modifierKeys":
+          return { run: () => setUtilPanel("modifierKeys"), checked: utilPanel === "modifierKeys" };
+        case "window.panel.toolPresets":
+          return { run: () => setUtilPanel("toolPresets"), checked: utilPanel === "toolPresets" };
+        case "window.panel.paths":
+          return { run: () => setUtilPanel("paths"), checked: utilPanel === "paths" };
+        case "window.panel.actions":
+          return { run: () => setUtilPanel("actions"), checked: utilPanel === "actions" };
+
+        /* ---------------------- 第二十二批：Window 工作区 ------------------- */
+        case "window.workspace.graphicAndWeb":
+          return {
+            run: () => {
+              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
+              setPrefs({ activeWorkspace: "平面与 Web" });
+              setToast("工作区：平面与 Web（颜色 + 属性 + 图层）");
+            },
+            checked: prefs.activeWorkspace === "平面与 Web",
+          };
+        case "window.workspace.motion":
+          return {
+            run: () => {
+              setDockOpen({ props: false, color: false, layers: true, history: true, navigator: false, histogram: false, scopes: true });
+              setPrefs({ activeWorkspace: "动效" });
+              setToast("工作区：动效（图层 + 历史 + 示波器）");
+            },
+            checked: prefs.activeWorkspace === "动效",
+          };
+        case "window.workspace.newWorkspace":
+          return {
+            run: () => {
+              const raw = window.prompt("新工作区名称", `工作区 ${prefs.workspaces.length + 1}`);
+              if (raw === null) return;
+              const name = raw.trim();
+              if (!name) { setToast("名字不能为空"); return; }
+              const rest = prefs.workspaces.filter((w) => w.name !== name);
+              setPrefs({
+                workspaces: [...rest, { name, dock: { ...dockOpen } }],
+                activeWorkspace: name,
+              });
+              setToast(`已保存工作区「${name}」（当前面板布局）`);
+            },
+          };
+        case "window.workspace.deleteWorkspace":
+          return {
+            run: () => {
+              const name = prefs.activeWorkspace;
+              if (!name || !prefs.workspaces.some((w) => w.name === name)) {
+                setToast("当前不是命名工作区，没有可删除的");
+                return;
+              }
+              setPrefs({
+                workspaces: prefs.workspaces.filter((w) => w.name !== name),
+                activeWorkspace: undefined,
+              });
+              setToast(`已删除工作区「${name}」`);
+            },
+          };
+        case "window.workspace.lockWorkspace":
+          return {
+            run: () => {
+              const on = !prefs.workspaceLocked;
+              setPrefs({ workspaceLocked: on });
+              setToast(on ? "工作区已锁定：面板开关被冻结" : "工作区已解锁");
+            },
+            checked: prefs.workspaceLocked,
+          };
+
+        /* ---------------------- 第二十一批：Window 主题 --------------------- */
+        case "window.theme.system":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.system");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.system");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.pro":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.pro");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.pro");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.proMedium":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proMedium");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proMedium");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.proLightGray":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proLightGray");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proLightGray");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.proLight":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proLight");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.proLight");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.studio":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.studio");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.studio");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.studioLight":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.studioLight");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.studioLight");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.classic":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.classic");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.classic");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.solarizedDark":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.solarizedDark");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.solarizedDark");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.adwaita":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.adwaita");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.adwaita");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.adwaitaDark":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.adwaitaDark");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.adwaitaDark");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.breezeLight":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.breezeLight");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.breezeLight");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.breezeDark":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.breezeDark");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.breezeDark");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.softLight":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.softLight");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.softLight");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+        case "window.theme.softDark":
+          return {
+            run: () => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.softDark");
+              if (!def) return;
+              onSetThemeId(def.id);
+              setToast(`主题：${def.label}`);
+            },
+            checked: (() => {
+              const def = THEMES.find((t) => t.menuId === "window.theme.softDark");
+              return Boolean(def && def.id === themeSkin);
+            })(),
+          };
+
+        case "view.show.notes":
+          return {
+            run: () => {
+              if (!doc.note) { setToast("这份文档还没有备注（窗口 > 面板 > 注释 里写）"); return; }
+              setShowNotes((v) => !v);
+            },
+            checked: showNotes,
+          };
+        case "view.show.targetPath":
+          return {
+            run: () => {
+              if (!doc.workPath) { setToast("还没有工作路径（文字 > 创建工作路径 会生成）"); return; }
+              setShowTargetPath((v) => !v);
+            },
+            checked: showTargetPath,
+          };
+        case "view.show.mesh":
+          return { run: () => setShowWarpMesh((v) => !v), checked: showWarpMesh };
+        case "view.show.editPins":
+          return { run: () => setShowWarpPins((v) => !v), checked: showWarpPins };
+        case "view.show.showExtrasOptions":
+          return { run: () => setExtrasDialog(true) };
+        case "view.clearSelectedArtboardGuides":
+          return {
+            run: () => {
+              if (guides.x.length === 0 && guides.y.length === 0) { setToast("没有参考线可清除"); return; }
+              setGuides({ x: [], y: [] });
+              setToast(`已清除 ${guides.x.length + guides.y.length} 条参考线`);
+            },
+          };
+        case "view.patternPreview":
+          return { run: () => setPatternPreviewOn((v) => !v), checked: patternPreviewOn };
+
+        /* ---------------------- 第二十五批：View 校样 ------------------------ */
+        case "view.proofSetup.workingCmyk":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "workingCmyk" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：工作 CMYK");
+            },
+            checked: proofActive && proofSet.kind === "workingCmyk",
+          };
+        case "view.proofSetup.workingCyanPlate":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "plateCyan" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：青色版");
+            },
+            checked: proofActive && proofSet.kind === "plateCyan",
+          };
+        case "view.proofSetup.workingMagentaPlate":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "plateMagenta" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：品红版");
+            },
+            checked: proofActive && proofSet.kind === "plateMagenta",
+          };
+        case "view.proofSetup.workingYellowPlate":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "plateYellow" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：黄色版");
+            },
+            checked: proofActive && proofSet.kind === "plateYellow",
+          };
+        case "view.proofSetup.workingBlackPlate":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "plateBlack" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：黑色版");
+            },
+            checked: proofActive && proofSet.kind === "plateBlack",
+          };
+        case "view.proofSetup.workingCmyPlate":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "plateCmy" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：CMY 合版");
+            },
+            checked: proofActive && proofSet.kind === "plateCmy",
+          };
+        case "view.proofSetup.legacyMacintoshRgb":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "legacyMacintoshRgb" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：旧版 Macintosh RGB");
+            },
+            checked: proofActive && proofSet.kind === "legacyMacintoshRgb",
+          };
+        case "view.proofSetup.internetStandardRgb":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "internetStandardRgb" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：Internet 标准 RGB（sRGB 管线下等价于不改变）");
+            },
+            checked: proofActive && proofSet.kind === "internetStandardRgb",
+          };
+        case "view.proofSetup.monitorRgb":
+          return {
+            run: () => {
+              setProofSet((p) => ({ ...p, kind: "monitorRgb" as ProofKind }));
+              setProofActive(true);
+              setToast("校样：监视器 RGB（sRGB 管线下等价于不改变）");
+            },
+            checked: proofActive && proofSet.kind === "monitorRgb",
+          };
+        case "view.proofSetup.custom":
+          return {
+            run: () => {
+              setProfileDialog("settings");
+              setToast("选一个目标配置文件，再用「校样颜色」打开预览");
+            },
+          };
+        case "view.proofColors":
+          return {
+            run: () => {
+              if (proofSet.kind === "none" && !preview32.on) {
+                setToast("先在「视图 > 校样设置」里选一个校样条件");
+                return;
+              }
+              const on = !proofActive;
+              setProofActive(on);
+              setToast(on ? "校样颜色：开" : "校样颜色：关");
+            },
+            checked: proofActive,
+          };
+        case "view.gamutWarning":
+          return {
+            run: () => {
+              const on = !gamutOn;
+              setGamutOn(on);
+              setToast(on ? "色域警告：超出 CMYK 色域的像素已标出" : "色域警告：关");
+            },
+            checked: gamutOn,
+          };
+        case "view.thirtyTwoBitPreviewOptions":
+          return { run: () => setPreview32Dialog(true) };
+
+        /* ---------------------- 第二十批：View 组 -------------------------- */
+        case "view.pixelAspectRatio.square":
+          return {
+            run: () => {
+              setPixelAspect(1);
+              setAspectCorrection(true);
+              setToast("像素长宽比：方形像素 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1) < 0.001,
+          };
+        case "view.pixelAspectRatio.d1DvNtsc":
+          return {
+            run: () => {
+              setPixelAspect(0.91);
+              setAspectCorrection(true);
+              setToast("像素长宽比：D1/DV NTSC —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 0.91) < 0.001,
+          };
+        case "view.pixelAspectRatio.d1DvPal":
+          return {
+            run: () => {
+              setPixelAspect(1.09);
+              setAspectCorrection(true);
+              setToast("像素长宽比：D1/DV PAL —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1.09) < 0.001,
+          };
+        case "view.pixelAspectRatio.d1DvNtscWidescreen":
+          return {
+            run: () => {
+              setPixelAspect(1.21);
+              setAspectCorrection(true);
+              setToast("像素长宽比：D1/DV NTSC 宽屏 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1.21) < 0.001,
+          };
+        case "view.pixelAspectRatio.hdv1080":
+          return {
+            run: () => {
+              setPixelAspect(1.33);
+              setAspectCorrection(true);
+              setToast("像素长宽比：HDV 1080 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1.33) < 0.001,
+          };
+        case "view.pixelAspectRatio.d1DvPalWidescreen":
+          return {
+            run: () => {
+              setPixelAspect(1.46);
+              setAspectCorrection(true);
+              setToast("像素长宽比：D1/DV PAL 宽屏 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1.46) < 0.001,
+          };
+        case "view.pixelAspectRatio.dvcproHd1080":
+          return {
+            run: () => {
+              setPixelAspect(1.5);
+              setAspectCorrection(true);
+              setToast("像素长宽比：DVCPRO HD 1080 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 1.5) < 0.001,
+          };
+        case "view.pixelAspectRatio.anamorphic2To1":
+          return {
+            run: () => {
+              setPixelAspect(2);
+              setAspectCorrection(true);
+              setToast("像素长宽比：2:1 变形 —— 只影响显示，像素本身不变");
+            },
+            checked: aspectCorrection && Math.abs(pixelAspect - 2) < 0.001,
+          };
+        case "view.pixelAspectRatio.custom":
+          return {
+            run: () => {
+              const raw = window.prompt("自定义像素长宽比（0.5–4）", String(pixelAspect));
+              if (raw === null) return;
+              const v = Number.parseFloat(raw);
+              if (!Number.isFinite(v) || v < 0.5 || v > 4) { setToast("请输入 0.5–4 之间的数值"); return; }
+              setPixelAspect(v);
+              setAspectCorrection(true);
+            },
+          };
+        case "view.pixelAspectRatioCorrection":
+          return {
+            run: () => {
+              const on = !aspectCorrection;
+              setAspectCorrection(on);
+              setToast(on ? `已按 ${pixelAspect}:1 校正显示` : "已关闭长宽比校正（按方形像素显示）");
+            },
+            checked: aspectCorrection,
+          };
+        case "view.screenMode.standard":
+          return {
+            run: () => void applyScreenMode("standard"),
+            checked: screenMode === "standard",
+          };
+        case "view.screenMode.fullScreenWithMenuBar":
+          return {
+            run: () => void applyScreenMode("fullscreenMenu"),
+            checked: screenMode === "fullscreenMenu",
+          };
+        case "view.screenMode.fullScreen":
+          return {
+            run: () => void applyScreenMode("fullscreen"),
+            checked: screenMode === "fullscreen",
+          };
+        case "view.show.layerEdges":
+          return { run: () => setShowLayerEdges((v) => !v), checked: showLayerEdges };
+        case "view.show.selectionEdges":
+          return { run: () => setExtras((v) => !v), checked: extras };
+        case "view.show.canvasGuides":
+        case "view.show.artboardGuides":
+          return { run: () => setShowGuides((v) => !v), checked: showGuides };
+        case "view.show.count":
+          return {
+            run: () => setShowCountersOverlay((v) => !v),
+            checked: showCountersOverlay,
+          };
+        case "view.show.slices":
+          return { run: () => setShowSlicesOverlay((v) => !v), checked: showSlicesOverlay };
+        case "view.show.brushPreview":
+          return { run: () => setShowGuides((v) => !v), checked: showGuides };
+        case "view.fitLayersOnScreen":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              const b = cur0 && cur0.kind === "pixel" ? contentBounds(cur0.surface) : null;
+              if (!b) { setToast("当前图层没有内容"); return; }
+              const vp = viewportRef.current;
+              if (!vp) return;
+              const k = Math.min((vp.clientWidth - 48) / b.w, (vp.clientHeight - 48) / b.h);
+              zoom(Math.max(MIN_SCALE, k));
+              setPan({ x: -(b.x + b.w / 2) * k + vp.clientWidth / 2, y: -(b.y + b.h / 2) * k + vp.clientHeight / 2 });
+            },
+          };
+        case "view.fitArtboardOnScreen":
+          return {
+            run: () => {
+              const vp = viewportRef.current;
+              if (!vp) return;
+              const k = Math.min((vp.clientWidth - 48) / doc.width, (vp.clientHeight - 48) / doc.height);
+              zoom(Math.max(MIN_SCALE, k));
+              setPan({ x: 0, y: 0 });
+            },
+          };
+        case "view.printSize":
+          return {
+            run: () => {
+              // 屏幕上按 96dpi 折算：文档 dpi / 96 就是「打印尺寸」对应的缩放
+              const k = Math.max(0.05, (doc.dpi ?? 72) / 96);
+              zoom(k);
+              setToast(`已按打印尺寸显示（${Math.round(k * 100)}%）`);
+            },
+          };
+        case "view.flipHorizontal":
+          return {
+            run: () => setViewFlipped((v) => !v),
+            checked: viewFlipped,
+          };
+        case "view.pixelArtPreview":
+          return {
+            run: () => {
+              setPixelArtPreview((v) => !v);
+              setToast(pixelArtPreview ? "已退出像素画预览" : "像素画预览：放大时按最近邻显示");
+            },
+            checked: pixelArtPreview,
+          };
+        case "view.snapTo.layers":
+          return { run: () => setSnapLayers((v) => !v), checked: snapLayers };
+        case "view.snapTo.slices":
+          return { run: () => setSnapSlices((v) => !v), checked: snapSlices };
+        case "view.clearSlices":
+          return {
+            run: () => {
+              if (!doc.slices?.length) { setToast("文档里没有切片"); return; }
+              onCommit({ ...doc, slices: [], dirty: true }, "清除切片");
+            },
+          };
+        case "view.lockSlices":
+          return { run: () => setSlicesLocked((v) => !v), checked: slicesLocked };
+        case "view.proofSetup.colorBlindnessProtanopia":
+          return {
+            run: () => {
+              setProof("protanopia");
+              setProofOn(true);
+              setToast("校样：红色盲（Protanopia）模拟");
+            },
+            checked: proofOn && proof === "protanopia",
+          };
+        case "view.proofSetup.colorBlindnessDeuteranopia":
+          return {
+            run: () => {
+              setProof("deuteranopia");
+              setProofOn(true);
+              setToast("校样：绿色盲（Deuteranopia）模拟");
+            },
+            checked: proofOn && proof === "deuteranopia",
+          };
+        case "view.proofColors":
+          return {
+            run: () => {
+              if (proof === "none") { setToast("先选一个校样方式（视图 > 校样设置 > 色盲模拟）"); return; }
+              setProofOn((v) => !v);
+            },
+            checked: proofOn,
+          };
+
+        /* ---------------------- 第十一批：Type 组（可编辑文本层） */
+        case "type.panels.character":
+          return { run: () => setTextPanel("character") };
+        case "type.panels.paragraph":
+          return { run: () => setTextPanel("paragraph") };
+        case "type.panels.glyphs":
+          return { run: () => setTextPanel("glyphs") };
+        case "type.panels.characterStyles":
+          return { run: () => setTextPanel("charStyles") };
+        case "type.panels.paragraphStyles":
+          return { run: () => setTextPanel("paraStyles") };
+        case "type.antiAlias.none":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "none" }), "抗锯齿：none")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "none",
+          };
+        case "type.antiAlias.sharp":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "sharp" }), "抗锯齿：sharp")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "sharp",
+          };
+        case "type.antiAlias.crisp":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "crisp" }), "抗锯齿：crisp")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "crisp",
+          };
+        case "type.antiAlias.strong":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "strong" }), "抗锯齿：strong")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "strong",
+          };
+        case "type.antiAlias.smooth":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "smooth" }), "抗锯齿：smooth")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "smooth",
+          };
+        case "type.antiAlias.windowsLcd":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "windowsLcd" }), "抗锯齿：windowsLcd")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "windowsLcd",
+          };
+        case "type.antiAlias.windows":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { antiAlias: "windows" }), "抗锯齿：windows")),
+            checked: activeTextLayer(doc)?.text.antiAlias === "windows",
+          };
+
+        case "type.orientation.horizontal":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { orientation: "horizontal" }), "横排")),
+            checked: activeTextLayer(doc)?.text.orientation !== "vertical",
+          };
+        case "type.orientation.vertical":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { orientation: "vertical" }), "竖排")),
+            checked: activeTextLayer(doc)?.text.orientation === "vertical",
+          };
+        case "type.openType.standardLigatures":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, liga: !t.text.openType.liga } }),
+                "OpenType：standardLigatures",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.liga),
+          };
+        case "type.openType.contextualAlternates":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, calt: !t.text.openType.calt } }),
+                "OpenType：contextualAlternates",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.calt),
+          };
+        case "type.openType.discretionaryLigatures":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, dlig: !t.text.openType.dlig } }),
+                "OpenType：discretionaryLigatures",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.dlig),
+          };
+        case "type.openType.swash":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, swsh: !t.text.openType.swsh } }),
+                "OpenType：swash",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.swsh),
+          };
+        case "type.openType.oldstyle":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, onum: !t.text.openType.onum } }),
+                "OpenType：oldstyle",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.onum),
+          };
+        case "type.openType.stylisticAlternates":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, salt: !t.text.openType.salt } }),
+                "OpenType：stylisticAlternates",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.salt),
+          };
+        case "type.openType.titlingAlternates":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, titl: !t.text.openType.titl } }),
+                "OpenType：titlingAlternates",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.titl),
+          };
+        case "type.openType.ornaments":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, ornm: !t.text.openType.ornm } }),
+                "OpenType：ornaments",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.ornm),
+          };
+        case "type.openType.ordinals":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, ordn: !t.text.openType.ordn } }),
+                "OpenType：ordinals",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.ordn),
+          };
+        case "type.openType.fractions":
+          return {
+            run: withText((t) =>
+              onCommit(
+                updateText(doc, t.id, { openType: { ...t.text.openType, frac: !t.text.openType.frac } }),
+                "OpenType：fractions",
+              ),
+            ),
+            checked: Boolean(activeTextLayer(doc)?.text.openType.frac),
+          };
+
+        case "type.createWorkPath":
+          return {
+            run: withText((t) => {
+              // 没有矢量路径模型，把字形轮廓转成选区（选区就是 Strata 的路径）
+              const outline = textOutlineSurface(t);
+              onCommit(
+                { ...setSelection(doc, outline), workPath: outline },
+                "创建工作路径",
+              );
+              setToast("已按字形轮廓建立工作路径（同时落成选区，可用「显示 > 目标路径」开关）");
+            }),
+          };
+        case "type.convertToShape":
+          return {
+            run: withText((t) => {
+              const ink = createSurface(doc.width, doc.height);
+              const ictx = mustCtx(ink);
+              ictx.drawImage(textOutlineSurface(t), 0, 0);
+              ictx.globalCompositeOperation = "source-in";
+              ictx.fillStyle = t.text.color;
+              ictx.fillRect(0, 0, doc.width, doc.height);
+              ictx.globalCompositeOperation = "source-over";
+              onCommit(placeRaster(doc, "形状", ink), "转换为形状");
+            }),
+          };
+        case "type.rasterizeTypeLayer":
+          return {
+            run: withText((t) => {
+              onCommit(rasterizeTextLayer(doc, t.id), "栅格化文字");
+              setToast("已栅格化，之后按普通像素层处理");
+            }),
+          };
+        case "type.convertToParagraphText":
+          return {
+            run: withText((t) => onCommit(toParagraphText(doc, t.id), "转换为段落文本")),
+          };
+        case "type.convertToPointText":
+          return {
+            run: withText((t) => onCommit(toPointText(doc, t.id), "转换为点文本")),
+          };
+        case "type.warpText":
+          return {
+            run: withText((t) =>
+              setWarpTextDialog({
+                warp: t.text.settings.warp,
+                amount: String(t.text.settings.warpAmount),
+              }),
+            ),
+          };
+        case "type.fontPreviewSize.small":
+          return {
+            run: () => setPrefs({ fontPreviewSize: 12 }),
+            checked: prefs.fontPreviewSize === 12,
+          };
+        case "type.fontPreviewSize.medium":
+          return {
+            run: () => setPrefs({ fontPreviewSize: 20 }),
+            checked: prefs.fontPreviewSize === 20,
+          };
+        case "type.fontPreviewSize.large":
+          return {
+            run: () => setPrefs({ fontPreviewSize: 28 }),
+            checked: prefs.fontPreviewSize === 28,
+          };
+        case "type.fontPreviewSize.extraLarge":
+          return {
+            run: () => setPrefs({ fontPreviewSize: 36 }),
+            checked: prefs.fontPreviewSize === 36,
+          };
+        case "type.fontPreviewSize.huge":
+          return {
+            run: () => setPrefs({ fontPreviewSize: 48 }),
+            checked: prefs.fontPreviewSize === 48,
+          };
+        case "type.languageOptions.defaultFeatures":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { language: "default" }), "语言选项")),
+            checked: activeTextLayer(doc)?.text.language === "default",
+          };
+        case "type.languageOptions.eastAsianFeatures":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { language: "eastAsian" }), "语言选项")),
+            checked: activeTextLayer(doc)?.text.language === "eastAsian",
+          };
+        case "type.languageOptions.middleEasternFeatures":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { language: "middleEastern" }), "语言选项")),
+            checked: activeTextLayer(doc)?.text.language === "middleEastern",
+          };
+        case "type.languageOptions.middleEasternAndSouthAsianComposer":
+          return {
+            run: withText((t) => onCommit(updateText(doc, t.id, { language: "mes" }), "语言选项")),
+            checked: activeTextLayer(doc)?.text.language === "mes",
+          };
+
+        case "type.updateAllTextLayers":
+          return {
+            run: () => {
+              let n = 0;
+              let next = doc;
+              for (const l of doc.layers) {
+                if (!hasText(l)) continue;
+                next = updateText(next, l.id, {});
+                n += 1;
+              }
+              if (n === 0) {
+                setToast("文档里没有文本层");
+                return;
+              }
+              onCommit(next, "更新所有文本图层");
+              setToast(`已重建 ${n} 个文本图层`);
+            },
+          };
+        case "type.replaceAllMissingFonts":
+        case "type.resolveMissingFonts": {
+          const known = new Set(TEXT_FAMILIES.map((f) => f.id));
+          const broken = doc.layers.filter((l) => hasText(l) && !known.has(l.text.settings.family));
+          if (broken.length === 0) {
+            setToast("没有缺失字体：所有文本层用的都是内置字体族");
+            return undefined;
+          }
+          return {
+            run: () => {
+              let next = doc;
+              for (const l of broken) {
+                next = updateTextSettings(next, l.id, { family: "sans" });
+              }
+              onCommit(next, "替换缺失字体");
+              setToast(`已把 ${broken.length} 个文本层的字体替换为黑体`);
+            },
+          };
+        }
+        case "type.pasteLoremIpsum":
+          return {
+            run: () => {
+              const state: TextLayerState = {
+                ...defaultTextState(Math.round(doc.width * 0.12), Math.round(doc.height * 0.35)),
+                content:
+                  "Lorem ipsum dolor sit amet, consectetur adipiscing elit.\n" +
+                  "在这里粘贴示例文字，用来试排版。",
+                settings: { ...textSet, size: Math.max(14, Math.round(doc.width / 28)) },
+                color: fg,
+                boxWidth: Math.round(doc.width * 0.76),
+              };
+              onCommit(
+                insertAboveActive(doc, makeTextLayer(doc.width, doc.height, state, "占位文字")),
+                "粘贴 Lorem Ipsum",
+              );
+            },
+          };
+        case "type.loadDefaultTypeStyles":
+          return {
+            run: () => {
+              const saved = prefs.typeStylesSaved;
+              const builtin: Prefs["typeCharStyles"] = [
+                { name: "正文", family: "sans", size: 36, letterSpacing: 0 },
+                { name: "标题", family: "sans", size: 72, letterSpacing: -2 },
+                { name: "宋体正文", family: "song", size: 36, letterSpacing: 1 },
+                { name: "等宽代码", family: "mono", size: 28, letterSpacing: 0 },
+              ];
+              const builtinPara: Prefs["typeParaStyles"] = [
+                { name: "正文段落", align: "left", lineHeight: 1.5, warp: "none", warpAmount: 0 },
+                { name: "居中标题", align: "center", lineHeight: 1.2, warp: "none", warpAmount: 0 },
+                { name: "扇形标题", align: "center", lineHeight: 1.2, warp: "arc", warpAmount: 40 },
+              ];
+              setPrefs({
+                typeCharStyles: [...builtin, ...(saved?.char ?? [])],
+                typeParaStyles: [...builtinPara, ...(saved?.para ?? [])],
+              });
+              setToast("已载入默认文字样式");
+            },
+          };
+        case "type.saveDefaultTypeStyles":
+          return {
+            run: () => {
+              setPrefs({
+                typeStylesSaved: {
+                  char: prefs.typeCharStyles,
+                  para: prefs.typeParaStyles,
+                },
+              });
+              setToast(
+                `已把 ${prefs.typeCharStyles.length + prefs.typeParaStyles.length} 套样式存为默认`,
+              );
+            },
+          };
         case "edit.undo":
           return canUndo ? { run: onUndo, hint: "Ctrl+Z" } : undefined;
         case "edit.redo":
@@ -5088,6 +7242,23 @@ export default function EditorShell({
 
   return (
     <div className={hidePanels ? "editor is-immersive" : "editor"}>
+      {/* 校样滤镜：色盲模拟用 feColorMatrix（LMS 空间的标准矩阵） */}
+      <svg width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
+        <defs>
+          <filter id="strata-proof-protanopia" colorInterpolationFilters="sRGB">
+            <feColorMatrix
+              type="matrix"
+              values="0.567 0.433 0 0 0  0.558 0.442 0 0 0  0 0.242 0.758 0 0  0 0 0 1 0"
+            />
+          </filter>
+          <filter id="strata-proof-deuteranopia" colorInterpolationFilters="sRGB">
+            <feColorMatrix
+              type="matrix"
+              values="0.625 0.375 0 0 0  0.7 0.3 0 0 0  0 0.3 0.7 0 0  0 0 0 1 0"
+            />
+          </filter>
+        </defs>
+      </svg>
       <header className="editor-top">
         <BrandMark size={22} />
         <AppMenuBar groups={visibleMenuGroups} />
@@ -5168,7 +7339,8 @@ export default function EditorShell({
       </div>
 
       <div className="editor-main">
-        <ToolRail
+        {showToolRail && (
+          <ToolRail
           tool={tool}
           onSelect={pickTool}
           fg={fg}
@@ -5193,7 +7365,9 @@ export default function EditorShell({
             />
           )}
         />
+        )}
         <div className="editor-center">
+          {showOptionsBar && (
           <OptionsBar
             tool={tool}
             brush={brush}
@@ -5227,30 +7401,95 @@ export default function EditorShell({
             docSize={docSize}
             onOpenBrushPanel={() => setBrushPanelOpen(true)}
           />
+          )}
           <div className="editor-viewport" ref={viewportRef}>
             <div
               className="editor-stage"
               style={{
-                width: docW * scale,
+                // 像素长宽比校正：横向拉伸显示（像素本身不变）
+                width: docW * scale * (aspectCorrection ? pixelAspect : 1),
                 height: docH * scale,
-                transform: `translate(${pan.x}px, ${pan.y}px)`,
+                transform: `translate(${pan.x}px, ${pan.y}px)${viewFlipped ? " scaleX(-1)" : ""}`,
               }}
             >
               <canvas
                 ref={canvasRef}
                 className="editor-canvas"
-                style={{ cursor: cursorOf(tool, panning, prefs.cursorMode) }}
+                style={{
+                  cursor: cursorOf(tool, panning, prefs.cursorMode),
+                  // 像素画预览：放大时按最近邻采样，看得到真实像素格
+                  imageRendering: pixelArtPreview ? "pixelated" : "auto",
+                  // 校样：色盲模拟走 SVG feColorMatrix（见下方 defs）
+                  filter:
+                    proofOn && proof !== "none" ? `url(#strata-proof-${proof})` : undefined,
+                }}
                 onPointerDown={onDown}
                 onPointerMove={onMove}
                 onPointerUp={onUp}
                 onPointerCancel={onUp}
                 onPointerLeave={hideCursor}
+                onDoubleClick={(e) => {
+                  // 双击文本层 → 进入该层的文字编辑（PS 的习惯）
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = (e.clientX - rect.left) / scale;
+                  const y = (e.clientY - rect.top) / scale;
+                  const hit = textLayerAt(doc, x, y);
+                  if (!hit) return;
+                  setTool("text");
+                  setTextEdit({
+                    x: hit.text.x,
+                    y: hit.text.y,
+                    value: hit.text.content,
+                    layerId: hit.id,
+                  });
+                }}
                 onContextMenu={openCanvasMenu}
               />
               {/* 蚂蚁线 / 裁剪遮罩浮层：只负责画，不接事件 */}
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
+              {/* 校样层：把合成结果按校样条件重算后盖在上面（纯显示） */}
+              <canvas
+                ref={proofCanvasRef}
+                className={
+                  proofActive && proofSet.kind !== "none"
+                    ? "editor-proof is-on"
+                    : gamutOn || (preview32.on && (preview32.exposure !== 0 || preview32.gamma !== 1))
+                      ? "editor-proof is-on"
+                      : "editor-proof"
+                }
+                aria-hidden="true"
+              />
+              {/* 图案预览：把最新图案按原尺寸平铺，看拼接效果 */}
+              {patternPreviewOn && patternPreviewUrl && (
+                <div
+                  className="editor-pattern-preview"
+                  style={{
+                    backgroundImage: `url(${patternPreviewUrl})`,
+                    backgroundSize: `${scale * 2}px auto`,
+                    opacity: 0.55,
+                  }}
+                  aria-hidden="true"
+                />
+              )}
+              {/* 工作路径（显示 > 目标路径） */}
+              {showTargetPath && doc.workPath && (
+                <div
+                  className="editor-workpath"
+                  style={{
+                    backgroundImage: `url(${doc.workPath.toDataURL()})`,
+                    backgroundSize: "100% 100%",
+                  }}
+                  aria-hidden="true"
+                />
+              )}
+              {/* 注释标记（显示 > 注释）：有备注才画 */}
+              {showNotes && doc.note && (
+                <div className="editor-note-marker" title={doc.note}>
+                  ✎
+                </div>
+              )}
               {/* 分析浮层：标尺线段 + 计数标记，纯视觉，不接事件也不进历史 */}
-              {(measureLine || counters.length > 0) && (
+              {(measureLine || (showCountersOverlay && counters.length > 0)) && (
                 <svg
                   className="editor-measure"
                   width={docW * scale}
@@ -5283,7 +7522,8 @@ export default function EditorShell({
                         </g>
                       );
                     })()}
-                  {counters.map((c, i) => (
+                  {showCountersOverlay &&
+                    counters.map((c, i) => (
                     <g key={`cnt-${i}`}>
                       <circle
                         cx={c.x * scale}
@@ -5305,6 +7545,53 @@ export default function EditorShell({
                     </g>
                   ))}
                 </svg>
+              )}
+              {/* 画板框：带的组的边界，按缩放画成虚线框 + 名字 */}
+              {doc.layers.filter((l) => isArtboard(l)).map((l) => {
+                const b = l.artboard;
+                if (!b) return null;
+                return (
+                  <div
+                    key={`ab-${l.id}`}
+                    className="editor-artboard"
+                    style={{
+                      left: b.x * scale,
+                      top: b.y * scale,
+                      width: b.w * scale,
+                      height: b.h * scale,
+                    }}
+                  >
+                    <span className="editor-artboard-name">{l.name}</span>
+                  </div>
+                );
+              })}
+              {/* 切片框：导出区域，按显示开关隐藏 */}
+              {showSlicesOverlay &&
+                (doc.slices ?? []).map((sl, i) => (
+                  <div
+                    key={`sl-${i}`}
+                    className="editor-slice"
+                    style={{
+                      left: sl.x * scale,
+                      top: sl.y * scale,
+                      width: sl.w * scale,
+                      height: sl.h * scale,
+                    }}
+                  >
+                    <span className="editor-slice-name">{sl.name}</span>
+                  </div>
+                ))}
+              {/* 图层边界：只在打开「视图 > 显示 > 图层边缘」时画当前层 */}
+              {showLayerEdges && layerEdges && (
+                <div
+                  className="editor-layer-edges"
+                  style={{
+                    left: layerEdges.x * scale,
+                    top: layerEdges.y * scale,
+                    width: layerEdges.w * scale,
+                    height: layerEdges.h * scale,
+                  }}
+                />
               )}
               {/* 网格：跟随缩放的重复线，只作视觉参考 */}
               {showGrid && (
@@ -5464,7 +7751,15 @@ export default function EditorShell({
               onPickTool={pickTool}
             />
           }
-          properties={<PropertiesPanel doc={doc} onChange={onCommit} onPreview={onPreview} />}
+          properties={
+            <PropertiesPanel
+              doc={doc}
+              onChange={onCommit}
+              onPreview={onPreview}
+              compSource={compRef.current}
+              compVersion={panelTick}
+            />
+          }
           layers={
             <LayersPanel
               doc={doc}
@@ -5654,6 +7949,410 @@ export default function EditorShell({
           onToast={setToast}
           onClose={() => setImageOps(null)}
         />
+      )}
+      {/* 视图 > 32 位预览选项 */}
+      {preview32Dialog && (
+        <Modal
+          title="32 位预览选项"
+          onClose={() => setPreview32Dialog(false)}
+          width={440}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setPreview32Dialog(false)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  setPreview32({ ...preview32, on: true });
+                  setPreview32Dialog(false);
+                  setToast("已应用显示补偿（只影响屏幕，不改像素）");
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            显示补偿只改变屏幕上的观感，一个像素都不动 —— 用来在暗部/高光里看细节。
+          </p>
+          <label className="field">
+            <span className="field-label">曝光</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={0.1}
+                min={-4}
+                max={4}
+                value={preview32.exposure}
+                onChange={(e) =>
+                  setPreview32({ ...preview32, exposure: Number.parseFloat(e.target.value) || 0 })
+                }
+              />
+              <span className="field-unit">档</span>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">伽马</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={0.05}
+                min={0.2}
+                max={4}
+                value={preview32.gamma}
+                onChange={(e) =>
+                  setPreview32({ ...preview32, gamma: Number.parseFloat(e.target.value) || 1 })
+                }
+              />
+            </span>
+          </label>
+          <div className="isz-row" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                setPreview32({ on: false, exposure: 0, gamma: 1 });
+                setToast("已关闭显示补偿");
+              }}
+            >
+              关闭补偿
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 视图 > 显示 > 显示额外内容选项 */}
+      {extrasDialog && (
+        <Modal
+          title="显示额外内容选项"
+          onClose={() => setExtrasDialog(false)}
+          width={420}
+          footer={
+            <button type="button" className="btn-primary btn-sm" onClick={() => setExtrasDialog(false)}>
+              {zh.preferences.done}
+            </button>
+          }
+        >
+          <p className="isz-hint">这些开关都是屏幕上的辅助显示，不影响像素。</p>
+          {(
+            [
+              ["图层边缘", showLayerEdges, setShowLayerEdges],
+              ["选区边缘", extras, setExtras],
+              ["参考线", showGuides, setShowGuides],
+              ["计数标记", showCountersOverlay, setShowCountersOverlay],
+              ["切片", showSlicesOverlay, setShowSlicesOverlay],
+              ["注释", showNotes, setShowNotes],
+              ["目标路径", showTargetPath, setShowTargetPath],
+            ] as [string, boolean, (v: (b: boolean) => boolean) => void][]
+          ).map(([label, value, setter]) => (
+            <label className="isz-check" key={label}>
+              <input type="checkbox" checked={value} onChange={() => setter((v) => !v)} />
+              {label}
+            </label>
+          ))}
+        </Modal>
+      )}
+      {/* 文件 > 文件简介 */}
+      {infoDialog && (
+        <Modal
+          title="文件简介"
+          onClose={() => setInfoDialog(null)}
+          width={460}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setInfoDialog(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  onCommit({ ...doc, name: infoDialog.title.trim() || doc.name }, "文件简介");
+                  setInfoDialog(null);
+                  setToast("文件信息已更新");
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">文档标题会显示在标签页与最近文件里。</p>
+          <div className="isz-row">
+            <label className="field">
+              <span className="field-label">标题</span>
+              <span className="field-input">
+                <input
+                  type="text"
+                  value={infoDialog.title}
+                  onChange={(e) => setInfoDialog({ ...infoDialog, title: e.target.value })}
+                />
+              </span>
+            </label>
+          </div>
+          <p className="isz-hint">
+            作者 / 描述这类元数据目前只随工程保存标题 —— 不做的字段不摆在界面上。
+          </p>
+        </Modal>
+      )}
+      {/* 辅助面板（信息 / 测量 / 注释 / 色板 / 样式 / 图案 / 调整 / 渐变 / 复合 / 时间轴…） */}
+      {utilPanel && (
+        <UtilityPanel
+          kind={utilPanel}
+          doc={doc}
+          cursor={cursorDoc ?? undefined}
+          fg={fg}
+          onFg={setFg}
+          onApply={(next, label) => onCommit(next, label)}
+          onClose={() => setUtilPanel(null)}
+        />
+      )}
+      {/* 文字面板（字符 / 段落 / 字形 / 样式） */}
+      {textPanel && (
+        <TextPanel
+          tab={textPanel}
+          doc={doc}
+          onApply={(next, label) => onCommit(next, label)}
+          onClose={() => setTextPanel(null)}
+        />
+      )}
+      {/* 文字 > 弯曲文字 */}
+      {warpTextDialog && (
+        <Modal
+          title="弯曲文字"
+          onClose={() => setWarpTextDialog(null)}
+          width={420}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setWarpTextDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const t = activeTextLayer(doc);
+                  if (!t) {
+                    setToast("先选中一个文本层");
+                    setWarpTextDialog(null);
+                    return;
+                  }
+                  const amount = Number.parseFloat(warpTextDialog.amount) || 0;
+                  onCommit(
+                    updateTextSettings(doc, t.id, {
+                      warp: warpTextDialog.warp as never,
+                      warpAmount: Math.max(-100, Math.min(100, amount)),
+                    }),
+                    "弯曲文字",
+                  );
+                  setWarpTextDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">弯曲作用于整个文字块；强度 0 表示不弯。</p>
+          <label className="field">
+            <span className="field-label">样式</span>
+            <span className="field-input">
+              <select
+                value={warpTextDialog.warp}
+                onChange={(e) => setWarpTextDialog({ ...warpTextDialog, warp: e.target.value })}
+              >
+                {WARP_STYLES.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">强度</span>
+            <span className="field-input">
+              <input
+                type="number"
+                min={-100}
+                max={100}
+                value={warpTextDialog.amount}
+                onChange={(e) => setWarpTextDialog({ ...warpTextDialog, amount: e.target.value })}
+              />
+              <span className="field-unit">%</span>
+            </span>
+          </label>
+        </Modal>
+      )}
+      {/* 图层样式：混合选项 / 全局光 / 缩放效果 */}
+      {styleDialog && (
+        <Modal
+          title={
+            styleDialog === "blend" ? "混合选项" : styleDialog === "light" ? "全局光" : "缩放效果"
+          }
+          onClose={() => setStyleDialog(null)}
+          width={480}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setStyleDialog(null)}>
+                {zh.dialog.cancel}
+              </button>
+              {styleDialog !== "blend" && (
+                <button
+                  type="button"
+                  className="btn-primary btn-sm"
+                  onClick={() => {
+                    const layers = doc.layers.map((l) => {
+                      if (!l.styles?.length) return l;
+                      const styles = l.styles.map((st) => {
+                        if (styleDialog === "light") {
+                          // 全局光：所有带角度的样式统一到同一个光源方向
+                          const angle = Number.parseFloat(styleAngle) || 0;
+                          return "angle" in st ? { ...st, angle } : st;
+                        }
+                        const k = Math.max(1, Number.parseFloat(styleScale) || 100) / 100;
+                        return {
+                          ...st,
+                          size: Math.round(st.size * k),
+                          distance: Math.round(st.distance * k),
+                        };
+                      });
+                      return { ...l, styles };
+                    });
+                    onCommit(
+                      { ...doc, layers, dirty: true },
+                      styleDialog === "light" ? "全局光" : "缩放图层效果",
+                    );
+                    setStyleDialog(null);
+                  }}
+                >
+                  {zh.dialog.confirm}
+                </button>
+              )}
+              {styleDialog === "blend" && (
+                <button
+                  type="button"
+                  className="btn-primary btn-sm"
+                  onClick={() => setStyleDialog(null)}
+                >
+                  {zh.preferences.done}
+                </button>
+              )}
+            </>
+          }
+        >
+          {styleDialog === "blend" && (() => {
+            const cur = activeLayer(doc);
+            if (!cur) return <p className="isz-hint">没有活动图层。</p>;
+            return (
+              <>
+                <p className="isz-hint">混合模式与不透明度对所有像素层生效；勾选即添加该样式。</p>
+                <div className="isz-row">
+                  <label className="field">
+                    <span className="field-label">混合模式</span>
+                    <span className="field-input">
+                      <select
+                        value={cur.blend}
+                        onChange={(e) => onCommit(setBlend(doc, cur.id, e.target.value as never), "混合模式")}
+                      >
+                        {BLEND_MODES.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.label}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
+                  <label className="field">
+                    <span className="field-label">不透明度</span>
+                    <span className="field-input">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={cur.opacity}
+                        onChange={(e) =>
+                          onCommit(
+                            setOpacity(doc, cur.id, Math.max(0, Math.min(100, Number(e.target.value) || 0))),
+                            "不透明度",
+                          )
+                        }
+                      />
+                      <span className="field-unit">%</span>
+                    </span>
+                  </label>
+                </div>
+                {STYLE_DEFS.map((def) => {
+                  const has = cur.styles?.some((x) => x.id === def.id);
+                  return (
+                    <label className="isz-check" key={def.id}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(has)}
+                        onChange={(e) =>
+                          onCommit(
+                            e.target.checked ? addLayerStyle(doc, def.id) : removeLayerStyle(doc, def.id),
+                            e.target.checked ? `添加样式：${def.label}` : `移除样式：${def.label}`,
+                          )
+                        }
+                      />
+                      {def.label}
+                    </label>
+                  );
+                })}
+              </>
+            );
+          })()}
+
+          {styleDialog === "light" && (
+            <>
+              <p className="isz-hint">
+                全局光会把所有图层样式的光照方向统一到这个角度（投影、斜面的方向都跟着变）。
+              </p>
+              <label className="field">
+                <span className="field-label">角度</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    max={360}
+                    value={styleAngle}
+                    onChange={(e) => setStyleAngle(e.target.value)}
+                  />
+                  <span className="field-unit">°</span>
+                </span>
+              </label>
+            </>
+          )}
+
+          {styleDialog === "scale" && (
+            <>
+              <p className="isz-hint">
+                按百分比缩放所有图层样式的大小与偏移距离（改画布尺寸后统一调效果量感用）。
+              </p>
+              <label className="field">
+                <span className="field-label">缩放</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={1}
+                    max={400}
+                    value={styleScale}
+                    onChange={(e) => setStyleScale(e.target.value)}
+                  />
+                  <span className="field-unit">%</span>
+                </span>
+              </label>
+            </>
+          )}
+        </Modal>
       )}
       {/* 编辑 > 菜单：选择显示哪些顶级菜单 */}
       {menusDialog && (
@@ -6625,7 +9324,9 @@ export default function EditorShell({
             onCommit(next, puppet === "affine" ? "透视变形" : "木偶变形");
           }}
           onClose={() => setPuppet(null)}
-        />
+            showMesh={showWarpMesh}
+            showPins={showWarpPins}
+          />
       )}
       {brushPanelOpen && usesBrush(tool) && (
         <BrushSettingsPanel

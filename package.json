@@ -14,7 +14,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "mcp:engines": "node scripts/build-mcp-engines.mjs",
+    "mcp:check": "node mcp/strata-mcp.mjs --selftest && node scripts/mcp-newtools-check.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",

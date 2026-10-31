@@ -61,6 +61,10 @@ export type LayerPatch = Partial<
     | "styles"
     | "smart"
     | "parent"
+    | "maskLinked"
+    | "linkId"
+    | "text"
+    | "smartPath"
   >
 >;
 
@@ -184,6 +188,11 @@ export function addFillLayer(doc: StrataDoc, color: string, name?: string): Stra
  * 用户不必先手动新建图层；否则在选中图层之上新开一层，绝不悄悄改动
  * 调整层或蒙版层。
  */
+/** 把一个已经建好的图层插到活动图层之上（文本层创建走这里）。 */
+export function insertAboveActive(doc: StrataDoc, layer: StrataLayer): StrataDoc {
+  return spliceAbove(doc, layer);
+}
+
 export function placeRaster(
   doc: StrataDoc,
   name: string,

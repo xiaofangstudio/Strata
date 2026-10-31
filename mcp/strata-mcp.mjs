@@ -445,7 +445,6 @@ server.registerTool(
  */
 import {
   ADJUSTERS,
-  FILTERS,
   backgroundFloodMask,
   bilinearResize,
   crop as cropImage,
@@ -467,6 +466,66 @@ import {
   strokeRingDashed,
   vignette,
 } from "./lib/imageOps.mjs";
+import {
+  FILTER_DEFS,
+  PROFILE_LABELS,
+  colorRangeHit,
+  contentAwareScale,
+  convertProfile,
+  focusHit,
+  medianCutPalette,
+  mlsWarp,
+  skyHit,
+  subjectHit,
+  toBitmap,
+  toCmyk,
+  toDuotone,
+  toIndexed,
+  toLab,
+} from "./lib/engines.gen.mjs";
+
+/** 滤镜 id → 定义（含参数表与内核）。索引一次，供工具与能力清单共用。 */
+const FILTER_BY_ID = new Map(FILTER_DEFS.map((d) => [d.id, d]));
+
+/** 老工具里的短名 → 新注册表 id（保持向后兼容）。 */
+const FILTER_ALIASES = {
+  gaussianBlur: "filter.blur.gaussianBlur",
+  boxBlur: "filter.blur.boxBlur",
+  unsharpMask: "filter.sharpen.unsharpMask",
+  addNoise: "filter.noise.addNoise",
+  mosaic: "filter.pixelate.mosaic",
+  median: "filter.noise.median",
+  motionBlur: "filter.blur.motionBlur",
+};
+
+/** 按 id 或短名取滤镜定义。 */
+function findFilter(name) {
+  const id = FILTER_ALIASES[name] ?? name;
+  return FILTER_BY_ID.get(id) ?? null;
+}
+
+/** 图片会话里的图就是 {width,height,data}，与内核的 RgbaBuffer 同构，直接传。 */
+function applyFilterToSession(img, def, params) {
+  const merged = {};
+  for (const p of def.params) merged[p.id] = p.def;
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (typeof v === "number" && Number.isFinite(v)) merged[k] = v;
+  }
+  return def.apply(img, merged);
+}
+
+/** 0/1 命中表 → 可视化蒙版（白 = 选中）。 */
+function hitToMask(hit, width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    const v = hit[i] ? 255 : 0;
+    data[i * 4] = v;
+    data[i * 4 + 1] = v;
+    data[i * 4 + 2] = v;
+    data[i * 4 + 3] = 255;
+  }
+  return { width, height, data };
+}
 import {
   BLEND_MODES,
   addLayer,
@@ -663,32 +722,30 @@ server.registerTool(
   {
     title: "施加滤镜",
     description:
-      "对一个会话里的图施加一个滤镜。滤镜名取自 strata_capabilities 的 imageOps.filters " +
-      "（gaussianBlur / boxBlur / unsharpMask / addNoise / mosaic / median / motionBlur）。" +
-      "参数写在同级对象里，例如 {filter:'gaussianBlur', radius:6}。",
+      "对一个会话里的图施加任意已注册滤镜（与应用内「滤镜」菜单同一份实现，" +
+      "共 " + FILTER_DEFS.length + " 个）。filter 传完整 id，见 strata_capabilities 的 " +
+      "imageOps.filters；老短名（gaussianBlur / boxBlur / unsharpMask / addNoise / " +
+      "mosaic / median / motionBlur）仍然可用。参数放在 params 里，键名与该滤镜的 " +
+      "params 一致，例如 {filter:'filter.blurGallery.tiltShift', params:{radius:18}}。",
     inputSchema: {
       sessionId: z.string().describe("会话 id"),
-      filter: z.string().describe("滤镜名"),
-      radius: z.number().optional(),
-      amount: z.number().optional(),
-      threshold: z.number().optional(),
-      monochrome: z.boolean().optional(),
-      seed: z.number().optional(),
-      cell: z.number().optional(),
-      angleDeg: z.number().optional(),
-      distance: z.number().optional(),
+      filter: z.string().describe("滤镜 id 或老短名"),
+      params: z
+        .record(z.string(), z.number())
+        .optional()
+        .describe("滤镜参数（缺省用该滤镜的默认值；键见 capabilities 里该滤镜的 params）"),
       preview: z.boolean().optional(),
     },
   },
   guard(async (args) => {
     const s = sessionImage(args.sessionId);
-    const f = FILTERS[args.filter];
-    if (!f) {
+    const def = findFilter(args.filter);
+    if (!def) {
       throw new ToolError(
-        `未知滤镜：${args.filter}。可用：${Object.keys(FILTERS).join(" / ")}`,
+        `未知滤镜：${args.filter}。用 strata_capabilities 查 imageOps.filters 里的完整 id。`,
       );
     }
-    const img = f.run(s.img, args);
+    const img = applyFilterToSession(s.img, def, args.params);
     s.img = img;
     const payload = {
       ok: true,
@@ -699,6 +756,254 @@ server.registerTool(
     };
     if (args.preview === true) {
       payload.previewBase64 = encodeImagePng(resize(img, 320)).toString("base64");
+    }
+    return ok(payload);
+  }),
+);
+
+/** hex → [r,g,b]（双色调用）。 */
+function hexToRgb(hex, fallback) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? "").trim());
+  if (!m) return fallback;
+  const v = Number.parseInt(m[1], 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+server.registerTool(
+  "strata_color_mode",
+  {
+    title: "转换颜色模式",
+    description:
+      "把会话里的图转换成另一种颜色模式（与应用内「图像 > 模式」同一套算法）：" +
+      "bitmap（阈值二值/半调网点）、duotone（双色墨）、indexed（中位切分量化 + 抖动，" +
+      "返回调色板）、cmyk（真实 RGB→CMYK→RGB，含油墨总量与 UCR）、lab（彩度上限收色）、" +
+      "multichannel（拆成灰度通道，返回通道图 base64）。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      mode: z
+        .enum(["bitmap", "duotone", "indexed", "cmyk", "lab", "multichannel"])
+        .describe("目标模式"),
+      threshold: z.number().optional().describe("bitmap：阈值 0-255"),
+      halftone: z.number().optional().describe("bitmap：半调网点单元 px，0 = 纯二值"),
+      dark: z.string().optional().describe("duotone：深色 #rrggbb"),
+      light: z.string().optional().describe("duotone：浅色 #rrggbb"),
+      strength: z.number().optional().describe("duotone：油墨浓度 0-100"),
+      colors: z.number().optional().describe("indexed：颜色数 2-256"),
+      dither: z.boolean().optional().describe("indexed：是否抖动"),
+      inkLimit: z.number().optional().describe("cmyk：油墨总量上限 %（100-400）"),
+      ucr: z.number().optional().describe("cmyk：底色去除 0-100"),
+      chroma: z.number().optional().describe("lab：最大彩度 C*ab"),
+      preview: z.boolean().optional(),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    const src = s.img;
+    const payload = { ok: true, sessionId: args.sessionId, mode: args.mode };
+    if (args.mode === "bitmap") {
+      s.img = toBitmap(src, args.threshold ?? 128, args.halftone ?? 0);
+    } else if (args.mode === "duotone") {
+      s.img = toDuotone(
+        src,
+        hexToRgb(args.dark, [27, 42, 74]),
+        hexToRgb(args.light, [242, 217, 160]),
+        args.strength ?? 100,
+      );
+    } else if (args.mode === "indexed") {
+      const res = toIndexed(src, args.colors ?? 64, args.dither ?? true);
+      s.img = res.buf;
+      payload.palette = res.palette.map(
+        (c) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`,
+      );
+      payload.paletteSize = res.palette.length;
+    } else if (args.mode === "cmyk") {
+      s.img = toCmyk(src, args.inkLimit ?? 300, args.ucr ?? 40);
+    } else if (args.mode === "lab") {
+      s.img = toLab(src, args.chroma ?? 110);
+    } else {
+      // multichannel：灰度化，并把三通道各导出一张（供下游分别使用）
+      const gray = toDuotone(src, [0, 0, 0], [255, 255, 255], 100);
+      s.img = gray;
+      const chans = [0, 1, 2].map((ch) => {
+        const data = new Uint8ClampedArray(src.width * src.height * 4);
+        for (let i = 0; i < src.width * src.height; i += 1) {
+          const v = src.data[i * 4 + ch];
+          data[i * 4] = v;
+          data[i * 4 + 1] = v;
+          data[i * 4 + 2] = v;
+          data[i * 4 + 3] = 255;
+        }
+        return {
+          channel: ["R", "G", "B"][ch],
+          png: encodeImagePng({ width: src.width, height: src.height, data }).toString("base64"),
+        };
+      });
+      payload.channels = chans;
+    }
+    payload.width = s.img.width;
+    payload.height = s.img.height;
+    if (args.preview === true) {
+      payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
+    }
+    void medianCutPalette;
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_content_aware_scale",
+  {
+    title: "内容识别缩放",
+    description:
+      "接缝雕刻（seam carving）：在尽量不拉伸主体的前提下改变图片尺寸。" +
+      "反复删/加能量最低的像素路径，与应用内「编辑 > 内容识别缩放」同一份实现。" +
+      "大图较慢，建议先缩小再处理。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      width: z.number().describe("目标宽度"),
+      height: z.number().describe("目标高度"),
+      preview: z.boolean().optional(),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    const w = Math.max(1, Math.round(args.width));
+    const h = Math.max(1, Math.round(args.height));
+    const before = `${s.img.width}×${s.img.height}`;
+    s.img = contentAwareScale(s.img, w, h);
+    const payload = {
+      ok: true,
+      sessionId: args.sessionId,
+      from: before,
+      to: `${s.img.width}×${s.img.height}`,
+    };
+    if (args.preview === true) {
+      payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_mesh_warp",
+  {
+    title: "木偶变形（钉点）",
+    description:
+      "Moving Least Squares 钉点变形（Schaefer 2006）：给若干 `{ox,oy,x,y}` 钉点，" +
+      "把图按钉点的位移局部拉扯。similarity 只旋转/缩放（木偶变形），" +
+      "affine 允许斜切拉伸（透视变形）。与应用内同一个 mlsWarp 实现。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      pins: z
+        .array(
+          z.object({
+            ox: z.number().describe("原始 x"),
+            oy: z.number().describe("原始 y"),
+            x: z.number().describe("当前 x"),
+            y: z.number().describe("当前 y"),
+          }),
+        )
+        .min(2)
+        .describe("钉点（相似模式至少 2 个、仿射至少 3 个，且不能全挤在一点）"),
+      mode: z.enum(["similarity", "affine"]).optional(),
+      preview: z.boolean().optional(),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    s.img = mlsWarp(s.img, args.pins, args.mode ?? "similarity");
+    const payload = {
+      ok: true,
+      sessionId: args.sessionId,
+      pins: args.pins.length,
+      mode: args.mode ?? "similarity",
+      width: s.img.width,
+      height: s.img.height,
+    };
+    if (args.preview === true) {
+      payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_smart_select",
+  {
+    title: "智能选区",
+    description:
+      "把图里的某一片「选中」并导出成黑白蒙版 PNG（白 = 选中），与应用内选择菜单同源：" +
+      "colorRange（按颜色，需 color+tolerance）、subject（按四周背景估计主体）、" +
+      "sky（蓝色相 + 上缘连通）、focus（拉普拉斯合焦区域，需 threshold）。" +
+      "返回 coverage（选中像素占比）与 maskBase64。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      kind: z.enum(["colorRange", "subject", "sky", "focus"]).describe("判定方式"),
+      color: z.string().optional().describe("colorRange：目标色 #rrggbb"),
+      tolerance: z.number().optional().describe("colorRange：容差 0-255"),
+      threshold: z.number().optional().describe("focus：局部对比度阈值"),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    const { width, height, data } = s.img;
+    let hit;
+    if (args.kind === "colorRange") {
+      hit = colorRangeHit(data, width, height, hexToRgb(args.color, [0, 0, 0]), args.tolerance ?? 32);
+    } else if (args.kind === "subject") {
+      hit = subjectHit(data, width, height);
+    } else if (args.kind === "sky") {
+      hit = skyHit(data, width, height);
+    } else {
+      hit = focusHit(data, width, height, args.threshold ?? 24);
+    }
+    if (!hit) {
+      return ok({ ok: true, sessionId: args.sessionId, kind: args.kind, coverage: 0, maskBase64: null });
+    }
+    let on = 0;
+    for (let i = 0; i < hit.length; i += 1) if (hit[i]) on += 1;
+    return ok({
+      ok: true,
+      sessionId: args.sessionId,
+      kind: args.kind,
+      coverage: Number((on / (width * height)).toFixed(4)),
+      width,
+      height,
+      maskBase64: encodeImagePng(hitToMask(hit, width, height)).toString("base64"),
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_color_profile",
+  {
+    title: "转换色彩配置文件",
+    description:
+      "在各色彩空间之间做真实的原色矩阵换算（线性 RGB → XYZ(D65) → 目标线性 RGB）：" +
+      "srgb / display-p3 / adobe-rgb / gray。from 省略时按 srgb 处理。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      to: z.enum(["srgb", "display-p3", "adobe-rgb", "gray"]).describe("目标配置文件"),
+      from: z.enum(["srgb", "display-p3", "adobe-rgb", "gray"]).optional(),
+      preview: z.boolean().optional(),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    const from = args.from ?? "srgb";
+    if (from === args.to) {
+      return ok({ ok: true, sessionId: args.sessionId, from, to: args.to, changed: false });
+    }
+    s.img = convertProfile(s.img, from, args.to);
+    const payload = {
+      ok: true,
+      sessionId: args.sessionId,
+      from: PROFILE_LABELS[from],
+      to: PROFILE_LABELS[args.to],
+      changed: true,
+    };
+    if (args.preview === true) {
+      payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
     }
     return ok(payload);
   }),
@@ -781,9 +1086,10 @@ server.registerTool(
       applied.ops.push(op.type);
     }
     for (const spec of filters ?? []) {
-      const f = FILTERS[spec.filter];
-      if (!f) throw new ToolError(`未知滤镜：${spec.filter}`);
-      img = f.run(img, spec);
+      const def = findFilter(spec.filter);
+      if (!def) throw new ToolError(`未知滤镜：${spec.filter}`);
+      const { filter: _f, ...rest } = spec;
+      img = applyFilterToSession(img, def, rest.params ?? rest);
       applied.filters.push(spec.filter);
     }
 
@@ -1299,9 +1605,10 @@ server.registerTool(
       img = adj.run(img, op);
     }
     for (const spec of filters ?? []) {
-      const f = FILTERS[spec.filter];
-      if (!f) throw new ToolError(`未知滤镜：${spec.filter}`);
-      img = f.run(img, spec);
+      const def = findFilter(spec.filter);
+      if (!def) throw new ToolError(`未知滤镜：${spec.filter}`);
+      const { filter: _f, ...rest } = spec;
+      img = applyFilterToSession(img, def, rest.params ?? rest);
     }
 
     if (region) {

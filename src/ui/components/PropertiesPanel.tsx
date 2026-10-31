@@ -27,6 +27,9 @@ interface Props {
   doc: StrataDoc;
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
+  /** 合成画布（色阶类调整的直方图数据源） */
+  compSource?: HTMLCanvasElement | null;
+  compVersion?: number;
 }
 
 type Tab = "props" | "adjust";
@@ -45,7 +48,13 @@ const KIND_LABEL: Record<LayerKind, string> = {
   group: zh.panel.kindGroup,
 };
 
-export default function PropertiesPanel({ doc, onChange, onPreview }: Props) {
+export default function PropertiesPanel({
+  doc,
+  onChange,
+  onPreview,
+  compSource,
+  compVersion,
+}: Props) {
   const [tab, setTab] = useState<Tab>("props");
   const cur = activeLayer(doc);
 
@@ -87,7 +96,14 @@ export default function PropertiesPanel({ doc, onChange, onPreview }: Props) {
             <PropRow label={zh.panel.propClip} value={cur.clip ? zh.panel.yes : zh.panel.no} />
             <PropRow label={zh.panel.propLock} value={cur.locked ? zh.panel.yes : zh.panel.no} />
             {cur.kind === "adjust" ? (
-              <AdjustProps doc={doc} layer={cur} onChange={onChange} onPreview={onPreview} />
+              <AdjustProps
+                doc={doc}
+                layer={cur}
+                onChange={onChange}
+                onPreview={onPreview}
+                compSource={compSource}
+                compVersion={compVersion}
+              />
             ) : (
               <StyleProps doc={doc} layer={cur} onChange={onChange} onPreview={onPreview} />
             )}

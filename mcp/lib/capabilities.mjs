@@ -12,6 +12,48 @@
  * 改动以上任一文件后，这里必须同步。
  */
 
+import { FILTER_DEFS, PROFILE_LABELS } from "./engines.gen.mjs";
+
+/**
+ * 滤镜目录直接从引擎包派生 —— 与界面共用同一份 FILTER_DEFS，
+ * 所以界面上新加一个滤镜，MCP 这边不需要手抄任何清单。
+ */
+export const FILTERS = FILTER_DEFS.map((d) => ({
+  id: d.id,
+  label: d.label,
+  group: d.group,
+  params: d.params.map((p) => ({
+    id: p.id,
+    label: p.label,
+    min: p.min,
+    max: p.max,
+    def: p.def,
+    unit: p.unit ?? "",
+    choices: p.choices ? p.choices.map((c) => c.label) : undefined,
+  })),
+}));
+
+/** 颜色模式（src/core/colorMode.ts）。 */
+export const COLOR_MODES = [
+  { id: "bitmap", label: "位图", note: "阈值二值，可选半调网点" },
+  { id: "duotone", label: "双色调", note: "深色墨 → 浅色墨的双色渐变" },
+  { id: "indexed", label: "索引颜色", note: "中位切分量化 + 可选抖动，返回调色板" },
+  { id: "cmyk", label: "CMYK", note: "真实 RGB→CMYK→RGB，含油墨总量与 UCR" },
+  { id: "lab", label: "Lab", note: "sRGB↔XYZ(D65)↔Lab，可限彩度" },
+  { id: "multichannel", label: "多通道", note: "灰度化并分别导出 R/G/B 通道" },
+];
+
+/** 智能选区判定方式（src/core/smartSelect.ts）。 */
+export const SMART_SELECTS = [
+  { id: "colorRange", label: "色彩范围", params: ["color", "tolerance"] },
+  { id: "subject", label: "选取主体", params: [] },
+  { id: "sky", label: "选取天空", params: [] },
+  { id: "focus", label: "焦点区域", params: ["threshold"] },
+];
+
+/** 色彩配置（src/core/colorProfile.ts）。 */
+export const COLOR_PROFILES = Object.entries(PROFILE_LABELS).map(([id, label]) => ({ id, label }));
+
 /** MCP 协议版本（本服务器声明支持）。 */
 export const PROTOCOL_VERSION = "2024-11-05";
 
@@ -435,6 +477,19 @@ export function buildCapabilities() {
     selectionModes: SELECTION_MODES,
     selectionOps: SELECTION_EDIT_OPS,
     tools: { groups: TOOL_GROUPS, list: TOOLS },
+    imageOps: {
+      filters: FILTERS,
+      filterCount: FILTERS.length,
+      colorModes: COLOR_MODES,
+      smartSelects: SMART_SELECTS,
+      colorProfiles: COLOR_PROFILES,
+      engines: [
+        { id: "contentAwareScale", label: "内容识别缩放（接缝雕刻）", tool: "strata_content_aware_scale" },
+        { id: "meshWarp", label: "木偶变形（MLS 钉点）", tool: "strata_mesh_warp" },
+        { id: "smartSelect", label: "智能选区", tool: "strata_smart_select" },
+        { id: "colorProfile", label: "色彩配置文件", tool: "strata_color_profile" },
+      ],
+    },
     exportFormats: EXPORT_FORMATS,
     importFormats: IMPORT_FORMATS,
     tools_available: [
@@ -452,6 +507,11 @@ export function buildCapabilities() {
       "strata_image_info",
       "strata_adjust_image",
       "strata_filter_image",
+      "strata_color_mode",
+      "strata_content_aware_scale",
+      "strata_mesh_warp",
+      "strata_smart_select",
+      "strata_color_profile",
       "strata_edit_image",
       "strata_export_image",
       "strata_image_preview",

@@ -104,6 +104,12 @@ img {
   white-space: nowrap;
   flex: 0 0 auto;
 }
+
+/* 兜底：任何按钮都不许把文字拆成两行。
+   之前只在 .btn-* 上加，通道面板那排 .ch-act 仍然被压成竖排 —— 干脆全局兜住。 */
+button {
+  white-space: nowrap;
+}
 .btn-primary {
   display: inline-flex;
   align-items: center;
@@ -247,4 +253,46 @@ html.is-compact .ly-row {
 html.is-compact .panel-tabs {
   padding-top: 2px;
   padding-bottom: 2px;
+}
+
+/* ---------- 浮层菜单（Popover：portal 到 body，不受滚动容器裁剪） ---------- */
+.popover {
+  overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  animation: popover-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.popover .ly-menu-group {
+  display: block;
+  padding: 4px 8px 2px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.popover .ly-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: var(--fs-sm);
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.popover .ly-menu-item:hover {
+  background: var(--hover);
 }

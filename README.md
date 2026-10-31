@@ -27,6 +27,15 @@
 
 ## 🆕 这个版本更新了什么
 
+### 📅 本轮更新（10-31 第三波）：直方图面板与 MCP 扩充
+
+- 📊 **直方图 / 示波器面板**：`HistogramPanel` 独立成面板（样式与交互完整），`RightDock` 布局重排适配
+- 🔌 **MCP 能力扩充**：`strata-mcp.mjs` / `capabilities.mjs` 更新——AI 侧可调用的工具面继续扩大
+- ✏️ **文本引擎增强**：`engine/text.ts` 渲染管线迭代
+- 🧵 **操控变形对话框**：`PuppetWarpDialog` 交互打磨
+- 🎛️ **图层 / 堆栈 / 智能选区 / 滤镜继续深化**：layerOps / stackOps / smartSelect / filterOps 全部有实质更新
+- 🎨 **主题与偏好存储**：theme / prefs store 重构，全局样式与编辑器外壳样式过一遍
+
 ### 📅 本轮更新（10-31 第二波）：色彩底座与镜头滤镜
 
 - 🎨 **色彩模式与色彩配置文件**：`colorMode.ts` / `colorProfile.ts`——RGB 之外的色彩空间底座，模式切换与配置文件管理，配单测

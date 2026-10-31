@@ -17,6 +17,7 @@
 import { boxBlurPass, premultiply, type RgbaBuffer } from "../engine/filters/kernels";
 import { createSurface, mustCtx, readPixels } from "../engine/surface";
 import type { StrataDoc } from "./document";
+import type { StackMode } from "./stackModes";
 import type { StrataLayer } from "./layer";
 
 /** 取某层的亮度平面（0~255）。 */
@@ -285,5 +286,39 @@ export function autoBlendLayers(doc: StrataDoc, referenceId = doc.activeLayerId)
   mustCtx(merged).putImageData(outImg, 0, 0);
 
   const layers = doc.layers.map((l) => (l.id === ref.id ? { ...l, surface: merged } : l));
+  return { ...doc, layers, dirty: true };
+}
+
+/* ------------------------------------------------------- 堆栈模式（文档级） */
+
+/**
+ * 把参与层按统计量合成一层（Layer > Smart Objects > Stack Mode）。
+ *
+ * 参与范围：多选优先，否则取当前活动层及其下方所有可见像素层 ——
+ * 与 PS 一致的「以活动层为基准往上/往下」习惯在这里简化为「全可见层」。
+ * 结果写进最上面那层的 surface，其余参与层保持不动（可撤销）。
+ */
+export function applyStackModeToDoc(
+  doc: StrataDoc,
+  mode: StackMode,
+  apply: typeof import("./stackModes").applyStackMode,
+): StrataDoc {
+  const ids = doc.selectedLayerIds ?? [];
+  const pool =
+    ids.length >= 2
+      ? doc.layers.filter((l) => ids.includes(l.id) && l.kind === "pixel")
+      : doc.layers.filter((l) => l.kind === "pixel" && l.visible);
+  if (pool.length < 2) return doc;
+  const buffers = pool.map((l) => {
+    const img = readPixels(l.surface);
+    return { data: img.data, width: img.width, height: img.height };
+  });
+  const merged = apply(buffers, mode);
+  const top = pool[pool.length - 1];
+  const surface = createSurface(doc.width, doc.height);
+  const img = readPixels(surface);
+  img.data.set(merged.data);
+  mustCtx(surface).putImageData(img, 0, 0);
+  const layers = doc.layers.map((l) => (l.id === top.id ? { ...l, surface } : l));
   return { ...doc, layers, dirty: true };
 }

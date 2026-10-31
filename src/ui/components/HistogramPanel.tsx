@@ -22,7 +22,7 @@ const BINS = 256;
 /** 抽样上限：超过这个像素数就按步长跳采，统计形状不变、计算量封顶 */
 const MAX_SAMPLES = 262144;
 
-interface Stats {
+export interface HistStats {
   r: Uint32Array;
   g: Uint32Array;
   b: Uint32Array;
@@ -36,7 +36,7 @@ interface Stats {
 /** 复用一块小画布做降采样，读像素量和原图大小脱钩（4000×3000 也只读 512²）。 */
 let sampleCanvas: HTMLCanvasElement | null = null;
 
-function computeHistogram(src: HTMLCanvasElement): Stats | null {
+export function computeHistogram(src: HTMLCanvasElement): HistStats | null {
   const w = src.width;
   const h = src.height;
   if (w === 0 || h === 0) return null;

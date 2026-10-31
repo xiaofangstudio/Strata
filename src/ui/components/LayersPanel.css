@@ -1005,6 +1005,8 @@
 .ch-act {
   height: 28px;
   padding: 0 var(--sp-3);
+  white-space: nowrap;
+  flex: none;
   font-size: var(--fs-xs);
   color: var(--text-2);
   background: transparent;
@@ -1136,4 +1138,16 @@
 .ly-row.is-multi {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 图标版通道按钮：方一点、只放图标，靠 title/aria-label 说话 */
+.ch-act.is-icon {
+  width: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.ch-act.is-icon svg {
+  display: block;
 }

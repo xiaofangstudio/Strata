@@ -32,6 +32,10 @@ interface Props {
   /** 确定：把形变后的像素写回当前图层，进历史 */
   onApply: (next: StrataDoc) => void;
   onClose: () => void;
+  /** 是否绘制网格参考（视图 > 显示 > 网格） */
+  showMesh?: boolean;
+  /** 是否绘制钉子（视图 > 显示 > 编辑钉） */
+  showPins?: boolean;
 }
 
 /** 预览缓冲最长边。 */
@@ -39,7 +43,15 @@ const PREVIEW_MAX = 640;
 /** 命中图钉的判定半径（画布像素）。 */
 const HIT_R = 10;
 
-export default function PuppetWarpDialog({ doc, themeMode, defaultMode, onApply, onClose }: Props) {
+export default function PuppetWarpDialog({
+  doc,
+  themeMode,
+  defaultMode,
+  onApply,
+  onClose,
+  showMesh = true,
+  showPins = true,
+}: Props) {
   const act = activeLayer(doc);
   const at = useMemo(
     () => (act ? doc.layers.findIndex((l) => l.id === act.id) : -1),
@@ -156,8 +168,26 @@ export default function PuppetWarpDialog({ doc, themeMode, defaultMode, onApply,
     ctx.lineWidth = 1;
     ctx.strokeRect(ox + 0.5, oy + 0.5, dw - 1, dh - 1);
 
-    // 图钉：原始位置细线 + 当前位置圆点
-    for (let i = 0; i < pins.length; i += 1) {
+    // 网格参考：把画面切成 6×6，变形时看得清拉伸方向（视图 > 显示 > 网格）
+    if (showMesh) {
+      ctx.strokeStyle = themeMode === "dark" ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.12)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 6; i += 1) {
+        const gx = ox + (dw * i) / 6;
+        const gy = oy + (dh * i) / 6;
+        ctx.beginPath();
+        ctx.moveTo(gx, oy);
+        ctx.lineTo(gx, oy + dh);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(ox, gy);
+        ctx.lineTo(ox + dw, gy);
+        ctx.stroke();
+      }
+    }
+
+    // 图钉：原始位置细线 + 当前位置圆点（视图 > 显示 > 编辑钉）
+    for (let i = 0; i < pins.length && showPins; i += 1) {
       const p = pins[i];
       const px = ox + p.x * s;
       const py = oy + p.y * s;
@@ -176,7 +206,7 @@ export default function PuppetWarpDialog({ doc, themeMode, defaultMode, onApply,
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
-  }, [act, doc.width, doc.height, minPins, mode, pins, selected, themeMode, usable]);
+  }, [act, doc.width, doc.height, minPins, mode, pins, selected, themeMode, usable, showMesh, showPins]);
 
   useEffect(() => {
     draw();

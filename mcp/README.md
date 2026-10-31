@@ -58,7 +58,12 @@ node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 | `strata_open_image` | 打开 PNG / JPEG 进内存会话（`maxSide` 可先缩） |
 | `strata_image_info` / `strata_image_preview` | 查会话信息 / 取 base64 预览 |
 | `strata_adjust_image` | 按算子序列调色（15 种：亮度对比度、饱和度、自然饱和度、色阶、曲线、通道混合器、黑白、曝光、白平衡、色相、色彩平衡、反相、去色、色调分离、阈值） |
-| `strata_filter_image` | 施加滤镜（高斯/方框/USM/杂色/马赛克/中间值/动感模糊） |
+| `strata_filter_image` | 施加**任意已注册滤镜**（与应用内「滤镜」菜单同一份实现，共 73 个，见 `strata_capabilities` 的 `imageOps.filters`）。老短名（`gaussianBlur` 等）仍兼容 |
+| `strata_color_mode` | 颜色模式转换：`bitmap` / `duotone` / `indexed`（返回调色板）/ `cmyk` / `lab` / `multichannel`（返回三通道 PNG） |
+| `strata_color_profile` | 色彩配置文件换算：`srgb` / `display-p3` / `adobe-rgb` / `gray`，真走 线性RGB→XYZ(D65)→目标 矩阵 |
+| `strata_content_aware_scale` | 内容识别缩放（接缝雕刻），改尺寸不拉伸主体 |
+| `strata_mesh_warp` | 木偶变形：MLS 钉点 `{ox,oy,x,y}`，`similarity` 只转/缩放、`affine` 可斜切 |
+| `strata_smart_select` | 智能选区：`colorRange` / `subject` / `sky` / `focus`，返回黑白蒙版 PNG 与覆盖率 |
 | `strata_cutout` | 抠图：`mode=subject` 拆主体、`mode=background` 留背景并填补洞。参数 `tolerance` / `edgeGate`（边缘闸门）/ `feather` / `sides`（种子边） |
 | `strata_composite` | 把叠层贴到底图上（`overlayWidth` 等比缩放、`x/y` 落点、`opacity`） |
 | `strata_light` | 打光：`glow` 径向光斑 / `beam` 自然光束 / `shadow` 接触阴影 / `vignette` 暗角 |
@@ -124,12 +129,28 @@ overlay / softLight / darken / lighten / add。文字与形状由 `@napi-rs/canv
 mcp/
   strata-mcp.mjs        服务器入口（工具注册 + 参数校验）
   lib/capabilities.mjs  能力字典（业务常量单一事实来源）
+  lib/engines.gen.mjs   **自动生成**：从 src/ 打包来的纯算法（滤镜/颜色模式/接缝雕刻/MLS/选区/profile）
   lib/project.mjs       .strata 读写、校验、图层操作
   lib/imageOps.mjs      图像管线（解码 / 调色算子 / 滤镜 / 抠图 / 合成 / 打光 / 轮廓 / 虚线 / 旋转 / 胶封）
   lib/draw.mjs          矢量路径、光晕、玻璃膜等渲染（@napi-rs/canvas）
   lib/schema.mjs        轻量 schema 校验/补默认值
   lib/png.mjs           PNG 编解码（生成纯色底图等）
   package.json
+
+scripts/（仓库根）
+  build-mcp-engines.mjs   把 src 的纯算法打包成 lib/engines.gen.mjs
+  mcp-newtools-check.mjs  真走 MCP 协议的冒烟测试（16 项）
+```
+
+## 引擎包：界面与 MCP 共用一份算法
+
+`lib/engines.gen.mjs` 是**生成物**，由 esbuild 从 `scripts/mcp-engines-entry.ts`
+（re-export 了 `src/engine/filters/*`、`src/core/*` 里的纯函数）打包而来。
+好处是：界面里加一个滤镜，MCP 自动就有，不存在两份实现漂移。
+
+```bat
+npm run mcp:engines   :: 改了 src 里的算法之后重新打包
+npm run mcp:check     :: 自检 + 冒烟测试（会自己造测试图，跑完删掉）
 ```
 
 ## 自检与冒烟

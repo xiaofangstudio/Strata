@@ -39,6 +39,14 @@ export interface StrataDoc {
    * 旧工程没有此字段，读取时按空数组处理。
    */
   alphaChannels?: AlphaChannel[];
+  /** 工作路径（文字 > 创建工作路径 会把字形轮廓存下来，视图 > 显示 > 目标路径 可开关） */
+  workPath?: HTMLCanvasElement;
+  /** 文档备注（窗口 > 面板 > 注释） */
+  note?: string;
+  /** 图层复合：一层可见性快照（窗口 > 面板 > 图层复合） */
+  layerComps?: { name: string; visible: Record<string, boolean> }[];
+  /** 切片（Layer > New Layer Based Slice；导出时按切片裁切） */
+  slices?: { name: string; x: number; y: number; w: number; h: number }[];
   /** 相对磁盘是否有未保存改动 */
   dirty?: boolean;
   /* ---------------------------------------------------- 颜色模式与精度 */

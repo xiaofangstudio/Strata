@@ -582,3 +582,94 @@
     transform: translate(-50%, 8px);
   }
 }
+
+/* 画板框：只画边界与名字，不接事件、不影响像素 */
+.editor-artboard {
+  position: absolute;
+  pointer-events: none;
+  border: 1px dashed var(--accent);
+  border-radius: 2px;
+}
+
+.editor-artboard-name {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* 切片框：与画板区分开，用实线 + 角标 */
+.editor-slice {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid rgba(255, 210, 0, 0.9);
+  background: rgba(255, 210, 0, 0.06);
+}
+
+.editor-slice-name {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  font-size: 10px;
+  color: #b58b00;
+  white-space: nowrap;
+}
+
+/* 图层边界：细虚线，不抢内容 */
+.editor-layer-edges {
+  position: absolute;
+  pointer-events: none;
+  border: 1px dashed rgba(120, 170, 255, 0.95);
+}
+
+/* 校样层：盖在合成结果上，默认不显示（宽高为 0 时也不会挡事件） */
+.editor-proof {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: none;
+}
+
+.editor-proof.is-on {
+  display: block;
+}
+
+/* 图案预览：半透明平铺，看接缝 */
+.editor-pattern-preview {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-repeat: repeat;
+}
+
+/* 工作路径浮层：蓝色轮廓图（来自文字字形边缘） */
+.editor-workpath {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.85;
+  mix-blend-mode: screen;
+  filter: drop-shadow(0 0 1px rgba(60, 140, 255, 0.9));
+}
+
+/* 注释标记：左上角一个小铅笔角标 */
+.editor-note-marker {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: #7a5a00;
+  background: #ffe9a8;
+  border: 1px solid #d9b64a;
+  border-radius: 3px;
+  pointer-events: auto;
+  cursor: help;
+}

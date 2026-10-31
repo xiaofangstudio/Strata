@@ -88,7 +88,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 0;
+  /* 面板全打开时总高度会超出窗口：这里必须能滚，
+     否则下面的面板会被挤扁（示波器画布就是这样被压成一条的） */
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--border);
   gap: 1px;
 }
@@ -134,9 +138,11 @@
   max-height: 208px;
 }
 
-/* 导航器 / 直方图按内容收紧，不跟图层抢剩余高度 */
+/* 导航器 / 直方图 / 示波器按内容收紧，不跟图层抢剩余高度，
+   也不允许被 flex 压扁 —— 画布类子元素一旦能收缩就会被压成一条 */
 .dock-group.is-navigator,
-.dock-group.is-histogram {
+.dock-group.is-histogram,
+.dock-group.is-scopes {
   flex: 0 0 auto;
 }
 
@@ -206,4 +212,50 @@
   .dock {
     width: 290px;
   }
+}
+
+/* ---------- 可拖拽的分隔条 ---------- */
+
+.dock-split {
+  flex: none;
+  height: 7px;
+  margin: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: ns-resize;
+  position: relative;
+  touch-action: none;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* 中间的抓握提示：两条短横线 */
+.dock-split::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  background: var(--border-strong);
+  opacity: 0.7;
+}
+
+.dock-split:hover,
+.dock-split:active {
+  background: var(--accent-soft);
+}
+
+.dock-split:hover::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* 底部留白：最后一块面板不贴底 */
+.dock-tail {
+  flex: none;
+  height: 6px;
+  background: var(--surface);
 }

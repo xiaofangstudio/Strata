@@ -8,6 +8,7 @@
 import { useSyncExternalStore } from "react";
 import type { ToolId } from "../tools/catalog";
 import type { BrushTexture, BrushTip } from "../engine/paint";
+import type { TextAlign, TextFamilyId, WarpStyle } from "../engine/text";
 
 /** 画笔参数（不含颜色，颜色跟随前景色）。 */
 export interface BrushPrefs {
@@ -91,6 +92,12 @@ export interface Prefs {
   dragThreshold: number;
   /** 被隐藏的顶级菜单（编辑 > 菜单） */
   hiddenMenus: string[];
+  /** 自定义工作区（窗口 > 工作区）：名字 + 面板开合状态 */
+  workspaces: { name: string; dock: Record<string, boolean> }[];
+  /** 当前工作区名（空 = 未使用命名工作区） */
+  activeWorkspace?: string;
+  /** 锁定工作区：锁住后不允许再拖动/开关面板 */
+  workspaceLocked: boolean;
   /* ---------------- 历史 / 性能 ---------------- */
   /** 历史记录步数上限 */
   historyLimit: number;
@@ -117,6 +124,28 @@ export interface Prefs {
   /* ---------------- 文字 / RAW ---------------- */
   /** 文字工具默认字号（像素） */
   typeSize: number;
+  /** 字体预览大小（Type > 字体预览大小） */
+  fontPreviewSize: number;
+  /** 字符样式（字体/字号/字距） */
+  typeCharStyles: {
+    name: string;
+    family: TextFamilyId;
+    size: number;
+    letterSpacing: number;
+  }[];
+  /** 「保存默认文字样式」存下的快照 */
+  typeStylesSaved?: {
+    char: Prefs["typeCharStyles"];
+    para: Prefs["typeParaStyles"];
+  };
+  /** 段落样式（对齐/行距/弯曲） */
+  typeParaStyles: {
+    name: string;
+    align: TextAlign;
+    lineHeight: number;
+    warp: WarpStyle;
+    warpAmount: number;
+  }[];
   /** RAW 导入时自动做色调调整 */
   rawAutoTone: boolean;
   /** 被隐藏的工具（从工具栏移除，快捷键仍然生效） */
@@ -134,6 +163,8 @@ export const DEFAULT_PREFS: Prefs = {
   toolLabels: false,
   dragThreshold: 3,
   hiddenMenus: [],
+  workspaces: [],
+  workspaceLocked: false,
   historyLimit: 40,
   previewQuality: 1,
   checkerSize: 8,
@@ -145,6 +176,9 @@ export const DEFAULT_PREFS: Prefs = {
   exportQuality: 92,
   rememberDock: true,
   typeSize: 48,
+  fontPreviewSize: 20,
+  typeCharStyles: [],
+  typeParaStyles: [],
   rawAutoTone: true,
   hiddenTools: [],
   brushDefaults: {
@@ -218,6 +252,11 @@ function read(): Prefs {
         toolLabels: bool(v.toolLabels, dp.toolLabels),
         dragThreshold: clampNum(v.dragThreshold, 1, 20, dp.dragThreshold),
         hiddenMenus: Array.isArray(v.hiddenMenus) ? (v.hiddenMenus as string[]) : [],
+        workspaces: Array.isArray(v.workspaces)
+          ? (v.workspaces as Prefs["workspaces"])
+          : [],
+        activeWorkspace: typeof v.activeWorkspace === "string" ? v.activeWorkspace : undefined,
+        workspaceLocked: bool(v.workspaceLocked, false),
         historyLimit: clampNum(v.historyLimit, 10, 500, dp.historyLimit),
         previewQuality: v.previewQuality === 0 || v.previewQuality === 2 ? v.previewQuality : dp.previewQuality,
         checkerSize: clampNum(v.checkerSize, 4, 64, dp.checkerSize),
@@ -233,6 +272,13 @@ function read(): Prefs {
         exportQuality: clampNum(v.exportQuality, 10, 100, dp.exportQuality),
         rememberDock: bool(v.rememberDock, dp.rememberDock),
         typeSize: clampNum(v.typeSize, 6, 400, dp.typeSize),
+        fontPreviewSize: clampNum(v.fontPreviewSize, 10, 64, dp.fontPreviewSize),
+        typeCharStyles: Array.isArray(v.typeCharStyles)
+          ? (v.typeCharStyles as Prefs["typeCharStyles"])
+          : [],
+        typeParaStyles: Array.isArray(v.typeParaStyles)
+          ? (v.typeParaStyles as Prefs["typeParaStyles"])
+          : [],
         rawAutoTone: bool(v.rawAutoTone, dp.rawAutoTone),
       };
     }

@@ -19,7 +19,7 @@ import { STRATA_EXTENSION } from "./engine/project";
  * 全部文档关闭后回到开始页面 —— 程序不退出。
  */
 export default function App() {
-  const { mode, setMode, toggle } = useTheme();
+  const { mode, skin, setMode, setTheme, toggle } = useTheme();
   const [docs, setDocs] = useState<StrataDoc[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -165,6 +165,8 @@ export default function App() {
         info={info}
         themeMode={mode}
         onSetTheme={setMode}
+        themeSkin={skin}
+        onSetThemeId={setTheme}
         onSelectDoc={selectDoc}
         onCloseDoc={closeDoc}
         onCloseAll={closeAll}

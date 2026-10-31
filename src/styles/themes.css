@@ -1,0 +1,306 @@
+/**
+ * 主题皮肤（窗口 > 主题）。
+ *
+ * 实现方式是「两层」：`data-theme` 仍然只有 light / dark —— 现有几十个
+ * `[data-theme="light"]` 选择器靠它工作，不能动；皮肤用 `data-skin` 叠加在上层，
+ * 只覆盖颜色令牌。这样加一套主题 = 加一段 CSS 变量，不会牵动任何组件。
+ *
+ * 品牌蓝在大多数皮肤里保持不变（它是指示色，不该跟着皮肤跑）；
+ * 只有 Studio / Solarized / 柔和 系列为了整体协调做了调整。
+ */
+
+/* ---------- 主题元信息（给菜单与设置页读） ---------- */
+
+/* Pro 主题 · 深色底 */
+[data-skin="pro"] {
+  --bg: #323232;
+  --surface: #3b3b3b;
+  --surface-2: #424242;
+  --surface-3: #4a4a4a;
+  --border: #262626;
+  --border-strong: #1e1e1e;
+  --text: #f2f2f2;
+  --text-2: #c9c9c9;
+  --text-3: #909090;
+  --canvas-bg: #1e1e1e;
+  --checker: #2a2a2a;
+  --accent: #6fc0ff;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* Pro 中灰 · 深色底 */
+[data-skin="pro-medium"] {
+  --bg: #3f3f3f;
+  --surface: #4a4a4a;
+  --surface-2: #545454;
+  --surface-3: #5e5e5e;
+  --border: #333333;
+  --border-strong: #282828;
+  --text: #f4f4f4;
+  --text-2: #d0d0d0;
+  --text-3: #9a9a9a;
+  --canvas-bg: #2c2c2c;
+  --checker: #343434;
+  --accent: #6fc0ff;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* Pro 浅灰 · 浅色底 */
+[data-skin="pro-light-gray"] {
+  --bg: #dedee2;
+  --surface: #e9e9ed;
+  --surface-2: #f2f2f6;
+  --surface-3: #e2e2e6;
+  --border: #cfcfd4;
+  --border-strong: #bcbcc2;
+  --text: #1c1c22;
+  --text-2: #55555f;
+  --text-3: #8a8a95;
+  --canvas-bg: #d2d2d8;
+  --checker: #c8c8ce;
+  --accent: #1e7ad6;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* Pro 浅色 · 浅色底 */
+[data-skin="pro-light"] {
+  --bg: #f2f2f4;
+  --surface: #ffffff;
+  --surface-2: #f6f6f8;
+  --surface-3: #ececf0;
+  --border: #e2e2e6;
+  --border-strong: #d0d0d6;
+  --text: #16161b;
+  --text-2: #5a5a64;
+  --text-3: #8d8d98;
+  --canvas-bg: #eceef0;
+  --checker: #dcdce0;
+  --accent: #1e7ad6;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* Studio · 深色底 */
+[data-skin="studio"] {
+  --bg: #1f1e1c;
+  --surface: #272624;
+  --surface-2: #2f2e2b;
+  --surface-3: #383633;
+  --border: #2a2825;
+  --border-strong: #1a1917;
+  --text: #f3f1ec;
+  --text-2: #c3bfb6;
+  --text-3: #8d897f;
+  --canvas-bg: #151412;
+  --checker: #232220;
+  --accent: #e8b563;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* Studio 浅色 · 浅色底 */
+[data-skin="studio-light"] {
+  --bg: #f6f4f0;
+  --surface: #fffefb;
+  --surface-2: #f3f1ec;
+  --surface-3: #e9e6df;
+  --border: #e2ded6;
+  --border-strong: #d2cdc3;
+  --text: #1d1b18;
+  --text-2: #5c574f;
+  --text-3: #8f8a80;
+  --canvas-bg: #eeece7;
+  --checker: #dedad2;
+  --accent: #c2882f;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* 经典 · 浅色底 */
+[data-skin="classic"] {
+  --bg: #e9edf2;
+  --surface: #f7f9fb;
+  --surface-2: #eef2f6;
+  --surface-3: #e3e8ee;
+  --border: #d5dbe3;
+  --border-strong: #c2cad4;
+  --text: #17202b;
+  --text-2: #4f5c6b;
+  --text-3: #8593a1;
+  --canvas-bg: #dfe5ec;
+  --checker: #cfd6df;
+  --accent: #2f6fd0;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* Solarized Dark · 深色底 */
+[data-skin="solarized-dark"] {
+  --bg: #002b36;
+  --surface: #073642;
+  --surface-2: #0b3f4b;
+  --surface-3: #124b57;
+  --border: #0a3038;
+  --border-strong: #00252e;
+  --text: #eee8d5;
+  --text-2: #93a1a1;
+  --text-3: #6c8181;
+  --canvas-bg: #001f27;
+  --checker: #04303a;
+  --accent: #b58900;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* Adwaita 浅色 · 浅色底 */
+[data-skin="adwaita"] {
+  --bg: #f6f5f4;
+  --surface: #ffffff;
+  --surface-2: #f2f0ef;
+  --surface-3: #e8e6e4;
+  --border: #dedbd9;
+  --border-strong: #cdc9c6;
+  --text: #1b1b1b;
+  --text-2: #5e5c5a;
+  --text-3: #93908d;
+  --canvas-bg: #eceae8;
+  --checker: #dcd9d7;
+  --accent: #3584e4;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* Adwaita 深色 · 深色底 */
+[data-skin="adwaita-dark"] {
+  --bg: #242424;
+  --surface: #303030;
+  --surface-2: #383838;
+  --surface-3: #414141;
+  --border: #2c2c2c;
+  --border-strong: #1c1c1c;
+  --text: #ffffff;
+  --text-2: #c8c8c8;
+  --text-3: #8a8a8a;
+  --canvas-bg: #1a1a1a;
+  --checker: #2b2b2b;
+  --accent: #62a0ea;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* Breeze 浅色 · 浅色底 */
+[data-skin="breeze-light"] {
+  --bg: #fcfcfc;
+  --surface: #ffffff;
+  --surface-2: #f4f5f7;
+  --surface-3: #eaebee;
+  --border: #e0e2e6;
+  --border-strong: #cdd0d6;
+  --text: #1a1c20;
+  --text-2: #565a63;
+  --text-3: #8b8f98;
+  --canvas-bg: #f0f1f4;
+  --checker: #dfe1e6;
+  --accent: #3daee9;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* Breeze 深色 · 深色底 */
+[data-skin="breeze-dark"] {
+  --bg: #232629;
+  --surface: #2b2e32;
+  --surface-2: #313438;
+  --surface-3: #393d42;
+  --border: #26292d;
+  --border-strong: #1b1d20;
+  --text: #fcfcfc;
+  --text-2: #bdc3c7;
+  --text-3: #7f858c;
+  --canvas-bg: #17191b;
+  --checker: #26292c;
+  --accent: #3daee9;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}
+
+/* 柔和浅色 · 浅色底 */
+[data-skin="soft-light"] {
+  --bg: #f7f6f9;
+  --surface: #ffffff;
+  --surface-2: #f4f3f7;
+  --surface-3: #eceaf1;
+  --border: #e6e4eb;
+  --border-strong: #d7d4de;
+  --text: #201f28;
+  --text-2: #5f5c6b;
+  --text-3: #94909f;
+  --canvas-bg: #f1eff5;
+  --checker: #e2dfe8;
+  --accent: #7a6ff0;
+  --hover: rgba(20,20,30,0.045);
+  --pressed: rgba(20,20,30,0.09);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(0,0,0,0.1);
+  --editor-mat: rgba(128,128,140,0.09);
+}
+
+/* 柔和深色 · 深色底 */
+[data-skin="soft-dark"] {
+  --bg: #1c1b22;
+  --surface: #24232c;
+  --surface-2: #2b2a34;
+  --surface-3: #33323d;
+  --border: #232230;
+  --border-strong: #17161d;
+  --text: #f0eef6;
+  --text-2: #b8b4c6;
+  --text-3: #84808f;
+  --canvas-bg: #131218;
+  --checker: #201f27;
+  --accent: #a99bff;
+  --hover: rgba(255,255,255,0.06);
+  --pressed: rgba(255,255,255,0.11);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --grid-line: rgba(255,255,255,0.12);
+  --editor-mat: rgba(255,255,255,0.05);
+}

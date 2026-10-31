@@ -5,7 +5,7 @@
  * 打开的面板自上而下堆叠。颜色、属性、图层、历史、导航器、直方图都是
  * 真实面板，没做的（路径、通道独立页）就不放入口 —— 不做假控件。
  */
-import { useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { zh } from "../../i18n/zh-CN";
 import "./RightDock.css";
 
@@ -31,6 +31,47 @@ interface Props {
   /** 受控开关（「窗口 > 面板」菜单直接控制）；不传则坞内自持。 */
   open?: Record<GroupId, boolean>;
   onToggle?: (id: GroupId) => void;
+}
+
+/* -------------------------------------------------- 面板高度常量与持久化 */
+
+const HEIGHT_KEY = "strata.dock.heights";
+
+/** 各面板默认高度（px）。 */
+const DEFAULT_HEIGHTS: Record<GroupId, number> = {
+  navigator: 152,
+  scopes: 214,
+  histogram: 150,
+  color: 196,
+  props: 168,
+  layers: 300,
+  history: 190,
+};
+
+/** 各面板允许的最小高度。 */
+const MIN_H: Record<GroupId, number> = {
+  navigator: 90,
+  scopes: 120,
+  histogram: 90,
+  color: 110,
+  props: 80,
+  layers: 120,
+  history: 90,
+};
+
+function readHeights(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(HEIGHT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** 轨道上的按钮：顺序与 PhotoCraft 一致（导航器 → 直方图 → 属性 → 颜色 → 图层 → 历史）。 */
@@ -139,6 +180,69 @@ export default function RightDock({
     else setInner((v) => ({ ...v, [id]: !v[id] }));
   };
 
+  /* ---------------------------------------------------- 面板高度（可拖） */
+
+  /**
+   * 每个面板组的高度。用户拖着分隔条改，改完记在本地。
+   *
+   * 之前所有高度都是 CSS 写死的（is-layers 吃剩余空间、其它 flex:0 0 auto），
+   * 所以「属性」这种想要高一点的面板永远只有固定高度 —— 现在每块都能自己拉。
+   */
+  const [heights, setHeights] = useState<Record<string, number>>(() => readHeights());
+  const dragRef = useRef<{ id: GroupId; startY: number; startH: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HEIGHT_KEY, JSON.stringify(heights));
+    } catch {
+      /* 存储不可用时只在本次会话生效 */
+    }
+  }, [heights]);
+
+  const onSplitDown = useCallback(
+    (id: GroupId) => (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = { id, startY: e.clientY, startH: heights[id] ?? DEFAULT_HEIGHTS[id] ?? 200 };
+    },
+    [heights],
+  );
+
+  const onSplitMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const next = Math.max(MIN_H[d.id] ?? 80, Math.min(900, d.startH + (e.clientY - d.startY)));
+    setHeights((h) => ({ ...h, [d.id]: next }));
+  }, []);
+
+  const onSplitUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放 */
+      }
+    }
+    dragRef.current = null;
+  }, []);
+
+  /** 双击分隔条：恢复该面板默认高度。 */
+  const onSplitReset = useCallback(
+    (id: GroupId) => () => {
+      setHeights((h) => ({ ...h, [id]: DEFAULT_HEIGHTS[id] ?? 200 }));
+    },
+    [],
+  );
+
+  const groups: { id: GroupId; node: ReactNode; cls: string }[] = [];
+  if (open.navigator) groups.push({ id: "navigator", node: navigator, cls: "is-navigator" });
+  if (open.scopes) groups.push({ id: "scopes", node: scopes, cls: "is-scopes" });
+  if (open.histogram) groups.push({ id: "histogram", node: histogram, cls: "is-histogram" });
+  if (open.color) groups.push({ id: "color", node: color, cls: "is-color" });
+  if (open.props) groups.push({ id: "props", node: properties, cls: "is-props" });
+  if (open.layers) groups.push({ id: "layers", node: layers, cls: "is-layers" });
+  if (open.history) groups.push({ id: "history", node: history, cls: "is-history" });
+
   return (
     <aside className="dock" aria-label={zh.panel.dock}>
       <div className="dock-rail" role="toolbar" aria-label={zh.panel.dockRail}>
@@ -158,13 +262,37 @@ export default function RightDock({
       </div>
 
       <div className="dock-body">
-        {open.navigator && <div className="dock-group is-navigator">{navigator}</div>}
-        {open.scopes && <div className="dock-group is-scopes">{scopes}</div>}
-        {open.histogram && <div className="dock-group is-histogram">{histogram}</div>}
-        {open.color && <div className="dock-group is-color">{color}</div>}
-        {open.props && <div className="dock-group is-props">{properties}</div>}
-        {open.layers && <div className="dock-group is-layers">{layers}</div>}
-        {open.history && <div className="dock-group is-history">{history}</div>}
+        {groups.map((g, i) => (
+          <Fragment key={g.id}>
+            <div
+              className={`dock-group ${g.cls}`}
+              style={{
+                height: heights[g.id] ?? DEFAULT_HEIGHTS[g.id],
+                // 一律按固定高度排：谁也不再抢「剩余空间」，用户说了算
+                flex: "0 0 auto",
+                minHeight: MIN_H[g.id] ?? 80,
+              }}
+            >
+              {g.node}
+            </div>
+            {i < groups.length - 1 && (
+              <div
+                className="dock-split"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="拖动调整面板高度"
+                title="拖动调整高度 · 双击恢复默认"
+                onPointerDown={onSplitDown(g.id)}
+                onPointerMove={onSplitMove}
+                onPointerUp={onSplitUp}
+                onPointerCancel={onSplitUp}
+                onDoubleClick={onSplitReset(g.id)}
+              />
+            )}
+          </Fragment>
+        ))}
+        {/* 最后一块之下给一点空白，避免贴底太紧 */}
+        <div className="dock-tail" aria-hidden="true" />
       </div>
     </aside>
   );
