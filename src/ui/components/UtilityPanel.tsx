@@ -42,13 +42,17 @@ export type PanelKind =
   | "modifierKeys"
   | "toolPresets"
   | "paths"
-  | "actions";
+  | "actions"
+  | "cloneSource";
 
 interface Props {
   kind: PanelKind;
   doc: StrataDoc;
   /** 当前指针的文档坐标（信息面板用） */
   cursor?: { x: number; y: number };
+  /** 仿制 / 修复的取样点（仿制源面板用） */
+  cloneAnchor?: { x: number; y: number } | null;
+  onCloneAnchor?: (p: { x: number; y: number } | null) => void;
   fg: string;
   onFg: (hex: string) => void;
   onApply: (next: StrataDoc, label: string) => void;
@@ -71,6 +75,7 @@ const TITLES: Record<PanelKind, string> = {
   toolPresets: "工具预设",
   paths: "路径",
   actions: "动作",
+  cloneSource: "仿制源",
 };
 
 /** 内置色板：中性阶 + 品牌蓝 + 常用纯色。 */
@@ -146,6 +151,8 @@ export default function UtilityPanel({
   kind,
   doc,
   cursor,
+  cloneAnchor,
+  onCloneAnchor,
   fg,
   onFg,
   onApply,
@@ -489,6 +496,82 @@ export default function UtilityPanel({
             <p className="isz-hint">字体族（文字工具）：{TEXT_FAMILIES.map((f) => f.label).join(" / ")}</p>
           </>
         );
+      case "cloneSource": {
+        const ax = cloneAnchor?.x ?? 0;
+        const ay = cloneAnchor?.y ?? 0;
+        const set = (x: number, y: number): void => onCloneAnchor?.({ x, y });
+        return (
+          <>
+            <p className="isz-hint">
+              仿制图章 / 污点修复的取样点。在画布上按住 <kbd>Alt</kbd> 单击也能直接定；
+              这里可以精确输入，或者按偏移量挪。
+            </p>
+            <table className="util-table">
+              <tbody>
+                <tr>
+                  <td>当前取样点</td>
+                  <td>{cloneAnchor ? `${Math.round(ax)}, ${Math.round(ay)}` : "未设定"}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="isz-row">
+              <label className="field">
+                <span className="field-label">X</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={Math.round(ax)}
+                    onChange={(e) => set(Number(e.target.value) || 0, ay)}
+                  />
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">Y</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={Math.round(ay)}
+                    onChange={(e) => set(ax, Number(e.target.value) || 0)}
+                  />
+                </span>
+              </label>
+            </div>
+            <p className="isz-hint">按偏移量移动取样点：</p>
+            <div className="util-list">
+              {(
+                [
+                  ["↑ 上 50", 0, -50],
+                  ["↓ 下 50", 0, 50],
+                  ["← 左 50", -50, 0],
+                  ["→ 右 50", 50, 0],
+                  ["居中", doc.width / 2, doc.height / 2],
+                  ["左上角", 0, 0],
+                ] as [string, number, number][]
+              ).map(([label, dx, dy]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() =>
+                    label === "居中" || label === "左上角"
+                      ? set(dx, dy)
+                      : set(ax + dx, ay + dy)
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onCloneAnchor?.(null)}
+              >
+                清除取样点
+              </button>
+            </div>
+          </>
+        );
+      }
       case "paths":
         return (
           <p className="isz-hint">

@@ -50,3 +50,15 @@ export { estimateShift, sharpnessWeights } from "../src/core/stackOps";
 
 /* 色彩配置文件换算 */
 export { convertProfile, PROFILE_LABELS } from "../src/core/colorProfile";
+
+/* 裁正照片：背景估计 + 连通域找照片矩形（纯函数） */
+export { findPhotoRegions } from "../src/core/photoCrop";
+
+/* 3D LUT：恒等表生成与 .cube 文本（纯函数） */
+export { CUBE_SIZE, identityCube, identityLut, lutToCube } from "../src/core/lut";
+
+/* 文字检查：可确证的排版/错拼问题（纯函数） */
+export { applyFixes, checkText, ISSUE_LABEL } from "../src/core/proofread";
+
+/* 极简 PDF 写出器（Node 里有 TextEncoder，可直接用） */
+export { buildPdf, countPdfPages, pdfHead } from "../src/core/pdf";

@@ -1,4 +1,4 @@
-# 🖼️ Strata
+﻿# 🖼️ Strata
 
 > **小方工作室 · 出品** ｜ 永久免费 · 开源（MIT）· 不盈利
 
@@ -26,6 +26,16 @@
 ---
 
 ## 🆕 这个版本更新了什么
+
+### 📅 本轮更新（10-31 第四波）：LUT、照片裁剪与对比视图
+
+- 🎨 **LUT 色彩查找表**：新模块 `core/lut.ts`——加载 / 应用 LUT 调色底座，配单测
+- ✂️ **照片裁剪**：新模块 `core/photoCrop.ts`——专业照片裁切（比例锁定等），配单测
+- ✅ **打样 / 校对**：新模块 `core/proofread.ts`——印刷软打样底座，配 `pdf-and-proofread.test.ts` 单测
+- 🆚 **对比视图**：`CompareView` 独立组件（原 / 新效果并排对比），浮动文档 `FloatingDoc` 同步落地
+- 📦 **批量操作增强**：`batchOps.ts` 迭代
+- 🔌 **MCP 继续扩充**：engines 生成链路（`mcp-engines-entry.ts` / `engines.gen.mjs`）与能力清单更新，新增自检脚本 `mcp-newtools-check.mjs`
+- 📋 **规划文档入库**：`docs/剩余7项-依赖选型.md`——剩余灰项的依赖选型记录
 
 ### 📅 本轮更新（10-31 第三波）：直方图面板与 MCP 扩充
 

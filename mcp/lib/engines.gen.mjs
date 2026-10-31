@@ -4091,25 +4091,423 @@ function convertProfile(src, from, to) {
   }
   return out;
 }
+
+// src/core/photoCrop.ts
+function estimateBackground(data, w, h) {
+  const rs = [];
+  const gs = [];
+  const bs = [];
+  const push = (x, y) => {
+    const i = (y * w + x) * 4;
+    if (data[i + 3] < 8) return;
+    rs.push(data[i]);
+    gs.push(data[i + 1]);
+    bs.push(data[i + 2]);
+  };
+  const band = Math.max(1, Math.round(Math.min(w, h) * 0.02));
+  for (let x = 0; x < w; x += 1) {
+    for (let k = 0; k < band; k += 1) {
+      push(x, k);
+      push(x, h - 1 - k);
+    }
+  }
+  for (let y = 0; y < h; y += 1) {
+    for (let k = 0; k < band; k += 1) {
+      push(k, y);
+      push(w - 1 - k, y);
+    }
+  }
+  if (rs.length === 0) return [255, 255, 255];
+  const mid = (arr) => {
+    arr.sort((a, b) => a - b);
+    return arr[Math.floor(arr.length / 2)];
+  };
+  return [mid(rs), mid(gs), mid(bs)];
+}
+function findPhotoRegions(data, w, h, tolerance = 32, minArea = 5e-3) {
+  const total = w * h;
+  if (total === 0) return { boxes: [], singleBlob: false, background: [255, 255, 255] };
+  const bg = estimateBackground(data, w, h);
+  const [br, bgc, bb] = bg;
+  const thr2 = tolerance * tolerance;
+  const fg = new Uint8Array(total);
+  for (let p = 0; p < total; p += 1) {
+    const i = p * 4;
+    if (data[i + 3] < 8) continue;
+    const dr = data[i] - br;
+    const dg = data[i + 1] - bgc;
+    const db = data[i + 2] - bb;
+    if (dr * dr + dg * dg + db * db > thr2) fg[p] = 1;
+  }
+  const parent = new Int32Array(total).fill(-1);
+  const find = (a) => {
+    let x = a;
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  };
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const p = y * w + x;
+      if (!fg[p]) continue;
+      parent[p] = p;
+      if (x > 0 && fg[p - 1]) union(p, p - 1);
+      if (y > 0 && fg[p - w]) union(p, p - w);
+    }
+  }
+  const boxes = /* @__PURE__ */ new Map();
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const p = y * w + x;
+      if (!fg[p] || parent[p] < 0) continue;
+      const root = find(p);
+      const cur = boxes.get(root);
+      if (!cur) {
+        boxes.set(root, { x0: x, y0: y, x1: x, y1: y, n: 1 });
+      } else {
+        if (x < cur.x0) cur.x0 = x;
+        if (y < cur.y0) cur.y0 = y;
+        if (x > cur.x1) cur.x1 = x;
+        if (y > cur.y1) cur.y1 = y;
+        cur.n += 1;
+      }
+    }
+  }
+  const minPixels = Math.max(16, Math.floor(total * minArea));
+  const out = [];
+  for (const b of boxes.values()) {
+    if (b.n < minPixels) continue;
+    const pad = 2;
+    const x = Math.max(0, b.x0 - pad);
+    const y = Math.max(0, b.y0 - pad);
+    const x1 = Math.min(w - 1, b.x1 + pad);
+    const y1 = Math.min(h - 1, b.y1 + pad);
+    out.push({
+      x,
+      y,
+      w: x1 - x + 1,
+      h: y1 - y + 1,
+      area: (x1 - x + 1) * (y1 - y + 1) / total
+    });
+  }
+  out.sort((a, b) => Math.abs(a.y - b.y) > a.h * 0.5 ? a.y - b.y : a.x - b.x);
+  const singleBlob = out.length === 1 && out[0].area > 0.82;
+  return { boxes: out, singleBlob, background: bg };
+}
+
+// src/core/lut.ts
+var CUBE_SIZE = 33;
+function identityLut(size) {
+  const width = size * size;
+  const height = size;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let b = 0; b < size; b += 1) {
+    for (let g = 0; g < size; g += 1) {
+      for (let r = 0; r < size; r += 1) {
+        const x = b * size + r;
+        const y = g;
+        const i = (y * width + x) * 4;
+        data[i] = Math.round(r / (size - 1) * 255);
+        data[i + 1] = Math.round(g / (size - 1) * 255);
+        data[i + 2] = Math.round(b / (size - 1) * 255);
+        data[i + 3] = 255;
+      }
+    }
+  }
+  return { data, width, height };
+}
+function lutToCube(data, width, size, title = "Strata LUT") {
+  const lines = [];
+  lines.push(`TITLE "${title.replace(/"/g, "'")}"`);
+  lines.push(`LUT_3D_SIZE ${size}`);
+  lines.push("DOMAIN_MIN 0.0 0.0 0.0");
+  lines.push("DOMAIN_MAX 1.0 1.0 1.0");
+  const fmt = (v) => (v / 255).toFixed(6);
+  for (let b = 0; b < size; b += 1) {
+    for (let g = 0; g < size; g += 1) {
+      for (let r = 0; r < size; r += 1) {
+        const x = b * size + r;
+        const i = (g * width + x) * 4;
+        lines.push(`${fmt(data[i])} ${fmt(data[i + 1])} ${fmt(data[i + 2])}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}
+`;
+}
+function identityCube(size) {
+  const { data, width } = identityLut(size);
+  return lutToCube(data, width, size, "Identity");
+}
+
+// src/core/proofread.ts
+var TYPOS = {
+  teh: "the",
+  adn: "and",
+  recieve: "receive",
+  recieved: "received",
+  seperate: "separate",
+  definately: "definitely",
+  occured: "occurred",
+  untill: "until",
+  wich: "which",
+  thier: "their",
+  becuase: "because",
+  alot: "a lot",
+  accomodate: "accommodate",
+  arguement: "argument",
+  calender: "calendar",
+  enviroment: "environment",
+  existance: "existence",
+  goverment: "government",
+  independant: "independent",
+  neccessary: "necessary",
+  occassion: "occasion",
+  publically: "publicly",
+  reccomend: "recommend",
+  succesful: "successful",
+  tommorow: "tomorrow",
+  werid: "weird"
+};
+var CJK = /[\u4e00-\u9fff]/;
+var LATIN = /[A-Za-z0-9]/;
+function checkText(content) {
+  const issues = [];
+  const text = content.replace(/\r\n?/g, "\n");
+  let m;
+  const dupEn = /\b([A-Za-z]{2,})(\s+\1\b)/g;
+  while ((m = dupEn.exec(text)) !== null) {
+    issues.push({ kind: "duplicate", index: m.index, found: m[0], fix: m[1], message: "\u91CD\u590D\u8BCD" });
+  }
+  const dupCjk = /([\u4e00-\u9fff]{2,4})\1/g;
+  while ((m = dupCjk.exec(text)) !== null) {
+    issues.push({ kind: "duplicate", index: m.index, found: m[0], fix: m[1], message: "\u91CD\u590D\u8BCD" });
+  }
+  for (let i = 1; i < text.length; i += 1) {
+    const prev = text[i - 1];
+    const cur = text[i];
+    if (CJK.test(prev) && LATIN.test(cur) || LATIN.test(prev) && CJK.test(cur)) {
+      issues.push({
+        kind: "spacing",
+        index: i - 1,
+        found: prev + cur,
+        fix: `${prev} ${cur}`,
+        message: "\u4E2D\u82F1\u6587\u4E4B\u95F4\u5EFA\u8BAE\u52A0\u7A7A\u683C"
+      });
+    }
+  }
+  const halfPunct = /[,;:!?]/g;
+  while ((m = halfPunct.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 6), m.index);
+    if (CJK.test(before)) {
+      const map = { ",": "\uFF0C", ";": "\uFF1B", ":": "\uFF1A", "!": "\uFF01", "?": "\uFF1F" };
+      issues.push({
+        kind: "fullwidth",
+        index: m.index,
+        found: m[0],
+        fix: map[m[0]],
+        message: "\u4E2D\u6587\u91CC\u7528\u4E86\u534A\u89D2\u6807\u70B9"
+      });
+    }
+  }
+  const spaceRe = / {2,}/g;
+  while ((m = spaceRe.exec(text)) !== null) {
+    issues.push({
+      kind: "doubleSpace",
+      index: m.index,
+      found: `${m[0].length} \u4E2A\u7A7A\u683C`,
+      fix: " ",
+      message: "\u591A\u4F59\u7684\u7A7A\u683C"
+    });
+  }
+  const periodRe = /[\u4e00-\u9fff]\.(?=\s|$|[A-Za-z])/g;
+  while ((m = periodRe.exec(text)) !== null) {
+    issues.push({
+      kind: "period",
+      index: m.index + 1,
+      found: "\u3002",
+      fix: "\u3002",
+      message: "\u4E2D\u6587\u53E5\u672B\u5EFA\u8BAE\u7528\u300C\u3002\u300D"
+    });
+  }
+  const wordRe = /\b[A-Za-z]+\b/g;
+  while ((m = wordRe.exec(text)) !== null) {
+    const lower = m[0].toLowerCase();
+    const right = TYPOS[lower];
+    if (!right) continue;
+    const fixed = m[0][0] === m[0][0].toUpperCase() ? right[0].toUpperCase() + right.slice(1) : right;
+    issues.push({
+      kind: "typo",
+      index: m.index,
+      found: m[0],
+      fix: fixed,
+      message: "\u5E38\u89C1\u9519\u62FC"
+    });
+  }
+  return issues.sort((a, b) => a.index - b.index);
+}
+function applyFixes(content, issues) {
+  let out = content;
+  const sorted = issues.slice().sort((a, b) => b.index - a.index);
+  for (const it of sorted) {
+    const len = it.kind === "doubleSpace" ? Number.parseInt(it.found, 10) || 2 : it.found.length;
+    out = out.slice(0, it.index) + it.fix + out.slice(it.index + len);
+  }
+  return out;
+}
+var ISSUE_LABEL = {
+  duplicate: "\u91CD\u590D",
+  spacing: "\u7A7A\u683C",
+  fullwidth: "\u6807\u70B9",
+  doubleSpace: "\u7A7A\u683C",
+  period: "\u6807\u70B9",
+  typo: "\u62FC\u5199"
+};
+
+// src/core/pdf.ts
+function ascii(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 1) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+function buildPdf(pages) {
+  if (pages.length === 0) throw new Error("\u6CA1\u6709\u9875\u9762\u53EF\u5BFC\u51FA");
+  const chunks = [];
+  let length = 0;
+  const push = (data) => {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    chunks.push(bytes);
+    length += bytes.length;
+  };
+  const pageObjIds = [];
+  const offsets = [];
+  const total = pages.length;
+  let next = 3;
+  const layout = pages.map((p) => {
+    const pageId = next;
+    const contentId = next + 1;
+    const imageId = next + 2;
+    next += 3;
+    pageObjIds.push(pageId);
+    return { pageId, contentId, imageId, page: p };
+  });
+  push("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+  const writeObj = (id, body, stream) => {
+    offsets[id] = length;
+    push(`${id} 0 obj
+${body}
+`);
+    if (stream) {
+      push(`<< ${stream.dict} /Length ${stream.data.length} >>
+stream
+`);
+      push(stream.data);
+      push("\nendstream\n");
+    }
+    push("endobj\n");
+  };
+  writeObj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  writeObj(
+    2,
+    `<< /Type /Pages /Count ${total} /Kids [${pageObjIds.map((id) => `${id} 0 R`).join(" ")}] >>`
+  );
+  for (const item of layout) {
+    const dpi = item.page.dpi && item.page.dpi > 1 ? item.page.dpi : 72;
+    const wPt = item.page.width / dpi * 72;
+    const hPt = item.page.height / dpi * 72;
+    writeObj(
+      item.pageId,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${wPt.toFixed(2)} ${hPt.toFixed(2)}] /Resources << /XObject << /Im0 ${item.imageId} 0 R >> >> /Contents ${item.contentId} 0 R >>`
+    );
+    const content = `q
+${wPt.toFixed(2)} 0 0 ${hPt.toFixed(2)} 0 0 cm
+/Im0 Do
+Q
+`;
+    writeObj(
+      item.contentId,
+      "",
+      { data: new TextEncoder().encode(content), dict: "" }
+    );
+    writeObj(
+      item.imageId,
+      "",
+      {
+        data: item.page.jpeg,
+        dict: `/Type /XObject /Subtype /Image /Width ${item.page.width} /Height ${item.page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode`
+      }
+    );
+  }
+  const xrefStart = length;
+  const maxId = next;
+  let xref = `xref
+0 ${maxId}
+0000000000 65535 f 
+`;
+  for (let i = 1; i < maxId; i += 1) {
+    const off = offsets[i] ?? 0;
+    xref += `${String(off).padStart(10, "0")} 00000 n 
+`;
+  }
+  push(xref);
+  push(`trailer
+<< /Size ${maxId} /Root 1 0 R >>
+startxref
+${xrefStart}
+%%EOF
+`);
+  const out = new Uint8Array(length);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+function pdfHead(bytes) {
+  return ascii(bytes.slice(0, 8));
+}
+function countPdfPages(bytes) {
+  const text = ascii(bytes);
+  return (text.match(/\/Type \/Page[^s]/g) ?? []).length;
+}
 export {
+  CUBE_SIZE,
   FILTER_DEFS,
+  ISSUE_LABEL,
   PROFILE_LABELS,
+  applyFixes,
   applyPalette,
+  buildPdf,
+  checkText,
   colorRangeHit,
   contentAwareScale,
   convertProfile,
+  countPdfPages,
   energyMap,
   estimateShift,
   filterDef,
   filterParams,
   findHorizontalSeam,
+  findPhotoRegions,
   findVerticalSeam,
   focusHit,
   growHit,
+  identityCube,
+  identityLut,
   insertHorizontalSeam,
   insertVerticalSeam,
+  lutToCube,
   medianCutPalette,
   mlsWarp,
+  pdfHead,
   quantizeTo8,
   removeHorizontalSeam,
   removeVerticalSeam,

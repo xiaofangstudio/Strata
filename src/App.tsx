@@ -74,6 +74,36 @@ export default function App() {
     setRevision((n) => n + 1);
   }, []);
 
+  /**
+   * 浮动窗口交接：主窗口把文档塞进 localStorage，新窗口用 `?float=<key>` 取回。
+   *
+   * 为什么用 localStorage 而不是 URL 参数：工程可能有几 MB，
+   * 塞进 URL 会被长度限制截断；localStorage 容量够，且同源共享。
+   */
+  useEffect(() => {
+    const key = new URLSearchParams(window.location.search).get("float");
+    if (!key) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const raw = localStorage.getItem(`strata.floatdoc.${key}`);
+        if (!raw) return;
+        localStorage.removeItem(`strata.floatdoc.${key}`);
+        const bin = atob(raw);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+        const { decodeProject } = await import("./engine/project");
+        const next = await decodeProject(bytes);
+        if (alive) openDoc(next);
+      } catch {
+        /* 交接失败就当普通启动 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [openDoc]);
+
   /** 关闭某份文档；关掉的是当前页时，焦点落到剩下的最后一份。 */
   const closeDoc = useCallback((id: string) => {
     stacks.current.delete(id);

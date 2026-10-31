@@ -12,7 +12,7 @@ import { cloneSurface, createSurface, mustCtx, readPixels } from "../engine/surf
 import { contentBounds } from "../engine/warp";
 import { applyMask, bakeStyledLayer } from "./layerOps";
 import type { StrataDoc } from "./document";
-import type { StrataLayer } from "./layer";
+import { createLayer, type StrataLayer } from "./layer";
 
 /** 内容全透明的图层视为空。 */
 export function isEmptyLayer(layer: StrataLayer): boolean {
@@ -143,4 +143,36 @@ export function cropToContent(surface: HTMLCanvasElement): HTMLCanvasElement {
   const out = createSurface(Math.max(1, Math.round(b.w)), Math.max(1, Math.round(b.h)));
   mustCtx(out).drawImage(surface, -b.x, -b.y);
   return out;
+}
+
+/* ------------------------------------------------- 把调整层套到任意图上 */
+
+/**
+ * 用「一张图 + 一组调整层」临时拼一份文档。
+ *
+ * 用途：导出 LUT、批量调色 —— 这两件事都需要「把当前文档的调色逻辑
+ * 作用到别的像素上」，而调整层本来只是文档结构的一部分。
+ * 合成器只认「宽高 + 图层数组」，所以拼一份最小文档就能复用整条管线，
+ * 不必把 15 种调整的算法再写一遍。
+ */
+export function buildAdjustedDoc(
+  src: HTMLCanvasElement,
+  adjustments: StrataLayer[],
+  opts: { name?: string; dpi?: number } = {},
+): StrataDoc {
+  const w = src.width;
+  const h = src.height;
+  const base = createLayer(w, h, opts.name ?? "输入");
+  const baseLayer: StrataLayer = { ...base, surface: src };
+  return {
+    id: `tmp-${Date.now().toString(36)}`,
+    name: opts.name ?? "临时文档",
+    width: w,
+    height: h,
+    dpi: opts.dpi ?? 72,
+    layers: [baseLayer, ...adjustments.map((a) => ({ ...a, clip: false, mask: null }))],
+    activeLayerId: baseLayer.id,
+    maskActive: true,
+    dirty: false,
+  } as StrataDoc;
 }

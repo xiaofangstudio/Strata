@@ -141,6 +141,8 @@ import {
 import ImageOpsDialog, { type ImageOpsKind } from "./components/ImageOpsDialog";
 import TextPanel, { type TextPanelTab } from "./components/TextPanel";
 import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
+import CompareView, { type CompareLayout } from "./components/CompareView";
+import FloatingDoc, { type FloatRect } from "./components/FloatingDoc";
 import { applyStackModeToDoc, autoAlignLayers, autoBlendLayers } from "../core/stackOps";
 import { applyStackMode, type StackMode } from "../core/stackModes";
 import { contentBounds } from "../engine/warp";
@@ -148,6 +150,7 @@ import { alignLayers, distributeLayers, type AlignEdge, type DistributeEdge } fr
 import { clearSmartFilters, deleteFilterMask, toggleFilterMask, toggleSmartFilters } from "../core/filterOps";
 import { isArtboard, newArtboard, sliceFromLayer } from "../core/artboard";
 import {
+  buildAdjustedDoc,
   cropToContent,
   deleteEmptyLayers,
   fitImage,
@@ -173,6 +176,9 @@ import {
 } from "../core/videoLayer";
 import { PROFILE_LABELS } from "../core/colorProfile";
 import { buildPdf } from "../core/pdf";
+import { findPhotoRegions } from "../core/photoCrop";
+import { CUBE_SIZE, identityLut, lutToCube } from "../core/lut";
+import { applyFixes, checkText, ISSUE_LABEL, type Issue } from "../core/proofread";
 import { computeHistogram } from "./components/HistogramPanel";
 import {
   DEFAULT_PROOF,
@@ -535,6 +541,7 @@ export default function EditorShell({
   themeSkin,
   onSetThemeId,
   onSelectDoc,
+  revision,
   onCloseDoc,
   onCloseAll,
   onClearHistory,
@@ -728,6 +735,14 @@ export default function EditorShell({
   const [menusDialog, setMenusDialog] = useState(false);
   /** 色彩配置：settings / assign / convert 三种用法共用一套面板 */
   const [profileDialog, setProfileDialog] = useState<"settings" | "assign" | "convert" | null>(null);
+  /** 窗口 > 排列：浮动文档窗口（应用内，可拖可缩） */
+  const [floating, setFloating] = useState<{ id: string; rect: FloatRect }[]>([]);
+  /** 窗口 > 排列：多文档对比视图 */
+  const [compareLayout, setCompareLayout] = useState<CompareLayout | null>(null);
+  /** 编辑 > 检查拼写：问题列表 */
+  const [proofread, setProofread] = useState<{ layerId: string; issues: Issue[] } | null>(null);
+  /** 变形网格的拆分粒度（编辑 > 变换 > 拆分变形） */
+  const [warpGrid, setWarpGrid] = useState<{ cols: number; rows: number }>({ cols: 1, rows: 1 });
   /** 文件 > 脚本 > 统计 */
   const [statsDialog, setStatsDialog] = useState<{
     pixels: number;
@@ -2962,6 +2977,660 @@ export default function EditorShell({
   );
 
 
+  /* ------------------------------------------------------ 文件批处理（二） */
+
+  /** 画布 → JPEG 字节（PDF 与 Web 导出共用）。 */
+  const canvasJpeg = useCallback(async (canvas: HTMLCanvasElement, q: number): Promise<Uint8Array> => {
+    const blob = await new Promise<Blob | null>((res) =>
+      canvas.toBlob((b) => res(b), "image/jpeg", Math.min(1, Math.max(0.1, q))),
+    );
+    if (!blob) throw new Error("JPEG 编码失败");
+    return new Uint8Array(await blob.arrayBuffer());
+  }, []);
+
+  /** 干净合成一张整档画布（导出永远不用屏幕上的通道预览）。 */
+  const composeClean = useCallback((): HTMLCanvasElement => {
+    const canvas = createSurface(docW, docH);
+    composeDoc(doc, canvas);
+    return canvas;
+  }, [doc, docW, docH]);
+
+  /** 把画布裁到指定矩形。 */
+  const cropCanvas = useCallback(
+    (src: HTMLCanvasElement, b: { x: number; y: number; w: number; h: number }): HTMLCanvasElement => {
+      const out = createSurface(Math.max(1, Math.round(b.w)), Math.max(1, Math.round(b.h)));
+      mustCtx(out).drawImage(src, -b.x, -b.y);
+      return out;
+    },
+    [],
+  );
+
+  /** 安全文件名。 */
+  const safeName = useCallback(
+    (name: string, i: number): string =>
+      name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) || `item-${i + 1}`,
+    [],
+  );
+
+  /** 画板导出为多个 PNG。 */
+  const exportArtboards = useCallback(async () => {
+    const boards = doc.layers.filter((l) => isArtboard(l) && l.artboard);
+    if (boards.length === 0) {
+      setToast("文档里没有画板（图层 > 新建 > 画板）");
+      return;
+    }
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    const full = composeClean();
+    let n = 0;
+    for (const b of boards) {
+      const box = b.artboard as { x: number; y: number; w: number; h: number };
+      await writeFileBytes(`${dir}/${safeName(b.name, n)}.png`, await encodePng(cropCanvas(full, box)));
+      n += 1;
+    }
+    setToast(`已导出 ${n} 个画板到所选文件夹`);
+  }, [doc, composeClean, cropCanvas, safeName]);
+
+  /** 画板导出为一个多页 PDF。 */
+  const exportArtboardsPdf = useCallback(async () => {
+    const boards = doc.layers.filter((l) => isArtboard(l) && l.artboard);
+    if (boards.length === 0) {
+      setToast("文档里没有画板");
+      return;
+    }
+    const target = await save({
+      defaultPath: `${doc.name}-画板.pdf`,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (typeof target !== "string") return;
+    const full = composeClean();
+    const pages = [];
+    for (const b of boards) {
+      const box = b.artboard as { x: number; y: number; w: number; h: number };
+      const canvas = cropCanvas(full, box);
+      pages.push({
+        jpeg: await canvasJpeg(canvas, 0.92),
+        width: canvas.width,
+        height: canvas.height,
+        dpi: doc.dpi ?? 72,
+      });
+    }
+    await writeFileBytes(target, buildPdf(pages));
+    setToast(`已导出 ${pages.length} 页 PDF`);
+  }, [doc, composeClean, cropCanvas, canvasJpeg]);
+
+  /** 图层复合导出为多个 PNG。 */
+  const exportLayerComps = useCallback(async () => {
+    const comps = doc.layerComps ?? [];
+    if (comps.length === 0) {
+      setToast("还没有图层复合（窗口 > 面板 > 图层复合 里保存）");
+      return;
+    }
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    let n = 0;
+    for (const c of comps) {
+      const variant = {
+        ...doc,
+        layers: doc.layers.map((l) =>
+          c.visible[l.id] === undefined ? l : { ...l, visible: c.visible[l.id] },
+        ),
+      };
+      const canvas = createSurface(docW, docH);
+      composeDoc(variant, canvas);
+      await writeFileBytes(`${dir}/${safeName(c.name, n)}.png`, await encodePng(canvas));
+      n += 1;
+    }
+    setToast(`已导出 ${n} 个图层复合`);
+  }, [doc, docW, docH, safeName]);
+
+  /** 生成图像资源：按 1x / 2x / 0.5x 各出一张 PNG。 */
+  const generateImageAssets = useCallback(async () => {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    const full = composeClean();
+    const variants: [string, number][] = [
+      ["", 1],
+      ["@2x", 2],
+      ["@0.5x", 0.5],
+    ];
+    for (const [suffix, k] of variants) {
+      const w = Math.max(1, Math.round(docW * k));
+      const h = Math.max(1, Math.round(docH * k));
+      const c = createSurface(w, h);
+      const ctx = mustCtx(c);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(full, 0, 0, w, h);
+      await writeFileBytes(`${dir}/${safeName(doc.name, 0)}${suffix}.png`, await encodePng(c));
+    }
+    setToast("已生成 1x / 2x / 0.5x 三档图像资源");
+  }, [doc, docW, docH, composeClean, safeName]);
+
+  /** 打包：把工程与所有链接型智能对象的源文件复制到同一文件夹。 */
+  const packageProject = useCallback(async () => {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    const { encodeProject } = await import("../engine/project");
+    const bytes = await encodeProject(doc);
+    await writeFileBytes(`${dir}/${safeName(doc.name, 0)}.strata`, bytes);
+    let copied = 0;
+    for (const l of doc.layers) {
+      if (!l.smartPath) continue;
+      try {
+        const data = await readFileBytes(l.smartPath);
+        const base = l.smartPath.replace(/^.*[\\/]/, "");
+        await writeFileBytes(`${dir}/${base}`, data);
+        copied += 1;
+      } catch {
+        /* 单个文件读不到就跳过 */
+      }
+    }
+    setToast(`已打包工程${copied > 0 ? `，并复制 ${copied} 个链接素材` : ""}`);
+  }, [doc, safeName]);
+
+  /** 把多个图片文件作为一个图层堆栈打开。 */
+  const loadFilesIntoStack = useCallback(async () => {
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!picked) return;
+    const list = Array.isArray(picked) ? picked : [picked];
+    if (list.length === 0) return;
+    let next = doc;
+    let n = 0;
+    for (const path of list) {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const name = path.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+        next = insertAboveActive(next, placeAsSmart(next, img, name, undefined));
+        n += 1;
+      } catch {
+        /* 单张失败跳过 */
+      }
+    }
+    if (n === 0) {
+      setToast("这些文件都读不出来");
+      return;
+    }
+    onCommit(next, "将文件载入堆栈");
+    setToast(`已载入 ${n} 个文件为图层`);
+  }, [doc, onCommit]);
+
+  /** 文档统计。 */
+  const openStatistics = useCallback(() => {
+    const stats = computeHistogram(composeClean());
+    if (!stats) {
+      setToast("统计不出来（画布为空？）");
+      return;
+    }
+    const whole = (arr: Uint32Array): number => {
+      let sum = 0;
+      let cnt = 0;
+      for (let i = 0; i < 256; i += 1) {
+        sum += i * arr[i];
+        cnt += arr[i];
+      }
+      return cnt > 0 ? sum / cnt : 0;
+    };
+    setStatsDialog({
+      pixels: stats.pixels,
+      mean: whole(stats.lum).toFixed(1),
+      median: stats.median.toFixed(1),
+      r: whole(stats.r).toFixed(1),
+      g: whole(stats.g).toFixed(1),
+      b: whole(stats.b).toFixed(1),
+    });
+  }, [composeClean]);
+
+  /** 全景拼接：对齐 + 扩展画布 + 混合。 */
+  const photomerge = useCallback(() => {
+    const picked = doc.layers.filter((l) => l.kind === "pixel");
+    if (picked.length < 2) {
+      setToast("至少需要两层像素（把要拼的图先放进同一份文档）");
+      return;
+    }
+    const shifted = autoAlignLayers(doc).doc;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const l of shifted.layers) {
+      if (l.kind !== "pixel") continue;
+      const b = contentBounds(l.surface);
+      if (!b) continue;
+      x0 = Math.min(x0, b.x);
+      y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.w);
+      y1 = Math.max(y1, b.y + b.h);
+    }
+    if (!Number.isFinite(x0)) {
+      setToast("图层里没有内容");
+      return;
+    }
+    const w = Math.max(1, Math.round(x1 - x0));
+    const h = Math.max(1, Math.round(y1 - y0));
+    const moved = {
+      ...shifted,
+      width: w,
+      height: h,
+      layers: shifted.layers.map((l) => {
+        if (l.kind !== "pixel") return l;
+        const s2 = createSurface(w, h);
+        mustCtx(s2).drawImage(l.surface, -x0, -y0);
+        return { ...l, surface: s2 };
+      }),
+    };
+    onCommit(autoBlendLayers(moved), "Photomerge 全景拼接");
+    setToast(`已按对齐结果拼接，画布扩到 ${w}×${h}`);
+  }, [doc, onCommit]);
+
+  /** Merge to HDR（平均值合成，并说明不是真 32 位）。 */
+  const mergeToHdr = useCallback(() => {
+    const next = applyStackModeToDoc(doc, "mean", applyStackMode);
+    if (next === doc) {
+      setToast("至少要两层可见像素层");
+      return;
+    }
+    onCommit(next, "合并到 HDR（平均值合成）");
+    setToast("已按平均值合成。Strata 是 8 位管线，这不是真正的 32 位 HDR");
+  }, [doc, onCommit]);
+
+  /* ------------------------------------------------------ 文件（收尾五） */
+
+  /** 把当前文档的调整层原样取出来（顺序即堆叠顺序）。 */
+  const adjustmentStack = useCallback(
+    () => doc.layers.filter((l) => l.kind === "adjust"),
+    [doc.layers],
+  );
+
+  /**
+   * 文件 > 自动 > 裁正照片。
+   *
+   * 先缩小到 800 边做检测（连通域是 O(像素)，全分辨率跑大图会卡），
+   * 再把矩形按比例放大回原尺寸去切图 —— 精度对「一张照片的大致边界」够用。
+   */
+  const cropAndStraighten = useCallback(() => {
+    const full = composeClean();
+    const detectMax = 800;
+    const k = Math.min(1, detectMax / Math.max(full.width, full.height));
+    const dw = Math.max(1, Math.round(full.width * k));
+    const dh = Math.max(1, Math.round(full.height * k));
+    const small = createSurface(dw, dh);
+    const sctx = mustCtx(small);
+    sctx.imageSmoothingQuality = "medium";
+    sctx.drawImage(full, 0, 0, dw, dh);
+    const img = sctx.getImageData(0, 0, dw, dh);
+    const res = findPhotoRegions(img.data, dw, dh, 32, 0.004);
+    if (res.singleBlob || res.boxes.length === 0) {
+      setToast("只找到一整块内容，没有多张照片可分（背景可能太杂）");
+      return;
+    }
+    // 按比例放大回原尺寸
+    let next = doc;
+    let n = 0;
+    for (const b of res.boxes) {
+      const box = {
+        x: Math.round(b.x / k),
+        y: Math.round(b.y / k),
+        w: Math.round(b.w / k),
+        h: Math.round(b.h / k),
+      };
+      next = placeRaster(next, `裁正 ${n + 1}`, cropCanvas(full, box));
+      n += 1;
+    }
+    onCommit(next, "裁正照片");
+    setToast(`切出 ${n} 张（背景判定为 rgb(${res.background.join(", ")})）`);
+  }, [doc, composeClean, cropCanvas, onCommit]);
+
+  /** 文件 > 导出 > 颜色查找表：把当前调整层烘成 33³ 的 .cube。 */
+  const exportCube = useCallback(async () => {
+    const adjusts = adjustmentStack();
+    if (adjusts.length === 0) {
+      setToast("当前文档没有调整层，导出的只会是恒等 LUT");
+    }
+    const target = await save({
+      defaultPath: `${doc.name}.cube`,
+      filters: [{ name: "3D LUT", extensions: ["cube"] }],
+    });
+    if (typeof target !== "string") return;
+    const lut = identityLut(CUBE_SIZE);
+    const canvas = createSurface(lut.width, lut.height);
+    mustCtx(canvas).putImageData(
+      new ImageData(new Uint8ClampedArray(lut.data), lut.width, lut.height),
+      0,
+      0,
+    );
+    const temp = buildAdjustedDoc(canvas, adjusts, { name: "LUT", dpi: 72 });
+    const out = createSurface(lut.width, lut.height);
+    composeDoc(temp, out);
+    const data = mustCtx(out).getImageData(0, 0, lut.width, lut.height).data;
+    const text = lutToCube(data, lut.width, CUBE_SIZE, doc.name);
+    await writeFileBytes(target, new TextEncoder().encode(text));
+    setToast(`已导出 ${CUBE_SIZE}³ LUT（${adjusts.length} 个调整层）`);
+  }, [doc.name, adjustmentStack]);
+
+  /** 文件 > 自动 > 批处理：把当前调整层批量套到多张图上。 */
+  const batchProcess = useCallback(async () => {
+    const adjusts = adjustmentStack();
+    if (adjusts.length === 0) {
+      setToast("当前文档没有调整层可套用（先加几个调整图层）");
+      return;
+    }
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!picked) return;
+    const list = Array.isArray(picked) ? picked : [picked];
+    if (list.length === 0) return;
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    const fmt = window.prompt("输出格式：png / jpg", "jpg");
+    if (fmt === null) return;
+    const format = fmt.trim().toLowerCase() === "png" ? "png" : "jpg";
+    let n = 0;
+    for (const path of list) {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const base = createSurface(img.width, img.height);
+        mustCtx(base).drawImage(img, 0, 0);
+        const temp = buildAdjustedDoc(base, adjusts, { name: path });
+        const out = createSurface(img.width, img.height);
+        composeDoc(temp, out);
+        const name = path.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+        const data = format === "png" ? await encodePng(out) : await canvasJpeg(out, 0.92);
+        await writeFileBytes(`${dir}/${name}.${format}`, data);
+        n += 1;
+      } catch {
+        /* 单张失败跳过 */
+      }
+    }
+    setToast(n > 0 ? `已按当前调整处理 ${n} 张` : "没有处理成功的文件");
+  }, [adjustmentStack, canvasJpeg]);
+
+
+  /* --------------------------------------------------- 文件（收尾四：联系表/注释/数据组） */
+
+  /** 文件 > 自动 > 联系表 II：把选中的多张图排成网格合到一层。 */
+  const contactSheet = useCallback(async () => {
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!picked) return;
+    const list = Array.isArray(picked) ? picked : [picked];
+    if (list.length === 0) return;
+    const raw = window.prompt("每行放几张？", "4");
+    if (raw === null) return;
+    const perRow = Math.max(1, Math.min(8, Number.parseInt(raw, 10) || 4));
+    const imgs: { img: ImageBitmap; name: string }[] = [];
+    for (const path of list) {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        imgs.push({ img, name: path.replace(/^.*[\\/]/, "") });
+      } catch {
+        /* 跳过读不出的 */
+      }
+    }
+    if (imgs.length === 0) {
+      setToast("这些图片都读不出来");
+      return;
+    }
+    // 格子按「最长边 / 每行张数」定，保持方形，间距 8px
+    const cell = Math.max(24, Math.floor((docW - 8 * (perRow + 1)) / perRow));
+    const rows = Math.ceil(imgs.length / perRow);
+    const sheet = createSurface(docW, docH);
+    const ctx = mustCtx(sheet);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, docW, docH);
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "#333";
+    let y = 8;
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < perRow; c += 1) {
+        const item = imgs[r * perRow + c];
+        if (!item) continue;
+        const x = 8 + c * (cell + 8);
+        const k = Math.min(cell / item.img.width, cell / item.img.height);
+        const w = Math.max(1, Math.round(item.img.width * k));
+        const h = Math.max(1, Math.round(item.img.height * k));
+        ctx.drawImage(item.img, x + (cell - w) / 2, y + (cell - h) / 2, w, h);
+        ctx.fillText(item.name.slice(0, 18), x, y + cell + 10);
+      }
+      y += cell + 22;
+      if (y > docH) break;
+    }
+    onCommit(placeRaster(doc, `联系表（${imgs.length} 张）`, sheet), "联系表 II");
+    setToast(`已排入 ${imgs.length} 张缩略图（每行 ${perRow} 张）`);
+  }, [doc, docW, docH, onCommit]);
+
+  /** 文件 > 导入 > 注释：从 .txt / .md 读入文档备注。 */
+  const importNotes = useCallback(async () => {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "文本", extensions: ["txt", "md"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    try {
+      const bytes = await readFileBytes(picked);
+      const text = new TextDecoder().decode(bytes);
+      onCommit({ ...doc, note: text.slice(0, 20000) }, "导入注释");
+      setToast("已把文件内容读成文档备注（窗口 > 面板 > 注释 可看）");
+    } catch {
+      setToast("这个文本文件读不出来");
+    }
+  }, [doc, onCommit]);
+
+  /** 文件 > 导入 > 变量数据组：读 CSV 建数据组；导出则逐个渲染成 PNG。 */
+  const importDataSets = useCallback(async () => {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "CSV", extensions: ["csv", "txt"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    try {
+      const bytes = await readFileBytes(picked);
+      const text = new TextDecoder().decode(bytes).replace(/\r\n?/g, "\n");
+      const rows = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      if (rows.length < 2) {
+        setToast("CSV 至少要有表头 + 一行数据");
+        return;
+      }
+      const header = rows[0].split(",").map((h) => h.trim());
+      const sets = rows.slice(1).map((line, i) => {
+        const cells = line.split(",").map((c) => c.trim());
+        const values: Record<string, string> = {};
+        header.forEach((h, k) => {
+          values[h] = cells[k] ?? "";
+        });
+        return { name: values.name || values.Name || `数据组 ${i + 1}`, values };
+      });
+      onCommit({ ...doc, dataSets: sets }, "导入变量数据组");
+      setToast(`已导入 ${sets.length} 组数据（字段：${header.slice(0, 4).join(" / ")}）`);
+    } catch {
+      setToast("这个 CSV 读不出来");
+    }
+  }, [doc, onCommit]);
+
+  /** 文件 > 导出 > 数据组为文件：每组渲染一张 PNG。 */
+  const exportDataSets = useCallback(async () => {
+    const sets = doc.dataSets ?? [];
+    if (sets.length === 0) {
+      setToast("还没有数据组（文件 > 导入 > 变量数据组）");
+      return;
+    }
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    let n = 0;
+    for (const set of sets) {
+      const { applyDataSet } = await import("../core/imageOps");
+      const next = applyDataSet(doc, set.name);
+      const canvas = createSurface(docW, docH);
+      composeDoc(next ?? doc, canvas);
+      await writeFileBytes(`${dir}/${safeName(set.name, n)}.png`, await encodePng(canvas));
+      n += 1;
+    }
+    setToast(`已按数据组导出 ${n} 张`);
+  }, [doc, docW, docH, safeName]);
+
+
+  /* ------------------------------------------------------ 文件（收尾三） */
+
+  /** 文件 > 还原：从磁盘重新读回这份工程，作为一次可撤销的操作。 */
+  const revertFile = useCallback(async () => {
+    if (!doc.sourcePath) {
+      setToast("这份文档还没保存过，没有可还原的文件");
+      return;
+    }
+    try {
+      const { decodeProject, isStrataPath } = await import("../engine/project");
+      if (!isStrataPath(doc.sourcePath)) {
+        setToast("只有 .strata 工程支持还原（图片格式没有可回滚的编辑记录）");
+        return;
+      }
+      const bytes = await readFileBytes(doc.sourcePath);
+      const reloaded = await decodeProject(bytes);
+      onCommit(
+        {
+          ...reloaded,
+          // 保持当前文档的 id / 名称，历史栈才接得上
+          id: doc.id,
+          name: doc.name,
+          sourcePath: doc.sourcePath,
+          width: reloaded.width,
+          height: reloaded.height,
+        },
+        "还原",
+      );
+      setToast("已从磁盘还原（这一步可以撤销）");
+    } catch (e) {
+      setToast(`还原失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [doc, onCommit]);
+
+  /** 文件 > 导出 > 存储为 Web 所用格式（旧版）：格式 + 质量 + 缩放。 */
+  const [webOpts, setWebOpts] = useState<{ format: "png" | "jpg" | "webp"; quality: number; scale: number } | null>(
+    null,
+  );
+
+  const saveForWeb = useCallback(async () => {
+    if (!webOpts) return;
+    const target = await save({
+      defaultPath: `${doc.name}.${webOpts.format}`,
+      filters: [
+        {
+          name: webOpts.format === "png" ? "PNG" : webOpts.format === "jpg" ? "JPEG" : "WebP",
+          extensions: [webOpts.format === "jpg" ? "jpg" : webOpts.format],
+        },
+      ],
+    });
+    if (typeof target !== "string") return;
+    const k = webOpts.scale;
+    const w = Math.max(1, Math.round(docW * k));
+    const h = Math.max(1, Math.round(docH * k));
+    const c = createSurface(w, h);
+    const ctx = mustCtx(c);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(composeClean(), 0, 0, w, h);
+    const bytes =
+      webOpts.format === "png"
+        ? await encodePng(c)
+        : await canvasJpeg(c, webOpts.quality / 100);
+    await writeFileBytes(target, bytes);
+    setWebOpts(null);
+    setToast(`已导出 ${w}×${h}（${(bytes.length / 1024).toFixed(0)} KB）`);
+  }, [webOpts, doc, docW, docH, composeClean, canvasJpeg]);
+
+  /** 文件 > 导入 > 视频帧到图层：多张图按顺序成为帧。 */
+  const importVideoFrames = useCallback(async () => {
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!picked) return;
+    const list = (Array.isArray(picked) ? picked : [picked]).slice().sort();
+    if (list.length === 0) return;
+    let first: HTMLCanvasElement | null = null;
+    const frames: HTMLCanvasElement[] = [];
+    for (const path of list) {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const c = createSurface(docW, docH);
+        mustCtx(c).drawImage(img, 0, 0, docW, docH);
+        frames.push(c);
+        if (!first) first = c;
+      } catch {
+        /* 单张失败跳过 */
+      }
+    }
+    if (frames.length === 0) {
+      setToast("这些图片都读不出来");
+      return;
+    }
+    const layer = makeVideoLayer(docW, docH, "视频帧", first ?? undefined, undefined, 24);
+    if (layer.video) {
+      layer.video.frames = frames.map((f) => ({ surface: f, hold: 1 / 24 }));
+      layer.video.originals = frames.map((f) => cloneSurface(f));
+      layer.surface = cloneSurface(frames[0]);
+    }
+    onCommit(insertAboveActive(doc, layer), "导入视频帧到图层");
+    setToast(`已导入 ${frames.length} 帧`);
+  }, [doc, docW, docH, onCommit]);
+
+  /** 文件 > 脚本 > 图像处理器：批量缩放 + 转格式。 */
+  const imageProcessor = useCallback(async () => {
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!picked) return;
+    const list = Array.isArray(picked) ? picked : [picked];
+    if (list.length === 0) return;
+    const raw = window.prompt("最长边缩放到多少像素？（留空 = 不缩放）", "1600");
+    if (raw === null) return;
+    const maxSide = raw.trim() ? Math.max(1, Number.parseInt(raw, 10) || 0) : 0;
+    const fmt = window.prompt("输出格式：png / jpg", "jpg");
+    if (fmt === null) return;
+    const format = fmt.trim().toLowerCase() === "png" ? "png" : "jpg";
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    let n = 0;
+    for (const path of list) {
+      try {
+        const bytes = await readFileBytes(path);
+        const mime = /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+        const img = await decodeImage(bytes, mime);
+        const scale = maxSide > 0 ? Math.min(1, maxSide / Math.max(img.width, img.height)) : 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const c = createSurface(w, h);
+        const ctx = mustCtx(c);
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, w, h);
+        const name = path.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+        const out = format === "png" ? await encodePng(c) : await canvasJpeg(c, 0.9);
+        await writeFileBytes(`${dir}/${name}.${format}`, out);
+        n += 1;
+      } catch {
+        /* 单张失败跳过 */
+      }
+    }
+    setToast(n > 0 ? `已处理 ${n} 张，输出到所选文件夹` : "没有处理成功的文件");
+  }, [canvasJpeg]);
+
+
   /* ---------------------------------------------------------- 文件批处理 */
 
   /** 置入图像：内嵌或链接（链接会记下路径，可用「更新」重读）。 */
@@ -4575,6 +5244,200 @@ export default function EditorShell({
             },
           };
 
+        /* ---------------------- 第二十八批：Window 浮动窗口 ------------------ */
+        case "window.arrange.floatInWindow":
+          return {
+            run: () => {
+              if (floating.some((f) => f.id === doc.id)) {
+                setToast("这份文档已经是浮动窗口了");
+                return;
+              }
+              const i = floating.length;
+              setFloating([...floating, {
+                id: doc.id,
+                rect: {
+                  x: 40 + i * 28,
+                  y: 40 + i * 28,
+                  w: 360,
+                  h: 300,
+                  zoom: Math.min(1, 320 / Math.max(doc.width, 1)),
+                },
+              }]);
+              setToast("已浮动为窗口：可拖动标题栏、拉右下角改大小");
+            },
+            checked: floating.some((f) => f.id === doc.id),
+          };
+        case "window.arrange.floatAllInWindows":
+          return {
+            run: () => {
+              const next = [...floating];
+              let i = next.length;
+              for (const d of docs) {
+                if (next.some((f) => f.id === d.id)) continue;
+                next.push({
+                  id: d.id,
+                  rect: {
+                    x: 24 + i * 26,
+                    y: 36 + i * 26,
+                    w: 320,
+                    h: 260,
+                    zoom: Math.min(1, 280 / Math.max(d.width, 1)),
+                  },
+                });
+                i += 1;
+              }
+              setFloating(next);
+              setToast(`已浮动 ${next.length} 份文档`);
+            },
+            checked: floating.length > 0,
+          };
+        case "window.arrange.newWindowForDocument":
+          return {
+            run: () => {
+              void (async () => {
+                try {
+                  const { encodeProject } = await import("../engine/project");
+                  const bytes = await encodeProject(doc);
+                  // base64 塞进 localStorage，新窗口按 key 取回（URL 放不下几 MB 的工程）
+                  let bin = "";
+                  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+                  const b64 = btoa(bin);
+                  const key = `w${Date.now().toString(36)}`;
+                  localStorage.setItem(`strata.floatdoc.${key}`, b64);
+                  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+                  const label = `strata-${key}`;
+                  const win = new WebviewWindow(label, {
+                    url: `index.html?float=${key}`,
+                    title: `${doc.name} — Strata`,
+                    width: 1000,
+                    height: 720,
+                  });
+                  win.once("tauri://error", () => {
+                    setToast("新窗口打开失败（浏览器环境不支持多窗口）");
+                  });
+                  setToast("已在新窗口打开这份文档");
+                } catch {
+                  setToast("当前环境不支持开新窗口（需要桌面版）");
+                }
+              })();
+            },
+          };
+
+        /* ---------------------- 第二十七批：Edit 组收尾 -------------------- */
+        case "edit.checkSpelling":
+          return {
+            run: () => {
+              const t = activeTextLayer(doc);
+              if (!t) { setToast("先选中一个文本层（检查范围是文本内容）"); return; }
+              const issues = checkText(t.text.content);
+              setProofread({ layerId: t.id, issues });
+              if (issues.length === 0) setToast("没发现可确证的排版问题");
+            },
+          };
+        case "edit.transform.splitWarpHorizontally":
+          return {
+            run: () => {
+              const next = { ...warpGrid, cols: Math.min(8, warpGrid.cols * 2) };
+              setWarpGrid(next);
+              setToast(`网格拆分为 ${next.cols}×${next.rows}，在「变形」对话框里拖网格点`);
+            },
+          };
+        case "edit.transform.splitWarpVertically":
+          return {
+            run: () => {
+              const next = { ...warpGrid, rows: Math.min(8, warpGrid.rows * 2) };
+              setWarpGrid(next);
+              setToast(`网格拆分为 ${next.cols}×${next.rows}，在「变形」对话框里拖网格点`);
+            },
+          };
+        case "edit.transform.splitWarpCrosswise":
+          return {
+            run: () => {
+              const next = {
+                cols: Math.min(8, warpGrid.cols * 2),
+                rows: Math.min(8, warpGrid.rows * 2),
+              };
+              setWarpGrid(next);
+              setToast(`网格交叉拆分为 ${next.cols}×${next.rows}`);
+            },
+          };
+        case "edit.transform.removeWarpSplit":
+          return {
+            run: () => {
+              const next = {
+                cols: Math.max(1, Math.floor(warpGrid.cols / 2)),
+                rows: Math.max(1, Math.floor(warpGrid.rows / 2)),
+              };
+              setWarpGrid(next);
+              setToast(`已撤销一层拆分，网格回到 ${next.cols}×${next.rows}`);
+            },
+          };
+        case "edit.defineCustomShape":
+          return {
+            run: () => {
+              const cur0 = activeLayer(doc);
+              if (!cur0 || cur0.kind !== "pixel") { setToast("先选中一个有内容的像素层"); return; }
+              const outline = textOutlineSurface(
+                // 借字形轮廓那套边缘检测：任意像素层的剪影也能抽出来
+                { ...cur0, text: { content: "", settings: DEFAULT_TEXT, color: "#000", x: 0, y: 0, orientation: "horizontal", antiAlias: "smooth", openType: {}, language: "default" } } as never,
+              );
+              const ink = createSurface(doc.width, doc.height);
+              const ictx = mustCtx(ink);
+              ictx.drawImage(outline, 0, 0);
+              ictx.globalCompositeOperation = "source-in";
+              ictx.fillStyle = fg;
+              ictx.fillRect(0, 0, doc.width, doc.height);
+              ictx.globalCompositeOperation = "source-over";
+              onCommit(placeRaster(doc, `自定形状 ${doc.layers.length + 1}`, ink), "定义自定形状");
+              setToast("已按当前图层剪影生成自定形状图层（前景色填充）");
+            },
+          };
+
+        case "file.revert":
+          return { run: () => void revertFile() };
+        case "file.export.saveForWebLegacy":
+          return { run: () => setWebOpts({ format: "jpg", quality: 80, scale: 1 }) };
+        case "file.import.videoFramesToLayers":
+          return { run: () => void importVideoFrames() };
+        case "file.scripts.imageProcessor":
+          return { run: () => void imageProcessor() };
+
+        case "file.automate.contactSheetII":
+          return { run: () => void contactSheet() };
+        case "file.import.notes":
+          return { run: () => void importNotes() };
+        case "file.import.variableDataSets":
+          return { run: () => void importDataSets() };
+        case "file.export.dataSetsAsFiles":
+          return { run: () => void exportDataSets() };
+
+        case "file.automate.cropAndStraightenPhotos":
+          return { run: () => cropAndStraighten() };
+        case "file.export.colorLookupTables":
+          return { run: () => void exportCube() };
+        case "file.automate.batch":
+          return { run: () => void batchProcess() };
+
+        /* ---------------------- 第二十六批：File 组（导出/脚本/自动）------- */
+        case "file.export.artboardsToFiles":
+          return { run: () => void exportArtboards() };
+        case "file.export.artboardsToPdf":
+          return { run: () => void exportArtboardsPdf() };
+        case "file.export.layerCompsToFiles":
+          return { run: () => void exportLayerComps() };
+        case "file.generate.imageAssets":
+          return { run: () => void generateImageAssets() };
+        case "file.package":
+          return { run: () => void packageProject() };
+        case "file.scripts.loadFilesIntoStack":
+          return { run: () => void loadFilesIntoStack() };
+        case "file.scripts.statistics":
+          return { run: () => openStatistics() };
+        case "file.automate.photomerge":
+          return { run: () => photomerge() };
+        case "file.automate.mergeToHdrPro":
+          return { run: () => mergeToHdr() };
+
         /* ---------------------- 第二十四批：File 组（批处理/置入/导出）------- */
         case "file.placeEmbedded":
           return { run: () => void placeImage(false) };
@@ -4654,6 +5517,28 @@ export default function EditorShell({
           return {
             run: () => setToast(`当前 ${historyLabels.length >= 0 ? "所有文档" : ""}都已收在标签页里`),
           };
+        case "window.arrange.tileAllVertically":
+          return { run: () => setCompareLayout("tileAllVertically"), checked: compareLayout === "tileAllVertically" };
+        case "window.arrange.tileAllHorizontally":
+          return { run: () => setCompareLayout("tileAllHorizontally"), checked: compareLayout === "tileAllHorizontally" };
+        case "window.arrange.twoUpVertical":
+          return { run: () => setCompareLayout("twoUpVertical"), checked: compareLayout === "twoUpVertical" };
+        case "window.arrange.twoUpHorizontal":
+          return { run: () => setCompareLayout("twoUpHorizontal"), checked: compareLayout === "twoUpHorizontal" };
+        case "window.arrange.threeUpVertical":
+          return { run: () => setCompareLayout("threeUpVertical"), checked: compareLayout === "threeUpVertical" };
+        case "window.arrange.threeUpHorizontal":
+          return { run: () => setCompareLayout("threeUpHorizontal"), checked: compareLayout === "threeUpHorizontal" };
+        case "window.arrange.threeUpStacked":
+          return { run: () => setCompareLayout("threeUpStacked"), checked: compareLayout === "threeUpStacked" };
+        case "window.arrange.fourUp":
+          return { run: () => setCompareLayout("fourUp"), checked: compareLayout === "fourUp" };
+        case "window.arrange.sixUp":
+          return { run: () => setCompareLayout("sixUp"), checked: compareLayout === "sixUp" };
+        case "window.arrange.tile":
+          return { run: () => setCompareLayout("tileAllHorizontally"), checked: compareLayout === "tileAllHorizontally" };
+        case "window.arrange.cascade":
+          return { run: () => setCompareLayout("cascade"), checked: compareLayout === "cascade" };
         case "window.arrange.matchZoom":
         case "window.arrange.matchLocation":
         case "window.arrange.matchRotation":
@@ -4701,6 +5586,8 @@ export default function EditorShell({
           return { run: () => setTextPanel("charStyles") };
         case "window.panel.paragraphStyles":
           return { run: () => setTextPanel("paraStyles") };
+        case "window.panel.cloneSource":
+          return { run: () => setUtilPanel("cloneSource"), checked: utilPanel === "cloneSource" };
         case "window.panel.adjustments":
           return { run: () => setUtilPanel("adjustments"), checked: utilPanel === "adjustments" };
         case "window.panel.swatches":
@@ -7339,6 +8226,39 @@ export default function EditorShell({
       </div>
 
       <div className="editor-main">
+        {floating.map((f) => {
+          const d = docs.find((x) => x.id === f.id);
+          if (!d) return null;
+          return (
+            <FloatingDoc
+              key={f.id}
+              doc={d}
+              rect={f.rect}
+              active={f.id === doc.id}
+              version={revision}
+              onMove={(rect) =>
+                setFloating((prev) => prev.map((x) => (x.id === f.id ? { ...x, rect } : x)))
+              }
+              onActivate={() => {
+                if (f.id !== doc.id) onSelectDoc(f.id);
+              }}
+              onClose={() => setFloating((prev) => prev.filter((x) => x.id !== f.id))}
+            />
+          );
+        })}
+        {compareLayout && (
+          <CompareView
+            layout={compareLayout}
+            docs={docs}
+            activeId={doc.id}
+            version={revision}
+            onActivate={(id) => {
+              onSelectDoc(id);
+              setCompareLayout(null);
+            }}
+            onClose={() => setCompareLayout(null)}
+          />
+        )}
         {showToolRail && (
           <ToolRail
           tool={tool}
@@ -7723,7 +8643,7 @@ export default function EditorShell({
               docW={docW}
               docH={docH}
               source={compRef.current}
-              version={panelTick}
+              version={revision}
               scale={scale}
               viewportW={viewportSize.w}
               viewportH={viewportSize.h}
@@ -7950,6 +8870,162 @@ export default function EditorShell({
           onClose={() => setImageOps(null)}
         />
       )}
+      {/* 文件 > 导出 > 存储为 Web 所用格式 */}
+      {webOpts && (
+        <Modal
+          title="存储为 Web 所用格式"
+          onClose={() => setWebOpts(null)}
+          width={440}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setWebOpts(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={() => void saveForWeb()}>
+                存储…
+              </button>
+            </>
+          }
+        >
+          <div className="pref-seg">
+            {(["png", "jpg", "webp"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={`pref-seg-btn${webOpts.format === f ? " is-on" : ""}`}
+                onClick={() => setWebOpts({ ...webOpts, format: f })}
+              >
+                {f.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <label className="field">
+            <span className="field-label">质量</span>
+            <span className="field-input">
+              <input
+                type="number"
+                min={10}
+                max={100}
+                value={webOpts.quality}
+                onChange={(e) => setWebOpts({ ...webOpts, quality: Number(e.target.value) || 80 })}
+              />
+              <span className="field-unit">%</span>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">缩放</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={0.05}
+                min={0.05}
+                max={4}
+                value={webOpts.scale}
+                onChange={(e) => setWebOpts({ ...webOpts, scale: Number(e.target.value) || 1 })}
+              />
+              <span className="field-unit">×</span>
+            </span>
+          </label>
+          <p className="isz-hint">
+            输出尺寸：{Math.round(docW * webOpts.scale)} × {Math.round(docH * webOpts.scale)} px
+            （质量只对 JPG / WebP 有效）
+          </p>
+        </Modal>
+      )}
+      {/* 编辑 > 检查拼写（文本层的排版与错拼检查） */}
+      {proofread && (
+        <Modal
+          title="检查拼写"
+          onClose={() => setProofread(null)}
+          width={520}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setProofread(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                disabled={proofread.issues.length === 0}
+                onClick={() => {
+                  const t = doc.layers.find((l) => l.id === proofread.layerId);
+                  if (!t || !hasText(t)) {
+                    setProofread(null);
+                    return;
+                  }
+                  const fixed = applyFixes(t.text.content, proofread.issues);
+                  onCommit(updateText(doc, t.id, { content: fixed }), "修正排版问题");
+                  setProofread(null);
+                  setToast(`已修正 ${proofread.issues.length} 处`);
+                }}
+              >
+                全部修正
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            这不是词典拼写检查（那需要一本词典）。这里报的是**不需要词典就能确证**的问题：
+            重复词、中英之间缺空格、全角半角混用、多余空格、中文句末英文句点、高频错拼。
+          </p>
+          {proofread.issues.length === 0 ? (
+            <p className="isz-hint">没发现问题。</p>
+          ) : (
+            <table className="util-table">
+              <tbody>
+                {proofread.issues.map((it, i) => (
+                  <tr key={`${it.index}-${i}`}>
+                    <td style={{ width: "18%" }}>{ISSUE_LABEL[it.kind]}</td>
+                    <td>
+                      <code>{it.found}</code> → <code>{it.fix || "（删除）"}</code>
+                      <span className="isz-hint" style={{ marginLeft: 8 }}>
+                        {it.message}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
+      {/* 文件 > 脚本 > 统计 */}
+      {statsDialog && (
+        <Modal
+          title="统计"
+          onClose={() => setStatsDialog(null)}
+          width={420}
+          footer={
+            <button type="button" className="btn-primary btn-sm" onClick={() => setStatsDialog(null)}>
+              {zh.preferences.done}
+            </button>
+          }
+        >
+          <p className="isz-hint">对「整档合成结果」抽样统计（最长边 512，形状不变）。</p>
+          <table className="util-table">
+            <tbody>
+              <tr>
+                <td>像素数</td>
+                <td>{statsDialog.pixels.toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>平均亮度</td>
+                <td>{statsDialog.mean}</td>
+              </tr>
+              <tr>
+                <td>亮度中位数</td>
+                <td>{statsDialog.median}</td>
+              </tr>
+              <tr>
+                <td>R / G / B 均值</td>
+                <td>
+                  {statsDialog.r} / {statsDialog.g} / {statsDialog.b}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </Modal>
+      )}
       {/* 视图 > 32 位预览选项 */}
       {preview32Dialog && (
         <Modal
@@ -8104,6 +9180,8 @@ export default function EditorShell({
           kind={utilPanel}
           doc={doc}
           cursor={cursorDoc ?? undefined}
+          cloneAnchor={anchor}
+          onCloneAnchor={(p) => setAnchor(p)}
           fg={fg}
           onFg={setFg}
           onApply={(next, label) => onCommit(next, label)}
@@ -9326,6 +10404,7 @@ export default function EditorShell({
           onClose={() => setPuppet(null)}
             showMesh={showWarpMesh}
             showPins={showWarpPins}
+            grid={warpGrid}
           />
       )}
       {brushPanelOpen && usesBrush(tool) && (

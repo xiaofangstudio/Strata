@@ -36,6 +36,8 @@ interface Props {
   showMesh?: boolean;
   /** 是否绘制钉子（视图 > 显示 > 编辑钉） */
   showPins?: boolean;
+  /** 网格拆分粒度（编辑 > 变换 > 拆分变形）：打开时按这个格子铺一排钉子 */
+  grid?: { cols: number; rows: number };
 }
 
 /** 预览缓冲最长边。 */
@@ -51,6 +53,7 @@ export default function PuppetWarpDialog({
   onClose,
   showMesh = true,
   showPins = true,
+  grid,
 }: Props) {
   const act = activeLayer(doc);
   const at = useMemo(
@@ -66,7 +69,19 @@ export default function PuppetWarpDialog({
   }
 
   const [mode, setMode] = useState<MlsMode>(defaultMode);
-  const [pins, setPins] = useState<WarpPin[]>([]);
+  const [pins, setPins] = useState<WarpPin[]>(() => {
+    // 网格拆分过：按 (cols+1)×(rows+1) 铺一排「原地不动」的钉子当起始网格
+    if (!grid || (grid.cols <= 1 && grid.rows <= 1)) return [];
+    const out: WarpPin[] = [];
+    for (let j = 0; j <= grid.rows; j += 1) {
+      for (let i = 0; i <= grid.cols; i += 1) {
+        const x = (doc.width * i) / grid.cols;
+        const y = (doc.height * j) / grid.rows;
+        out.push({ ox: x, oy: y, x, y });
+      }
+    }
+    return out;
+  });
   const [selected, setSelected] = useState(-1);
 
   const stageRef = useRef<HTMLDivElement | null>(null);

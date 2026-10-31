@@ -482,6 +482,11 @@ import {
   toDuotone,
   toIndexed,
   toLab,
+  findPhotoRegions,
+  identityLut,
+  lutToCube,
+  checkText,
+  applyFixes,
 } from "./lib/engines.gen.mjs";
 
 /** 滤镜 id → 定义（含参数表与内核）。索引一次，供工具与能力清单共用。 */
@@ -547,7 +552,7 @@ import {
   renderText,
 } from "./lib/draw.mjs";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
-import { resolve as resolvePath, dirname, isAbsolute } from "node:path";
+import { resolve as resolvePath, dirname, isAbsolute, join as joinPath } from "node:path";
 
 const sessions = new Map();
 let sessionSeq = 0;
@@ -1005,6 +1010,133 @@ server.registerTool(
     if (args.preview === true) {
       payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
     }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_crop_photos",
+  {
+    title: "裁正照片（切成多张）",
+    description:
+      "把一张「白底/黑底上摆着好几张照片」的扫描件切成若干张。做法是背景估计（四边中位数）" +
+      "→ 阈值化 → 四连通域 → 外接矩形，与应用内「文件 > 自动 > 裁正照片」同一份实现。" +
+      "返回每张的矩形与原图尺寸；给 outDir 时顺带把每张切图存成 PNG。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      tolerance: z.number().optional().describe("与背景的颜色距离阈值（默认 32）"),
+      minArea: z.number().optional().describe("最小面积占比，滤掉灰尘（默认 0.004）"),
+      outDir: z.string().optional().describe("可选：切图保存目录（绝对路径）"),
+    },
+  },
+  guard(async (args) => {
+    const s = sessionImage(args.sessionId);
+    const { width, height, data } = s.img;
+    const res = findPhotoRegions(data, width, height, args.tolerance ?? 32, args.minArea ?? 0.004);
+    const payload = {
+      ok: true,
+      sessionId: args.sessionId,
+      background: res.background,
+      singleBlob: res.singleBlob,
+      count: res.boxes.length,
+      boxes: res.boxes.map((b) => ({
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+        area: Number(b.area.toFixed(4)),
+      })),
+    };
+    if (args.outDir && res.boxes.length > 0) {
+      const saved = [];
+      for (let i = 0; i < res.boxes.length; i += 1) {
+        const b = res.boxes[i];
+        const piece = {
+          width: b.w,
+          height: b.h,
+          data: new Uint8ClampedArray(b.w * b.h * 4),
+        };
+        for (let y = 0; y < b.h; y += 1) {
+          for (let x = 0; x < b.w; x += 1) {
+            const src = ((b.y + y) * width + (b.x + x)) * 4;
+            const dst = (y * b.w + x) * 4;
+            piece.data[dst] = data[src];
+            piece.data[dst + 1] = data[src + 1];
+            piece.data[dst + 2] = data[src + 2];
+            piece.data[dst + 3] = data[src + 3];
+          }
+        }
+        const abs = resolveImagePath(joinPath(args.outDir, `photo-${i + 1}.png`), false);
+        writeFileSync(abs, encodeImagePng(piece));
+        saved.push(abs);
+      }
+      payload.saved = saved;
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_export_lut",
+  {
+    title: "导出 3D LUT（.cube）",
+    description:
+      "把一组调色算子烘成 33³ 的 .cube 查找表：先造恒等 RGB 网格，再用同样的算子序列处理一遍，" +
+      "按 r→g→b 的顺序写成文本。ops 与 strata_adjust_image 的算子名一致。" +
+      "给 outPath 就写盘，否则直接在返回值里给出文本。",
+    inputSchema: {
+      ops: z
+        .array(z.object({ type: z.string() }).passthrough())
+        .describe("调色算子序列（同 strata_adjust_image 的 ops）"),
+      size: z.number().optional().describe("网格边长（默认 33）"),
+      title: z.string().optional(),
+      outPath: z.string().optional().describe("可选：.cube 保存路径"),
+    },
+  },
+  guard(async (args) => {
+    const size = Math.max(2, Math.min(65, Math.round(args.size ?? 33)));
+    const lut = identityLut(size);
+    let buf = { data: lut.data, width: lut.width, height: lut.height };
+    for (const op of args.ops ?? []) {
+      const adj = ADJUSTERS[op.type];
+      if (!adj) throw new ToolError(`未知调色算子：${op.type}`);
+      buf = adj.run(buf, op);
+    }
+    const text = lutToCube(buf.data, buf.width, size, args.title ?? "Strata LUT");
+    const payload = { ok: true, size, ops: (args.ops ?? []).length };
+    if (args.outPath) {
+      const abs = resolveImagePath(args.outPath, false);
+      writeFileSync(abs, text, "utf8");
+      payload.path = abs;
+      payload.bytes = Buffer.byteLength(text, "utf8");
+    } else {
+      payload.cube = text;
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_proofread",
+  {
+    title: "文字检查（排版/错拼）",
+    description:
+      "检查一段文字里**不需要词典就能确证**的问题：重复词、中英之间缺空格、中文里的半角标点、" +
+      "多余空格、中文句末英文句点、高频错拼（26 组）。不是词典拼写检查。" +
+      "传 fix=true 时同时返回修正后的文本。",
+    inputSchema: {
+      text: z.string().describe("要检查的文本"),
+      fix: z.boolean().optional().describe("是否返回修正后的文本"),
+    },
+  },
+  guard(async (args) => {
+    const issues = checkText(args.text ?? "");
+    const payload = {
+      ok: true,
+      count: issues.length,
+      issues: issues.map((i) => ({ kind: i.kind, found: i.found, fix: i.fix, message: i.message })),
+    };
+    if (args.fix === true) payload.fixed = applyFixes(args.text ?? "", issues);
     return ok(payload);
   }),
 );

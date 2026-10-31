@@ -1,0 +1,150 @@
+/**
+ * 多文档对比视图：铺满编辑区，格子按版式分列。
+ */
+
+.compare {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas-bg);
+  animation: compare-in var(--dur) var(--ease-out);
+}
+
+@keyframes compare-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.compare-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.compare-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  overflow: auto;
+  align-content: start;
+}
+
+.compare-grid.cols-1 {
+  grid-template-columns: 1fr;
+}
+
+.compare-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.compare-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+/* 层叠：一格压一格，靠内联 margin 错开 */
+.compare-grid.is-cascade {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  justify-items: center;
+}
+
+.compare-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.compare-pane:hover {
+  border-color: var(--border-strong);
+}
+
+.compare-pane.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.compare-label {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px 10px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-size {
+  color: var(--text-3);
+}
+
+.compare-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-2);
+  background:
+    repeating-conic-gradient(var(--checker) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px,
+    var(--paper);
+}
+
+/* 画布等比塞进格子（max-width/height + object-fit 的效果） */
+.compare-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  box-shadow: var(--shadow-sm);
+}
+
+.compare-more {
+  grid-column: 1 / -1;
+  padding: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  text-align: center;
+}

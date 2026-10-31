@@ -108,6 +108,7 @@ class McpClient {
 
 const dir = mkdtempSync(join(tmpdir(), "strata-mcp-check-"));
 const imgPath = join(dir, "sample.png");
+const sheetPath = join(dir, "sheet.png");
 
 // 造一张「上蓝天空 + 中间白墙 + 下蓝地面 + 一块红主体」的图，
 // 让 sky / subject / colorRange 都有可命中的内容。
@@ -128,6 +129,21 @@ const imgPath = join(dir, "sample.png");
   ctx.fillStyle = "#d9382b";
   ctx.fillRect(90, 60, 60, 45);
   writeFileSync(imgPath, c.toBuffer("image/png"));
+
+// 白底上摆两块「照片」，用来测裁正照片的切分
+{
+  const w = 300;
+  const h = 200;
+  const c = createCanvas(w, h);
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "#2b6cb0";
+  ctx.fillRect(20, 30, 100, 120);
+  ctx.fillStyle = "#c05621";
+  ctx.fillRect(160, 50, 110, 90);
+  writeFileSync(sheetPath, c.toBuffer("image/png"));
+}
 }
 
 const client = new McpClient();
@@ -270,6 +286,42 @@ try {
   check("strata_mesh_warp · similarity", () => {
     if (w1.isError) throw new Error(w1.parsed.error);
     if (w1.parsed.pins !== 3) throw new Error("钉点数不对");
+  });
+
+  // 裁正照片：白底带两块，应该切出 2 张
+  const sheet = await client.call("strata_open_image", { path: sheetPath });
+  const sheetId = sheet.parsed.sessionId ?? sheet.parsed.session?.id;
+  const crop = await client.call("strata_crop_photos", { sessionId: sheetId });
+  check("strata_crop_photos", () => {
+    if (crop.isError) throw new Error(crop.parsed.error);
+    if (crop.parsed.count !== 2) throw new Error(`应切出 2 张，实际 ${crop.parsed.count}`);
+    if (crop.parsed.singleBlob) throw new Error("不该判定为单块");
+  });
+
+  // 导出 LUT：用亮度算子把一个恒等网格处理一遍
+  const lut = await client.call("strata_export_lut", {
+    ops: [{ type: "brightnessContrast", brightness: 20 }],
+    size: 9,
+  });
+  check("strata_export_lut", () => {
+    if (lut.isError) throw new Error(lut.parsed.error);
+    if (!String(lut.parsed.cube ?? "").startsWith("TITLE")) throw new Error("cube 头不对");
+    if (!String(lut.parsed.cube).includes("LUT_3D_SIZE 9")) throw new Error("尺寸行缺失");
+    const rows = String(lut.parsed.cube)
+      .split("\n")
+      .filter((l) => /^[0-9.]+ [0-9.]+ [0-9.]+$/.test(l));
+    if (rows.length !== 9 ** 3) throw new Error(`条目数应为 729，实际 ${rows.length}`);
+  });
+
+  // 文字检查
+  const proof = await client.call("strata_proofread", {
+    text: "我们我们用Photoshop修图,好吗",
+    fix: true,
+  });
+  check("strata_proofread", () => {
+    if (proof.isError) throw new Error(proof.parsed.error);
+    if (!(proof.parsed.count > 0)) throw new Error("应该有可报的问题");
+    if (!String(proof.parsed.fixed).includes("，")) throw new Error("半角逗号没被修正");
   });
 
   // 能力清单应能列出全部滤镜与颜色模式

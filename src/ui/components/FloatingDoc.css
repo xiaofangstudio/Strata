@@ -1,0 +1,143 @@
+/**
+ * 浮动文档窗口：应用内可拖可缩的小窗，风格对齐面板（圆角 + 细边 + 轻阴影）。
+ */
+
+.floatdoc {
+  position: absolute;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  min-height: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.floatdoc.is-active {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent-soft),
+    var(--shadow-lg);
+}
+
+.floatdoc.is-dragging {
+  transition: none;
+  user-select: none;
+}
+
+/* ---------- 标题栏（拖动区） ---------- */
+.floatdoc-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 6px 4px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+}
+
+.floatdoc-bar:active {
+  cursor: grabbing;
+}
+
+.floatdoc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floatdoc-meta {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.floatdoc-zoom {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  cursor: default;
+}
+
+.floatdoc-pct {
+  min-width: 34px;
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.floatdoc-btn {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.floatdoc-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.floatdoc-close:hover {
+  color: var(--danger);
+}
+
+/* ---------- 内容区 ---------- */
+.floatdoc-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-2);
+  background:
+    repeating-conic-gradient(var(--checker) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px,
+    var(--paper);
+}
+
+.floatdoc-canvas {
+  display: block;
+  image-rendering: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 右下角缩放手柄 ---------- */
+.floatdoc-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(
+    135deg,
+    transparent 0 50%,
+    var(--border-strong) 50% 60%,
+    transparent 60% 72%,
+    var(--border-strong) 72% 82%,
+    transparent 82%
+  );
+}
