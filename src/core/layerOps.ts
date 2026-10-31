@@ -4,7 +4,9 @@
  * 全部写成「旧文档 → 新文档」的纯函数：不改入参、每次都返回新对象，
  * 这样 React 的 diff、撤销栈的快照、以及后续多文档标签页都能直接复用。
  */
-import { cloneSurface, createSurface, mustCtx } from "../engine/surface";
+import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
+import { contentAwareScale } from "./seamCarve";
+import { mlsWarp, type MlsMode, type WarpPin } from "../engine/meshWarp";
 import { composeDoc, paintSurface } from "../engine/compositor";
 import { clipBaseOf, paintStyledLayer } from "../engine/styles";
 import { isPixelAdjust, applyPixelAdjust } from "../engine/adjustPixels";
@@ -1363,6 +1365,85 @@ export function bakeStyledLayer(doc: StrataDoc): StrataDoc {
  * offsets 是每个角相对文档宽高的比例，顺序：左上、右上、右下、左下。
  * 只改这一个图层；蒙版用同一套四边形同步变形，避免错位。
  */
+/* ---------------------------------------------- 内容识别缩放（接缝雕刻） */
+
+/**
+ * 文档级内容识别缩放：把整份文档（含所有像素层与蒙版）从当前尺寸
+ * 缩到 targetW × targetH。每一层独立跑接缝雕刻 —— 单层文档（照片处理
+ * 的绝大多数场景）等价于 PS 的「内容识别缩放」；多层文档各层按自己的
+ * 能量图删缝，逐层都是内容感知的。
+ * protect 是 0~255 的保护蒙版（有选区时把选区传进来，选区内不删缝）。
+ */
+export function contentAwareScaleDocument(
+  doc: StrataDoc,
+  targetW: number,
+  targetH: number,
+  protect?: Uint8ClampedArray,
+): StrataDoc {
+  const tw = Math.max(1, Math.round(targetW));
+  const th = Math.max(1, Math.round(targetH));
+  if (tw === doc.width && th === doc.height) return doc;
+  const layers = doc.layers.map((l) => {
+    if (l.kind !== "pixel") return l;
+    const img = readPixels(l.surface);
+    const carved = contentAwareScale(
+      { data: img.data, width: img.width, height: img.height },
+      tw,
+      th,
+      { protect },
+    );
+    const surface = createSurface(tw, th);
+    writePixels(surface, new ImageData(new Uint8ClampedArray(carved.data), tw, th));
+    let mask = l.mask;
+    if (mask) {
+      const mimg = readPixels(mask);
+      const mcarved = contentAwareScale(
+        { data: mimg.data, width: mimg.width, height: mimg.height },
+        tw,
+        th,
+      );
+      const m2 = createSurface(tw, th);
+      writePixels(m2, new ImageData(new Uint8ClampedArray(mcarved.data), tw, th));
+      mask = m2;
+    }
+    return { ...l, surface, mask };
+  });
+  return { ...doc, width: tw, height: th, layers, selection: null };
+}
+
+/** 木偶变形 / 透视钉点变形：对活动图层（含蒙版）做一次 MLS 网格变形。 */
+export function meshWarpActiveLayer(
+  doc: StrataDoc,
+  pins: readonly WarpPin[],
+  mode: MlsMode = "similarity",
+): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
+  const minPins = mode === "affine" ? 3 : 2;
+  if (pins.length < minPins) return doc;
+  const img = readPixels(cur.surface);
+  const warped = mlsWarp(
+    { data: img.data, width: img.width, height: img.height },
+    pins,
+    mode,
+  );
+  const surface = createSurface(doc.width, doc.height);
+  writePixels(surface, new ImageData(new Uint8ClampedArray(warped.data), doc.width, doc.height));
+  let mask = cur.mask;
+  if (mask) {
+    const mimg = readPixels(mask);
+    const mwarped = mlsWarp(
+      { data: mimg.data, width: mimg.width, height: mimg.height },
+      pins,
+      mode,
+    );
+    const m2 = createSurface(doc.width, doc.height);
+    writePixels(m2, new ImageData(new Uint8ClampedArray(mwarped.data), doc.width, doc.height));
+    mask = m2;
+  }
+  return updateLayer(doc, cur.id, { surface, mask });
+}
+
 export function warpActiveLayer(
   doc: StrataDoc,
   offsets: readonly (readonly [number, number])[],

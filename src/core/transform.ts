@@ -89,6 +89,32 @@ export function flipLayer(doc: StrataDoc, axis: FlipAxis): StrataDoc {
   return { ...doc, layers, dirty: true };
 }
 
+/**
+ * 图层旋转 90°（顺 / 逆）：内容绕画布中心转 quarter，画布尺寸不变。
+ * 非正方形画布上越界部分会被裁掉 —— 与 PS 的「变换 > 旋转 90°」行为一致。
+ */
+export function rotateLayerQuarter(doc: StrataDoc, deg: 90 | 270): StrataDoc {
+  const at = doc.layers.findIndex((l) => l.id === doc.activeLayerId);
+  if (at < 0) return doc;
+  const layer = doc.layers[at];
+  if (!isPixel(layer) || layer.locked) return doc;
+  const turn = (src: HTMLCanvasElement): HTMLCanvasElement => {
+    const out = createSurface(src.width, src.height);
+    const ctx = mustCtx(out);
+    ctx.translate(src.width / 2, src.height / 2);
+    ctx.rotate((deg * Math.PI) / 180);
+    ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    return out;
+  };
+  const layers = doc.layers.slice();
+  layers[at] = {
+    ...layer,
+    surface: turn(layer.surface),
+    mask: layer.mask ? turn(layer.mask) : layer.mask,
+  };
+  return { ...doc, layers, dirty: true };
+}
+
 /** 当前图层旋转 180 度（尺寸不变，等价于水平 + 垂直翻转）。 */
 export function rotateLayerHalf(doc: StrataDoc): StrataDoc {
   const at = doc.layers.findIndex((l) => l.id === doc.activeLayerId);

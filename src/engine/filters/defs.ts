@@ -60,6 +60,20 @@ import {
   zigZag,
   type RgbaBuffer,
 } from "./kernels";
+import {
+  colorHalftone,
+  displace,
+  fieldBlur,
+  hsbHsl,
+  irisBlur,
+  lensBlur,
+  pathBlur,
+  shapeBlur,
+  smartBlur,
+  spinBlur,
+  tiltShift,
+} from "./gallery";
+import { flame, lensFlare, lightingEffects, pictureFrame, tree } from "./renderFx";
 
 /** 一个滤镜参数。与调整层的 AdjustParam 字段语义一致，弹窗直接复用样式。 */
 export interface FilterParam {
@@ -78,6 +92,7 @@ export interface FilterParam {
 
 export type FilterGroup =
   | "blur"
+  | "blurGallery"
   | "sharpen"
   | "noise"
   | "pixelate"
@@ -700,6 +715,227 @@ const STYLIZE_EXTRA_DEFS: FilterDef[] = [
   },
 ];
 
+/* ------------------------------------------------ 模糊画廊 / 高级模糊 */
+
+const BLUR_GALLERY_DEFS: FilterDef[] = [
+  {
+    id: "filter.blurGallery.fieldBlur",
+    label: "场景模糊",
+    group: "blurGallery",
+    params: [
+      { id: "amount", label: "模糊", min: 0, max: 100, step: 1, def: 12, unit: " 像素" },
+      { id: "start", label: "起始端保留", min: 0, max: 100, step: 1, def: 100, unit: "%" },
+      {
+        id: "dir",
+        label: "渐变方向",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "垂直", value: 0 },
+          { label: "水平", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => fieldBlur(b, p.amount, p.start, p.dir),
+  },
+  {
+    id: "filter.blurGallery.irisBlur",
+    label: "光圈模糊",
+    group: "blurGallery",
+    params: [
+      { id: "radius", label: "模糊", min: 0, max: 100, step: 1, def: 16, unit: " 像素" },
+      { id: "cx", label: "圆心 X", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+      { id: "cy", label: "圆心 Y", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+      { id: "iris", label: "清晰区", min: 5, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "feather", label: "羽化", min: 5, max: 200, step: 1, def: 60, unit: "%" },
+    ],
+    apply: (b, p) => irisBlur(b, p.radius, p.cx, p.cy, p.iris, p.feather),
+  },
+  {
+    id: "filter.blurGallery.tiltShift",
+    label: "移轴摄影",
+    group: "blurGallery",
+    params: [
+      { id: "radius", label: "模糊", min: 0, max: 100, step: 1, def: 18, unit: " 像素" },
+      { id: "center", label: "清晰位置", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+      { id: "keep", label: "清晰带高度", min: 0, max: 100, step: 1, def: 8, unit: "%" },
+      { id: "feather", label: "过渡羽化", min: 1, max: 100, step: 1, def: 40, unit: "%" },
+    ],
+    apply: (b, p) => tiltShift(b, p.radius, p.center, p.keep, p.feather),
+  },
+  {
+    id: "filter.blurGallery.pathBlur",
+    label: "路径模糊",
+    group: "blurGallery",
+    params: [
+      { id: "distance", label: "路径长度", min: 0, max: 200, step: 1, def: 40, unit: " 像素" },
+      { id: "angle", label: "起始角度", min: -180, max: 180, step: 1, def: 0, unit: "°" },
+      { id: "curvature", label: "弯曲", min: -180, max: 180, step: 1, def: 30, unit: "°" },
+      { id: "taper", label: "两端渐隐", min: 0, max: 100, step: 1, def: 40, unit: "%" },
+    ],
+    apply: (b, p) => pathBlur(b, p.distance, p.angle, p.curvature, p.taper),
+  },
+  {
+    id: "filter.blurGallery.spinBlur",
+    label: "旋转模糊",
+    group: "blurGallery",
+    params: [
+      { id: "angle", label: "旋转量", min: 0, max: 360, step: 1, def: 20, unit: "°" },
+      { id: "cx", label: "中心 X", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+      { id: "cy", label: "中心 Y", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+    ],
+    apply: (b, p) => spinBlur(b, p.angle, p.cx, p.cy),
+  },
+];
+
+const BLUR_ADVANCED_DEFS: FilterDef[] = [
+  {
+    id: "filter.blur.lensBlur",
+    label: "镜头模糊",
+    group: "blur",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 100, step: 1, def: 18, unit: " 像素" },
+      { id: "threshold", label: "高光阈值", min: 0, max: 254, step: 1, def: 200 },
+      { id: "boost", label: "散景强度", min: 0, max: 200, step: 1, def: 80, unit: "%" },
+    ],
+    apply: (b, p) => lensBlur(b, p.radius, p.threshold, p.boost),
+  },
+  {
+    id: "filter.blur.shapeBlur",
+    label: "形状模糊",
+    group: "blur",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 40, step: 1, def: 6, unit: " 像素" },
+      { id: "iterations", label: "迭代", min: 1, max: 6, step: 1, def: 2 },
+      {
+        id: "shape",
+        label: "形状",
+        min: 0,
+        max: 3,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "圆形", value: 0 },
+          { label: "菱形", value: 1 },
+          { label: "方形", value: 2 },
+          { label: "六边形", value: 3 },
+        ],
+      },
+    ],
+    apply: (b, p) => shapeBlur(b, p.radius, p.iterations, p.shape),
+  },
+  {
+    id: "filter.blur.smartBlur",
+    label: "智能模糊",
+    group: "blur",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 50, step: 1, def: 8, unit: " 像素" },
+      { id: "threshold", label: "阈值", min: 1, max: 255, step: 1, def: 30 },
+      {
+        id: "quality",
+        label: "品质",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 1,
+        choices: [
+          { label: "低", value: 0 },
+          { label: "中", value: 1 },
+          { label: "高", value: 2 },
+        ],
+      },
+      {
+        id: "mode",
+        label: "模式",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "正常", value: 0 },
+          { label: "平滑过渡", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => smartBlur(b, p.radius, p.threshold, p.quality, p.mode),
+  },
+];
+
+const DISTORT_ADVANCED_DEFS: FilterDef[] = [
+  {
+    id: "filter.distort.displace",
+    label: "位移",
+    group: "distort",
+    params: [
+      { id: "h", label: "水平比例", min: -200, max: 200, step: 1, def: 20, unit: " 像素" },
+      { id: "v", label: "垂直比例", min: -200, max: 200, step: 1, def: 20, unit: " 像素" },
+      {
+        id: "mode",
+        label: "位移图",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "棋盘格", value: 0 },
+          { label: "湍流", value: 1 },
+          { label: "径向", value: 2 },
+        ],
+      },
+      {
+        id: "edge",
+        label: "未定义区域",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "边缘延伸", value: 0 },
+          { label: "环绕重复", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => displace(b, p.h, p.v, p.mode, p.edge),
+  },
+];
+
+const PIXELATE_ADVANCED_DEFS: FilterDef[] = [
+  {
+    id: "filter.pixelate.colorHalftone",
+    label: "彩色半调",
+    group: "pixelate",
+    params: [
+      { id: "size", label: "网点大小", min: 2, max: 40, step: 1, def: 6, unit: " 像素" },
+    ],
+    apply: (b, p) => colorHalftone(b, p.size),
+  },
+];
+
+const OTHER_ADVANCED_DEFS: FilterDef[] = [
+  {
+    id: "filter.other.hsbHsl",
+    label: "HSB/HSL",
+    group: "other",
+    params: [
+      {
+        id: "mode",
+        label: "色彩模型",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "HSB（色相/饱和度/明度）", value: 0 },
+          { label: "HSL（色相/饱和度/亮度）", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => hsbHsl(b, p.mode),
+  },
+];
+
 const RENDER_DEFS: FilterDef[] = [
   {
     id: "filter.render.clouds",
@@ -718,6 +954,113 @@ const RENDER_DEFS: FilterDef[] = [
       { id: "scale", label: "缩放", min: 1, max: 20, step: 1, def: 4 },
     ],
     apply: (b, p) => differenceClouds(b, p.scale),
+  },
+  {
+    id: "filter.render.lensFlare",
+    label: "镜头光晕",
+    group: "render",
+    params: [
+      { id: "x", label: "光心 X", min: 0, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "y", label: "光心 Y", min: 0, max: 100, step: 1, def: 28, unit: "%" },
+      { id: "brightness", label: "亮度", min: 10, max: 300, step: 1, def: 100, unit: "%" },
+      {
+        id: "type",
+        label: "镜头类型",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "50-300 毫米变焦", value: 0 },
+          { label: "35 毫米定焦", value: 1 },
+          { label: "105 毫米定焦", value: 2 },
+        ],
+      },
+    ],
+    apply: (b, p) => lensFlare(b, p.x, p.y, p.brightness, p.type),
+  },
+  {
+    id: "filter.render.tree",
+    label: "树",
+    group: "render",
+    params: [
+      { id: "seed", label: "随机种子", min: 1, max: 999, step: 1, def: 42 },
+      { id: "spread", label: "枝干张开", min: 5, max: 80, step: 1, def: 28, unit: "°" },
+      { id: "depth", label: "分叉层数", min: 2, max: 10, step: 1, def: 7 },
+      {
+        id: "leaves",
+        label: "叶色方案",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "绿叶", value: 0 },
+          { label: "樱花", value: 1 },
+          { label: "秋叶", value: 2 },
+        ],
+      },
+    ],
+    apply: (b, p) => tree(b, p.seed, p.spread, p.depth, p.leaves),
+  },
+  {
+    id: "filter.render.flame",
+    label: "火焰",
+    group: "render",
+    params: [
+      { id: "seed", label: "随机种子", min: 1, max: 999, step: 1, def: 7 },
+      { id: "turbulence", label: "扰动", min: 0, max: 100, step: 1, def: 45, unit: "%" },
+      { id: "brightness", label: "亮度", min: 10, max: 200, step: 1, def: 100, unit: "%" },
+      {
+        id: "mode",
+        label: "类型",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "自然火焰", value: 0 },
+          { label: "分形火焰", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => flame(b, p.seed, p.turbulence, p.brightness, p.mode),
+  },
+  {
+    id: "filter.render.pictureFrame",
+    label: "画框",
+    group: "render",
+    params: [
+      { id: "thickness", label: "边框宽度", min: 1, max: 80, step: 1, def: 12, unit: " 像素" },
+      {
+        id: "style",
+        label: "样式",
+        min: 0,
+        max: 2,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "简约", value: 0 },
+          { label: "双线", value: 1 },
+          { label: "圆角斜面", value: 2 },
+        ],
+      },
+    ],
+    apply: (b, p) => pictureFrame(b, p.thickness, p.style),
+  },
+  {
+    id: "filter.render.lightingEffects",
+    label: "光照效果",
+    group: "render",
+    params: [
+      { id: "angle", label: "光照角度", min: -180, max: 180, step: 1, def: -45, unit: "°" },
+      { id: "elevation", label: "仰角", min: 1, max: 89, step: 1, def: 45, unit: "°" },
+      { id: "ambient", label: "环境光", min: 0, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "gloss", label: "光泽", min: 0, max: 100, step: 1, def: 50, unit: "%" },
+      { id: "material", label: "塑料效果", min: 0, max: 100, step: 1, def: 60, unit: "%" },
+      { id: "exposure", label: "曝光度", min: 0, max: 200, step: 1, def: 100, unit: "%" },
+    ],
+    apply: (b, p) => lightingEffects(b, p.angle, p.elevation, p.ambient, p.gloss, p.material, p.exposure),
   },
   {
     id: "filter.render.fibers",
@@ -765,18 +1108,23 @@ const VIDEO_DEFS: FilterDef[] = [
 export const FILTER_DEFS: readonly FilterDef[] = [
   ...BLUR_DEFS,
   ...BLUR_EXTRA_DEFS,
+  ...BLUR_ADVANCED_DEFS,
+  ...BLUR_GALLERY_DEFS,
   ...SHARPEN_DEFS,
   ...NOISE_DEFS,
   ...PIXELATE_DEFS,
   ...PIXELATE_EXTRA_DEFS,
+  ...PIXELATE_ADVANCED_DEFS,
   ...DISTORT_DEFS,
   ...DISTORT_EXTRA_DEFS,
+  ...DISTORT_ADVANCED_DEFS,
   ...STYLIZE_DEFS,
   ...STYLIZE_EXTRA_DEFS,
   ...SKETCH_DEFS,
   ...TEXTURE_DEFS,
   ...ARTISTIC_DEFS,
   ...OTHER_DEFS,
+  ...OTHER_ADVANCED_DEFS,
   ...RENDER_DEFS,
   ...VIDEO_DEFS,
 ];

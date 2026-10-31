@@ -93,6 +93,7 @@ import {
   removeBlackMatte,
   removeWhiteMatte,
   warpActiveLayer,
+  contentAwareScaleDocument,
   convertToSmartObject,
   rasterizeSmartObject,
   newSmartObjectViaCopy,
@@ -108,9 +109,18 @@ import {
   rotateDocument,
   rotateDocumentArbitrary,
   rotateLayerHalf,
+  rotateLayerQuarter,
   transformCorners,
   type FreeTransform,
 } from "../core/transform";
+import {
+  colorRangeMask,
+  focusMask,
+  growByColor,
+  skyMask,
+  subjectMask,
+} from "../core/smartSelect";
+import { hexToRgb } from "./color-utils";
 import { adjustDef, newAdjustState, type AdjustId, type AdjustState, type StyleId } from "../core/layer";
 import {
   borderSelection,
@@ -224,6 +234,7 @@ import ColorChip from "./components/ColorChip";
 import { Check } from "./components/controls";
 import ColorPanel from "./components/ColorPanel";
 import LiquifyDialog from "./components/LiquifyDialog";
+import PuppetWarpDialog from "./components/PuppetWarpDialog";
 import LayersPanel from "./components/LayersPanel";
 import HistoryPanel from "./components/HistoryPanel";
 import HistogramPanel from "./components/HistogramPanel";
@@ -481,6 +492,7 @@ export default function EditorShell({
   } | null>(null);
   /** 任意角度旋转对话框（角度，度）。 */
   const [rotateDialog, setRotateDialog] = useState<{ angle: string } | null>(null);
+  const [casDialog, setCasDialog] = useState<{ w: string; h: string } | null>(null);
   /** 四点变形对话框（四个角的 X/Y 百分比）。 */
   const [quadDialog, setQuadDialog] = useState<{
     mode: "skew" | "distort" | "perspective" | "warp";
@@ -488,6 +500,7 @@ export default function EditorShell({
   } | null>(null);
   /** 液化：面板内自己拖着涂，确定才把形变后的像素写回图层 */
   const [liquify, setLiquify] = useState(false);
+  const [puppet, setPuppet] = useState<"similarity" | "affine" | null>(null);
   /** 视图 > 网格：纯装饰浮层，不影响像素，也不进历史 */
   const [showGrid, setShowGrid] = useState(false);
   /** 视图 > 标尺：同上，只是刻度条 */
@@ -3297,6 +3310,10 @@ export default function EditorShell({
             : canTransform
               ? { run: beginFreeTransform }
               : undefined;
+        case "edit.transform.rotate90Cw":
+          return { run: () => onCommit(rotateLayerQuarter(doc, 90), "图层旋转 90°（顺时针）") };
+        case "edit.transform.rotate90Ccw":
+          return { run: () => onCommit(rotateLayerQuarter(doc, 270), "图层旋转 90°（逆时针）") };
         case "edit.transform.rotate180":
           return canTransform
             ? { run: () => onCommit(rotateLayerHalf(doc), zh.menu.rotateHalf) }
@@ -3645,6 +3662,75 @@ export default function EditorShell({
                   ),
               }
             : undefined;
+        case "select.grow":
+          if (!doc.selection || !hasSelection) return undefined;
+          return {
+            run: () => {
+              const act = activeLayer(doc);
+              if (!act || act.kind !== "pixel") {
+                setError(zh.selection.noPixelLayer);
+                return;
+              }
+              const next = growByColor(doc.selection!, act.surface, tolerance);
+              if (!next) {
+                setError(zh.selection.grownEmpty);
+                return;
+              }
+              onCommit(setSelection(doc, next), zh.selection.grown);
+            },
+          };
+        case "select.colorRange": {
+          const crLayer = activeLayer(doc);
+          if (!crLayer) return undefined;
+          const rgb = hexToRgb(fg);
+          const next = colorRangeMask(crLayer.surface, [rgb.r, rgb.g, rgb.b], tolerance);
+          if (!next || isSelectionEmpty(next)) {
+            setError(zh.selection.similarEmpty);
+            return undefined;
+          }
+          return {
+            run: () => onCommit(setSelection(doc, next), zh.selection.colorRange),
+          };
+        }
+        case "select.subject": {
+          const subLayer = activeLayer(doc);
+          if (!subLayer || subLayer.kind !== "pixel") return undefined;
+          const next = subjectMask(subLayer.surface);
+          if (!next || isSelectionEmpty(next)) {
+            setError(zh.selection.subjectEmpty);
+            return undefined;
+          }
+          return {
+            run: () =>
+              onCommit(setSelection(doc, smoothSelection(next, 2)), zh.selection.subject),
+          };
+        }
+        case "select.sky": {
+          const skyLayer = activeLayer(doc);
+          if (!skyLayer || skyLayer.kind !== "pixel") return undefined;
+          const next = skyMask(skyLayer.surface);
+          if (!next || isSelectionEmpty(next)) {
+            setError(zh.selection.skyEmpty);
+            return undefined;
+          }
+          return {
+            run: () =>
+              onCommit(setSelection(doc, featherSelection(next, 2)), zh.selection.sky),
+          };
+        }
+        case "select.focusArea": {
+          const foLayer = activeLayer(doc);
+          if (!foLayer || foLayer.kind !== "pixel") return undefined;
+          const next = focusMask(foLayer.surface, 24);
+          if (!next || isSelectionEmpty(next)) {
+            setError(zh.selection.focusEmpty);
+            return undefined;
+          }
+          return {
+            run: () =>
+              onCommit(setSelection(doc, smoothSelection(next, 2)), zh.selection.focus),
+          };
+        }
         case "select.transformSelection":
           // 变换选区 = 把自由变换框开在选区上（PhotoCraft 同名行为）
           return hasSelection && canTransform ? { run: () => beginFreeTransform() } : undefined;
@@ -3953,6 +4039,20 @@ export default function EditorShell({
           };
         case "edit.purge.videoCache":
           return { run: () => setToast("Strata 不缓存视频，无需清理") };
+
+        /* ------------------------------- 第七批：内容识别缩放 */
+        case "edit.contentAwareScale":
+          return {
+            run: () =>
+              setCasDialog({ w: String(doc.width), h: String(doc.height) }),
+          };
+
+        case "edit.puppetWarp":
+        case "layer.smartObjects.puppetWarp":
+          return { run: () => setPuppet("similarity") };
+        case "edit.perspectiveWarp":
+        case "layer.smartObjects.perspectiveWarp":
+          return { run: () => setPuppet("affine") };
 
         /* ------------------------------- 第六批：四点变形 / 任意角度 / 样式扩展 */
         case "image.rotation.arbitrary":
@@ -5053,6 +5153,90 @@ export default function EditorShell({
           </label>
         </Modal>
       )}
+      {/* 编辑 > 内容识别缩放（接缝雕刻） */}
+      {casDialog && (
+        <Modal
+          title="内容识别缩放"
+          onClose={() => setCasDialog(null)}
+          width={420}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setCasDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const w = Math.round(Number.parseFloat(casDialog.w));
+                  const h = Math.round(Number.parseFloat(casDialog.h));
+                  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) {
+                    setToast("请输入有效的目标尺寸");
+                    return;
+                  }
+                  if (w === doc.width && h === doc.height) {
+                    setToast("尺寸没有变化");
+                    return;
+                  }
+                  if (w * h > 6_000_000) {
+                    setToast("图幅过大，请先用图像大小把画布缩小后再内容识别缩放");
+                    return;
+                  }
+                  // 有选区时选区即保护区（选区内不删缝）
+                  let protect: Uint8ClampedArray | undefined;
+                  if (doc.selection) {
+                    const img = readPixels(doc.selection);
+                    protect = new Uint8ClampedArray(img.width * img.height);
+                    for (let i = 0; i < protect.length; i += 1) {
+                      protect[i] = img.data[i * 4 + 3];
+                    }
+                  }
+                  onCommit(contentAwareScaleDocument(doc, w, h, protect), "内容识别缩放");
+                  setCasDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            接缝雕刻：反复删除（或复制）能量最低的像素路径来改变尺寸，画面主体不会被
+            拉伸变形。当前有选区时，选区内的内容会自动受到保护。
+          </p>
+          <div className="isz-row">
+            <label className="field">
+              <span className="field-label">目标宽度</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  autoFocus
+                  value={casDialog.w}
+                  onChange={(e) => setCasDialog({ ...casDialog, w: e.target.value })}
+                />
+                <span className="field-unit">px</span>
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">目标高度</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  value={casDialog.h}
+                  onChange={(e) => setCasDialog({ ...casDialog, h: e.target.value })}
+                />
+                <span className="field-unit">px</span>
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
       {/* 编辑 > 变换 > 斜切 / 透视 / 扭曲 / 变形（四点） */}
       {quadDialog && (
         <Modal
@@ -5487,6 +5671,18 @@ export default function EditorShell({
             onCommit(next, zh.liquify.title);
           }}
           onClose={() => setLiquify(false)}
+        />
+      )}
+      {puppet && (
+        <PuppetWarpDialog
+          doc={doc}
+          themeMode={themeMode}
+          defaultMode={puppet}
+          onApply={(next) => {
+            setPuppet(null);
+            onCommit(next, puppet === "affine" ? "透视变形" : "木偶变形");
+          }}
+          onClose={() => setPuppet(null)}
         />
       )}
       {brushPanelOpen && usesBrush(tool) && (

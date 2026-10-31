@@ -26,7 +26,7 @@ export function cloneBuffer(src: RgbaBuffer): RgbaBuffer {
 
 /* ---------------------------------------------------------------- 预乘 alpha */
 
-function premultiply(src: RgbaBuffer): Float32Array {
+export function premultiply(src: RgbaBuffer): Float32Array {
   const { data } = src;
   const out = new Float32Array(data.length);
   for (let i = 0; i < data.length; i += 4) {
@@ -39,7 +39,7 @@ function premultiply(src: RgbaBuffer): Float32Array {
   return out;
 }
 
-function unpremultiplyInto(dst: Uint8ClampedArray, p: Float32Array): void {
+export function unpremultiplyInto(dst: Uint8ClampedArray, p: Float32Array): void {
   for (let i = 0; i < p.length; i += 4) {
     const a = p[i + 3];
     if (a <= 0) {
@@ -81,7 +81,7 @@ function boxPassLine(
 }
 
 /** 水平 + 垂直各一趟盒式模糊（预乘域），边界夹取（PS 的边缘行为）。 */
-function boxBlurPass(p: Float32Array, w: number, h: number, r: number): Float32Array {
+export function boxBlurPass(p: Float32Array, w: number, h: number, r: number): Float32Array {
   if (r <= 0) return p;
   const tmp = new Float32Array(p.length);
   for (let y = 0; y < h; y += 1) {
@@ -639,7 +639,7 @@ export function mezzotint(src: RgbaBuffer, density: number, seed = 99): RgbaBuff
 /* ---------------------------------------------------------------- 扭曲 */
 
 /** 双线性采样：越界夹取到边缘，RGBA 四通道一起插值。 */
-function sampleBilinear(
+export function sampleBilinear(
   src: RgbaBuffer,
   x: number,
   y: number,
@@ -1389,7 +1389,7 @@ export function traceContour(src: RgbaBuffer, level: number): RgbaBuffer {
 }
 
 /** 哈希值噪声（云彩 / 差值的底层），可复现。 */
-function valueNoise(x: number, y: number, seed: number): number {
+export function valueNoise(x: number, y: number, seed: number): number {
   const hash = (i: number, j: number): number => {
     let n = (i * 374761393 + j * 668265263 + seed * 1442695041) | 0;
     n = Math.imul(n ^ (n >>> 13), 1274126177);

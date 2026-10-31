@@ -494,6 +494,15 @@ export const zh = {
     smoothed: "已平滑选区边缘",
     similar: "已选取相似颜色",
     similarEmpty: "附近没有相似颜色，把容差调大一点再试",
+    grown: "已扩大选区",
+    grownEmpty: "选区边缘没有相近颜色可扩大",
+    colorRange: "已按颜色建立选区",
+    subject: "已选取主体",
+    subjectEmpty: "没找到明确主体，试试手动框选",
+    sky: "已选取天空",
+    skyEmpty: "画面里没找到天空区域",
+    focus: "已选取焦点区域",
+    focusEmpty: "没找到明显的合焦区域，把阈值调低一点再试",
     radiusZero: "羽化半径是 0：先在选项条上把「羽化」调大一点",
     radiusTooBig: "半径太大，选区被收没了",
     cropped: "已按裁剪框裁切画布",
@@ -976,6 +985,10 @@ export const zh = {
     resetAll: "重建全部",
     noPixel: "当前图层不是未锁定的像素层，无法液化",
     empty: "还没有涂抹，先拖一笔试试",
+  },
+  puppet: {
+    titlePuppet: "木偶变形",
+    titleAffine: "透视变形（钉点）",
   },
 
   /** 内容识别填充。 */

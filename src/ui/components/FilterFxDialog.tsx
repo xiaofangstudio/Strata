@@ -33,6 +33,7 @@ interface Props {
 
 const GROUP_LABELS: Record<FilterGroup, string> = {
   blur: "模糊",
+  blurGallery: "模糊画廊",
   sharpen: "锐化",
   noise: "杂色",
   pixelate: "像素化",
@@ -48,6 +49,7 @@ const GROUP_LABELS: Record<FilterGroup, string> = {
 
 const GROUP_ORDER: FilterGroup[] = [
   "blur",
+  "blurGallery",
   "sharpen",
   "noise",
   "pixelate",
