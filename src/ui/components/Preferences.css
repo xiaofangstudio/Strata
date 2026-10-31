@@ -2,9 +2,11 @@
 
 .pref {
   display: grid;
-  grid-template-columns: 132px 1fr;
+  grid-template-columns: 148px 1fr;
   gap: var(--sp-5);
-  min-height: 320px;
+  /* 固定高度：切换页面时窗口不再忽大忽小（内容区自己滚动） */
+  height: 460px;
+  min-height: 0;
 }
 
 .pref-tabs {
@@ -13,6 +15,8 @@
   gap: 2px;
   padding-right: var(--sp-3);
   border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .pref-tab {
@@ -40,6 +44,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-5);
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: var(--sp-2);
 }
 
 .pref-sec {
@@ -200,4 +207,14 @@
   font-size: var(--fs-xs);
   text-align: right;
   color: var(--text-2);
+}
+
+/* 勾选项：与 ISZ 那套保持一致的排版 */
+.pref-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
 }

@@ -1742,7 +1742,7 @@ function LayerRow({
 
   return (
     <div
-      className={on ? "ly-row is-on" : "ly-row"}
+      className={`ly-row${on ? " is-on" : ""}${doc.selectedLayerIds?.includes(layer.id) ? " is-multi" : ""}`}
       role="option"
       aria-selected={on}
       aria-level={depth + 1}

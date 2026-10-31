@@ -157,7 +157,7 @@ export default function ToolRail({
                   <button
                     key={t.id}
                     type="button"
-                    className={active ? "tool-btn is-on" : "tool-btn"}
+                    className={`tool-btn${active ? " is-on" : ""}${prefs.toolLabels ? " has-label" : ""}`}
                     aria-pressed={active}
                     aria-expanded={active ? open : undefined}
                     disabled={!t.ready}
@@ -170,6 +170,7 @@ export default function ToolRail({
                     onDoubleClick={(e) => dblTool(t.id, e.currentTarget)}
                   >
                     <ToolIcon id={t.id} />
+                    {prefs.toolLabels && <span className="tool-btn-label">{label}</span>}
                   </button>
                 );
               })}

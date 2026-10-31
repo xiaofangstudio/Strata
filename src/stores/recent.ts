@@ -60,6 +60,15 @@ function writeStored(items: RecentEntry[]): void {
   }
 }
 
+/** 清空落盘的最近文件（偏好设置 > 文件处理 / 暂存盘 里的清理按钮）。 */
+export function clearStoredRecent(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* 存储不可用时无事可做 */
+  }
+}
+
 /** 最近文件列表，落 localStorage。 */
 export function useRecentFiles() {
   const [items, setItems] = useState<RecentEntry[]>(readStored);

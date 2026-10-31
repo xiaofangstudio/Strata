@@ -192,3 +192,20 @@
 .swatch-swap {
   align-self: flex-start;
 }
+
+/* 偏好设置里打开「显示工具名」后：图标 + 中文名横排，按钮自动加宽 */
+.tool-btn.has-label {
+  width: auto;
+  min-width: var(--tool-btn);
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+}
+
+.tool-btn-label {
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  color: inherit;
+}

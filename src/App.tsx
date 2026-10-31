@@ -6,6 +6,7 @@ import { useTheme } from "./stores/theme";
 import { loadAppInfo, type AppInfo } from "./core/appInfo";
 import { applyEntry, captureDoc, History } from "./core/history";
 import { zh } from "./i18n/zh-CN";
+import { currentPrefs } from "./stores/prefs";
 import type { StrataDoc } from "./core/document";
 import { IMAGE_EXTENSIONS, extOf } from "./engine/image";
 import { STRATA_EXTENSION } from "./engine/project";
@@ -65,7 +66,7 @@ export default function App() {
 
   /** 打开一份新文档：挂上它自己的撤销栈，并置为当前标签页。 */
   const openDoc = useCallback((doc: StrataDoc) => {
-    const stack = new History();
+    const stack = new History(currentPrefs().historyLimit);
     stack.reset(captureDoc(doc, zh.editor.open));
     stacks.current.set(doc.id, stack);
     setDocs((prev) => [...prev, doc]);
@@ -140,6 +141,19 @@ export default function App() {
     setRevision((n) => n + 1);
   }, []);
 
+  /**
+   * 只读地取「某个历史步骤的文档状态」，不移动撤销游标。
+   * 编辑 > 渐隐 需要拿上一步当混合底图，所以必须有这条只读通道。
+   */
+  const peekHistory = useCallback((index: number): StrataDoc | null => {
+    const id = activeRef.current;
+    if (!id) return null;
+    const base = docsRef.current.find((d) => d.id === id);
+    const entry = stacks.current.get(id)?.peek(index);
+    if (!base || !entry) return null;
+    return applyEntry(base, entry);
+  }, []);
+
   const doc = activeId === null ? null : docs.find((d) => d.id === activeId) ?? null;
 
   if (doc) {
@@ -165,6 +179,7 @@ export default function App() {
         historyLabels={stack ? stack.labels() : []}
         historyIndex={stack ? stack.index : -1}
         onHistoryJump={jumpHistory}
+        onPeekHistory={peekHistory}
         revision={revision}
       />
     );

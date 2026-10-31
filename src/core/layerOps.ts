@@ -34,7 +34,7 @@ import {
   removeWhiteMatteData,
 } from "./matte";
 import { offsetQuad, rectQuad } from "./homography";
-import { contentBounds, warpQuadSurface } from "../engine/warp";
+import { contentBounds, rectifyQuadSurface, warpQuadSurface } from "../engine/warp";
 import {
   contractSelection,
   expandSelection,
@@ -245,6 +245,27 @@ function duplicateGroup(doc: StrataDoc, group: StrataLayer): StrataDoc {
  *
  * 选中组时整块删掉（含所有后代），否则会留下一堆无家可归的子层。
  */
+/**
+ * 批量删除图层（选择 > 所有图层 / 查找图层 后的删除）。
+ * 至少保留一层；删掉当前活动层时活动层退到剩下里最靠上的一层。
+ */
+export function removeLayers(doc: StrataDoc, ids: readonly string[]): StrataDoc {
+  const doomed = new Set(ids);
+  if (doomed.size === 0) return doc;
+  const layers = doc.layers.filter((l) => !doomed.has(l.id));
+  if (layers.length === 0) return doc;
+  const active = doomed.has(doc.activeLayerId)
+    ? layers[layers.length - 1].id
+    : doc.activeLayerId;
+  return {
+    ...doc,
+    layers,
+    activeLayerId: active,
+    selectedLayerIds: undefined,
+    dirty: true,
+  };
+}
+
 export function removeLayer(doc: StrataDoc): StrataDoc {
   const at = indexOf(doc, doc.activeLayerId);
   if (at < 0) return doc;
@@ -1278,10 +1299,21 @@ export function addPatternFillLayer(
   color2: string,
   cell = 16,
   name?: string,
+  pattern?: HTMLCanvasElement | null,
 ): StrataDoc {
   const c = Math.max(2, Math.round(cell));
   const surface = createSurface(doc.width, doc.height);
   const ctx = mustCtx(surface);
+  // 有自定义图案（编辑 > 定义图案）就平铺它，否则退回两色棋盘格
+  if (pattern) {
+    const tile = ctx.createPattern(pattern, "repeat");
+    if (tile) {
+      ctx.fillStyle = tile;
+      ctx.fillRect(0, 0, doc.width, doc.height);
+      const layerDef = createLayer(doc.width, doc.height, name ?? "图案填充");
+      return spliceAbove(doc, { ...layerDef, surface });
+    }
+  }
   ctx.fillStyle = color1;
   ctx.fillRect(0, 0, doc.width, doc.height);
   ctx.fillStyle = color2;
@@ -1442,6 +1474,29 @@ export function meshWarpActiveLayer(
     mask = m2;
   }
   return updateLayer(doc, cur.id, { surface, mask });
+}
+
+/**
+ * 灭点 / 平面矫正：把活动图层里「四点围出的平面」拉正成矩形。
+ * quad 是文档坐标下的四个角（左上、右上、右下、左下），输出铺在画布左上角。
+ * 施工照歪掉的墙、翻拍的证件、倾斜的屏幕都靠这个拉正。
+ */
+export function rectifyPerspectivePlane(
+  doc: StrataDoc,
+  quad: readonly (readonly [number, number])[],
+  outW: number,
+  outH: number,
+): StrataDoc {
+  const cur = activeLayer(doc);
+  if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
+  const ow = Math.max(1, Math.round(outW));
+  const oh = Math.max(1, Math.round(outH));
+  const pts = quad.slice(0, 4).map(([x, y]) => ({ x, y }));
+  if (pts.length < 4) return doc;
+  const rectified = rectifyQuadSurface(cur.surface, pts, ow, oh);
+  const surface = createSurface(doc.width, doc.height);
+  mustCtx(surface).drawImage(rectified, 0, 0);
+  return updateLayer(doc, cur.id, { surface });
 }
 
 export function warpActiveLayer(

@@ -250,12 +250,13 @@
     linear-gradient(-45deg, var(--checker) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--checker) 75%),
     linear-gradient(-45deg, transparent 75%, var(--checker) 75%);
-  background-size: 16px 16px;
+  background-size:
+    calc(var(--checker-size, 8px) * 2) calc(var(--checker-size, 8px) * 2);
   background-position:
     0 0,
-    0 8px,
-    8px -8px,
-    -8px 0;
+    0 var(--checker-size, 8px),
+    var(--checker-size, 8px) calc(var(--checker-size, 8px) * -1),
+    calc(var(--checker-size, 8px) * -1) 0;
   box-shadow: var(--shadow-md);
   will-change: transform;
 }

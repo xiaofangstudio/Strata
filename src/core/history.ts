@@ -133,6 +133,15 @@ export class History {
     return this.entries[index];
   }
 
+  /**
+   * 只读地看一眼某一步的快照，**不移动游标**。
+   * 「编辑 > 渐隐」要拿上一步当作混合底图，用 jumpTo 会把历史游标挪走。
+   */
+  peek(index: number): HistoryEntry | null {
+    if (index < 0 || index >= this.entries.length) return null;
+    return this.entries[index];
+  }
+
   /** 清空（关闭文档时释放画布内存）。 */
   clear(): void {
     this.entries = [];

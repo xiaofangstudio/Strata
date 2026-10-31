@@ -1131,3 +1131,9 @@
   }
 }
 
+
+/* 多选图层（选择 > 所有图层 / 查找图层）：左侧一道强调色条 + 淡底 */
+.ly-row.is-multi {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}

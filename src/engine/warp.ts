@@ -39,6 +39,56 @@ export function contentBounds(src: HTMLCanvasElement): Bounds | null {
 }
 
 /**
+ * 灭点 / 平面矫正：把「四点围出的平面」拉正成矩形。
+ *
+ * 与 warpQuadSurface 正好相反 —— 后者是矩形内容贴到目标四边形（加透视），
+ * 这里是四边形内容展平成矩形（去透视）。做法：单位正方形 → 四边形的单应
+ * 矩阵正着用，对输出矩形的每个像素反解 (u,v) 再回到源图采样。
+ * 施工照、翻拍文档、建筑立面的校正都靠这个。
+ */
+export function rectifyQuadSurface(
+  src: HTMLCanvasElement,
+  quad: readonly Pt[],
+  outW: number,
+  outH: number,
+): HTMLCanvasElement {
+  const out = createSurface(outW, outH);
+  const m = unitSquareToQuad(quad);
+  const srcCtx = mustCtx(src);
+  const region = srcCtx.getImageData(0, 0, src.width, src.height);
+  const sw = src.width;
+  const sh = src.height;
+  const outCtx = mustCtx(out);
+  const outImg = outCtx.createImageData(outW, outH);
+  const od = outImg.data;
+  for (let y = 0; y < outH; y += 1) {
+    const v = (y + 0.5) / outH;
+    for (let x = 0; x < outW; x += 1) {
+      const u = (x + 0.5) / outW;
+      const p = applyMat3(m, u, v);
+      if (!p) continue;
+      const fx = p.x - 0.5;
+      const fy = p.y - 0.5;
+      if (fx < -1 || fy < -1 || fx > sw || fy > sh) continue;
+      const ix = Math.min(sw - 2, Math.max(0, Math.floor(fx)));
+      const iy = Math.min(sh - 2, Math.max(0, Math.floor(fy)));
+      const tx = Math.min(1, Math.max(0, fx - ix));
+      const ty = Math.min(1, Math.max(0, fy - iy));
+      const o = (y * outW + x) * 4;
+      for (let c = 0; c < 4; c += 1) {
+        const p00 = region.data[(iy * sw + ix) * 4 + c];
+        const p10 = region.data[(iy * sw + ix + 1) * 4 + c];
+        const p01 = region.data[((iy + 1) * sw + ix) * 4 + c];
+        const p11 = region.data[((iy + 1) * sw + ix + 1) * 4 + c];
+        od[o + c] = (p00 * (1 - tx) + p10 * tx) * (1 - ty) + (p01 * (1 - tx) + p11 * tx) * ty;
+      }
+    }
+  }
+  outCtx.putImageData(outImg, 0, 0);
+  return out;
+}
+
+/**
  * 把 src 的 bbox 区域按四点单应变形，铺到 outW×outH 的画布上。
  * quad 为文档坐标下的目标四边形（左上、右上、右下、左下）。
  */

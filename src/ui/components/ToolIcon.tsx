@@ -26,6 +26,21 @@ const stroke = {
 } as const;
 
 const PATHS: Record<IconId, ReactNode> = {
+  // 标尺：斜置的尺身 + 刻度
+  ruler: (
+    <g {...stroke}>
+      <rect x="2.6" y="8.2" width="18.8" height="7.6" rx="1.4" transform="rotate(-38 12 12)" />
+      <path d="M7.6 9.6v2.6M10.6 7.9v2.6M13.6 6.2v2.6M16.6 4.5v2.6" />
+    </g>
+  ),
+  // 计数：编号圆点 + 落点
+  count: (
+    <g {...stroke}>
+      <circle cx="8.4" cy="8.6" r="3.4" />
+      <circle cx="16.2" cy="15.8" r="3.4" />
+      <path d="M6.9 8.6h3M15 15.4v3.2M13.9 17h2.2" />
+    </g>
+  ),
   // 四向箭头
   move: (
     <g {...stroke}>

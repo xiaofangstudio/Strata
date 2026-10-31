@@ -93,7 +93,17 @@ img {
 
 /* ---------- 按钮基元 ----------
    全局共用：开始页面、编辑壳、浮层底部操作区都吃这一套，
-   避免把按钮样式挂在某个页面自己的样式表里。 */
+   避免把按钮样式挂在某个页面自己的样式表里。
+
+   注意 `white-space: nowrap` + `flex: 0 0 auto`：按钮放在 flex 行里被挤窄时，
+   浏览器会把「重置」「载入」这种两个汉字的标签拆成两行竖排 —— 一旦加上
+   nowrap 就不会再折行，需要换行时由容器负责（见 .modal-foot 的 flex-wrap）。 */
+.btn-primary,
+.btn-ghost,
+.btn-link {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 .btn-primary {
   display: inline-flex;
   align-items: center;
@@ -215,4 +225,26 @@ img {
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* 分析浮层（标尺 / 计数）：铺在画布上，纯视觉不接事件 */
+.editor-measure {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* 界面密度：紧凑（偏好设置 > 常规 / 界面） */
+html.is-compact .toolrail {
+  --tool-btn: 27px;
+}
+
+html.is-compact .ly-row {
+  min-height: 26px;
+}
+
+html.is-compact .panel-tabs {
+  padding-top: 2px;
+  padding-bottom: 2px;
 }

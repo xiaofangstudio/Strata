@@ -37,6 +37,8 @@ export type ToolId =
   | "dodge"
   | "burn"
   | "sponge"
+  | "ruler"
+  | "count"
   | "hand"
   | "zoom";
 
@@ -107,6 +109,9 @@ export const TOOLS: ToolDef[] = [
   { id: "sponge", shortcut: "O", group: "retouch", ready: true },
 
   { id: "eyedropper", shortcut: "I", group: "sample", ready: true },
+  // 分析与测量：标尺量距离/角度，计数工具打编号标记
+  { id: "ruler", shortcut: "I", group: "sample", ready: true },
+  { id: "count", shortcut: "N", group: "sample", ready: true },
 
   { id: "crop", shortcut: "C", group: "crop", ready: true },
 

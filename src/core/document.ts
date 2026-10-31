@@ -41,6 +41,38 @@ export interface StrataDoc {
   alphaChannels?: AlphaChannel[];
   /** 相对磁盘是否有未保存改动 */
   dirty?: boolean;
+  /* ---------------------------------------------------- 颜色模式与精度 */
+  /**
+   * 当前颜色模式。Strata 的渲染管线固定 8 位 sRGB，这里记录的是「上一次
+   * 应用过哪种模式转换」以及给菜单打勾用；像素本身该变的已经变过了。
+   */
+  colorMode?: "rgb" | "bitmap" | "grayscale" | "duotone" | "indexed" | "cmyk" | "lab" | "multichannel";
+  /** 通道位深标记（8 / 16 / 32）。管线原生 8 位，16/32 只是精度标记 */
+  bitsPerChannel?: 8 | 16 | 32;
+  /** 索引颜色模式下调色板（颜色表编辑用） */
+  palette?: readonly [number, number, number][];
+  /** 当前文档的色彩配置文件（指定 / 转换配置文件用） */
+  profile?: "srgb" | "display-p3" | "adobe-rgb" | "gray";
+  /* ------------------------------------------------------ 多选与测量 */
+  /**
+   * 多选的图层 id（选择 > 所有图层 / 查找图层 / 取消选择图层）。
+   * 与 activeLayerId 分开：activeLayerId 始终是「唯一的作用对象」，
+   * selectedLayerIds 是「一批可以一起删/一起隐藏的图层」。
+   */
+  selectedLayerIds?: string[];
+  /** 测量比例：px 个像素 = real 个 unit（分析 > 设置测量比例） */
+  measureScale?: { px: number; real: number; unit: string };
+  /** 测量结果表要显示哪些列（分析 > 选择数据点） */
+  measureFields?: string[];
+  /* -------------------------------------------------- 变量与数据集 */
+  /**
+   * 变量定义（图像 > 变量）：把某个图层绑到一个变量名上。
+   * 目前支持「可见性变量」—— 这是 PS 数据驱动图形的三种变量之一，
+   * 也是在没有独立文本层的架构下唯一能真实生效的一种。
+   */
+  variables?: { layerId: string; name: string }[];
+  /** 数据集（图像 > 变量 > 数据集）：一项 = 一组 变量名→值 */
+  dataSets?: { name: string; values: Record<string, string> }[];
 }
 
 let seq = 0;

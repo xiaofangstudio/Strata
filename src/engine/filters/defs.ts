@@ -74,6 +74,7 @@ import {
   tiltShift,
 } from "./gallery";
 import { flame, lensFlare, lightingEffects, pictureFrame, tree } from "./renderFx";
+import { adaptiveWideAngle, lensCorrection } from "./lens";
 
 /** 一个滤镜参数。与调整层的 AdjustParam 字段语义一致，弹窗直接复用样式。 */
 export interface FilterParam {
@@ -715,6 +716,47 @@ const STYLIZE_EXTRA_DEFS: FilterDef[] = [
   },
 ];
 
+/* -------------------------------------------------- 镜头校正 / 自适应广角 */
+
+const LENS_DEFS: FilterDef[] = [
+  {
+    id: "filter.lensCorrection",
+    label: "镜头校正",
+    group: "distort",
+    params: [
+      { id: "distortion", label: "桶形/枕形畸变", min: -100, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "vertical", label: "垂直透视", min: -100, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "horizontal", label: "水平透视", min: -100, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "ca", label: "色差校正", min: -20, max: 20, step: 1, def: 0, unit: " 像素" },
+      { id: "vignette", label: "晕影", min: -100, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "midpoint", label: "晕影中点", min: 1, max: 98, step: 1, def: 50, unit: "%" },
+    ],
+    apply: (b, p) =>
+      lensCorrection(b, p.distortion, p.vertical, p.horizontal, p.ca, p.vignette, p.midpoint),
+  },
+  {
+    id: "filter.adaptiveWideAngle",
+    label: "自适应广角",
+    group: "distort",
+    params: [
+      { id: "strength", label: "视野强度", min: 1, max: 100, step: 1, def: 45, unit: "%" },
+      {
+        id: "mode",
+        label: "方向",
+        min: 0,
+        max: 1,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "鱼眼 → 直线（去畸变）", value: 0 },
+          { label: "直线 → 鱼眼（加畸变）", value: 1 },
+        ],
+      },
+    ],
+    apply: (b, p) => adaptiveWideAngle(b, p.strength, p.mode),
+  },
+];
+
 /* ------------------------------------------------ 模糊画廊 / 高级模糊 */
 
 const BLUR_GALLERY_DEFS: FilterDef[] = [
@@ -1118,6 +1160,7 @@ export const FILTER_DEFS: readonly FilterDef[] = [
   ...DISTORT_DEFS,
   ...DISTORT_EXTRA_DEFS,
   ...DISTORT_ADVANCED_DEFS,
+  ...LENS_DEFS,
   ...STYLIZE_DEFS,
   ...STYLIZE_EXTRA_DEFS,
   ...SKETCH_DEFS,

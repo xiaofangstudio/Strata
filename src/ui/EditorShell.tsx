@@ -68,6 +68,7 @@ import {
   pasteFromClipboard,
   pasteLayerStyle,
   placeRaster,
+  removeLayers,
   removeLayer,
   removeMask,
   renameLayer,
@@ -94,6 +95,7 @@ import {
   removeWhiteMatte,
   warpActiveLayer,
   contentAwareScaleDocument,
+  rectifyPerspectivePlane,
   convertToSmartObject,
   rasterizeSmartObject,
   newSmartObjectViaCopy,
@@ -121,6 +123,20 @@ import {
   subjectMask,
 } from "../core/smartSelect";
 import { hexToRgb } from "./color-utils";
+import {
+  findLayers,
+  isolateLayers,
+  assignProfile,
+  convertToProfile,
+  fadeDocument,
+  revealAll,
+  setColorMode,
+  setLayerSelection,
+} from "../core/imageOps";
+import ImageOpsDialog, { type ImageOpsKind } from "./components/ImageOpsDialog";
+import { autoAlignLayers, autoBlendLayers } from "../core/stackOps";
+import { PROFILE_LABELS } from "../core/colorProfile";
+import { definePattern, latestPattern, loadPatterns } from "../core/patterns";
 import { adjustDef, newAdjustState, type AdjustId, type AdjustState, type StyleId } from "../core/layer";
 import {
   borderSelection,
@@ -135,6 +151,7 @@ import {
   lassoMask,
   rectMask,
   selectAllMask,
+  applySelection,
   selectionBounds,
   smoothSelection,
   wandMask,
@@ -198,7 +215,15 @@ import {
   type ToolId,
 } from "../tools/catalog";
 import type { ThemeMode } from "../stores/theme";
-import { setPrefs, toBrushPrefs, usePrefs } from "../stores/prefs";
+import {
+  addCustomBrush,
+  normalizeBrush,
+  setPrefs,
+  toBrushPrefs,
+  usePrefs,
+  type BrushPrefs,
+} from "../stores/prefs";
+import { clearStoredRecent } from "../stores/recent";
 import { useRecentFiles } from "../stores/recent";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import AppMenuBar, { type MenuEntry, type MenuGroup } from "./components/AppMenuBar";
@@ -244,7 +269,7 @@ import PropertiesPanel from "./components/PropertiesPanel";
 import RightDock, { type GroupId as DockGroupId } from "./components/RightDock";
 import OptionsBar from "./components/OptionsBar";
 import BrushSettingsPanel from "./components/BrushSettingsPanel";
-import Preferences from "./components/Preferences";
+import Preferences, { type PrefPage } from "./components/Preferences";
 import StatusBar from "./components/StatusBar";
 import ToolFlyout from "./components/ToolFlyout";
 import ToolRail from "./components/ToolRail";
@@ -344,6 +369,8 @@ interface Props {
   historyIndex: number;
   /** 历史面板点击某一步：直接跳到那一刻 */
   onHistoryJump: (index: number) => void;
+  /** 只读地取某个历史步骤的文档状态（编辑 > 渐隐 用） */
+  onPeekHistory: (index: number) => StrataDoc | null;
   /** 撤销栈变更计数，仅用于驱动重渲染 */
   revision: number;
 }
@@ -394,7 +421,7 @@ function modeWithMods(shift: boolean, alt: boolean, fallback: SelectionMode): Se
   return fallback;
 }
 
-function cursorOf(tool: ToolId, panning: boolean): string {
+function cursorOf(tool: ToolId, panning: boolean, mode: "tip" | "crosshair" | "system" = "tip"): string {
   if (panning) return "grab";
   switch (tool) {
     case "hand":
@@ -406,7 +433,8 @@ function cursorOf(tool: ToolId, panning: boolean): string {
     case "text":
       return "text";
     default:
-      return "crosshair";
+      // 笔尖光圈模式下其它工具也用十字（画笔类另有自己的光圈浮层）
+      return mode === "system" ? "default" : "crosshair";
   }
 }
 
@@ -445,6 +473,7 @@ export default function EditorShell({
   historyLabels,
   historyIndex,
   onHistoryJump,
+  onPeekHistory,
 }: Props) {
   const prefs = usePrefs();
   const [tool, setTool] = useState<ToolId>("move");
@@ -493,6 +522,20 @@ export default function EditorShell({
   /** 任意角度旋转对话框（角度，度）。 */
   const [rotateDialog, setRotateDialog] = useState<{ angle: string } | null>(null);
   const [casDialog, setCasDialog] = useState<{ w: string; h: string } | null>(null);
+  /** 灭点（平面矫正）：四个角的文档坐标 + 输出尺寸，全部按字符串存，方便输入中途为空 */
+  const [vpDialog, setVpDialog] = useState<{ q: string[]; w: string; h: string } | null>(null);
+  /** 图像菜单里需要参数的对话框（颜色模式 / 应用图像 / 陷印 / 测量…） */
+  const [imageOps, setImageOps] = useState<ImageOpsKind | null>(null);
+  /** 选择 > 查找图层 的查询串 */
+  const [findQuery, setFindQuery] = useState<string | null>(null);
+  /** 分析 > 标尺工具：当前量出的一段（文档坐标） */
+  const [measureLine, setMeasureLine] = useState<{
+    x0: number; y0: number; x1: number; y1: number;
+  } | null>(null);
+  /** 分析 > 计数工具：已打的编号点（文档坐标） */
+  const [counters, setCounters] = useState<{ x: number; y: number }[]>([]);
+  /** 标尺拖动的起点（起笔时记下，move 时持续更新终点） */
+  const measureStartRef = useRef<{ x: number; y: number } | null>(null);
   /** 四点变形对话框（四个角的 X/Y 百分比）。 */
   const [quadDialog, setQuadDialog] = useState<{
     mode: "skew" | "distort" | "perspective" | "warp";
@@ -550,6 +593,32 @@ export default function EditorShell({
   /** 直方图 / 导航器的帧号：合成每前进一次（节流 250ms）就 +1 */
   const [panelTick, setPanelTick] = useState(0);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  /** 偏好设置当前停在哪一页（Edit > Preferences 的各条目直接指过来） */
+  const [prefsPage, setPrefsPage] = useState<PrefPage>("general");
+  /** 编辑 > 渐隐：输入保留百分比 */
+  const [fadeDialog, setFadeDialog] = useState<string | null>(null);
+  /** 编辑 > 查找和替换文字（作用于图层名） */
+  const [findDialog, setFindDialog] = useState<{ find: string; replace: string } | null>(null);
+  /** 编辑 > 预设 > 导出/导入 */
+  const [presetDialog, setPresetDialog] = useState(false);
+  /** 编辑 > 菜单：自定义要显示哪些顶级菜单 */
+  const [menusDialog, setMenusDialog] = useState(false);
+  /** 色彩配置：settings / assign / convert 三种用法共用一套面板 */
+  const [profileDialog, setProfileDialog] = useState<"settings" | "assign" | "convert" | null>(null);
+  const [profilePick, setProfilePick] = useState<NonNullable<StrataDoc["profile"]>>("srgb");
+
+  // 偏好里的「视图外观」直接落到根节点：棋盘格大小 + 界面密度。
+  // 放根节点而不是局部，弹窗、侧栏、画布才会一起跟着变。
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--checker-size", `${prefs.checkerSize}px`);
+    root.classList.toggle("is-compact", prefs.density === "compact");
+  }, [prefs.checkerSize, prefs.density]);
+
+  // 图案库：启动时把上次存的图案解回内存（异步，失败静默跳过）
+  useEffect(() => {
+    loadPatterns();
+  }, []);
   /** 画笔设置面板（F5）：一个面板里容纳 PhotoCraft 的全部笔刷 section */
   const [brushPanelOpen, setBrushPanelOpen] = useState(false);
   /** 右侧面板坞的开关：由「窗口 > 颜色 / 属性 / 图层 / 历史」直接控制。 */
@@ -600,7 +669,10 @@ export default function EditorShell({
   /** 是否正在拖绘形状（驱动形状浮层的动画只在拖动时开动） */
   const [shapeDragging, setShapeDragging] = useState(false);
   /** 文字工具参数（字体 / 字号 / 行距 / 对齐 / 加粗斜体） */
-  const [textSet, setTextSet] = useState<TextSettings>(DEFAULT_TEXT);
+  const [textSet, setTextSet] = useState<TextSettings>(() => ({
+    ...DEFAULT_TEXT,
+    size: prefs.typeSize,
+  }));
   /**
    * 正在输入的文本框：落点在文档坐标，value 是当前输入的内容。
    * 文字不改图层模型 —— 确认的一瞬间整段栅格化成像素，之后与画笔画的没两样，
@@ -1526,6 +1598,22 @@ export default function EditorShell({
       if (e.button !== 0) return;
       const p = docPoint(e);
 
+      // 分析工具：标尺拖一段量距离/角度，计数工具落一个编号点。
+      // 两者都只画在浮层上，一个像素都不碰图层。
+      if (tool === "ruler") {
+        measureStartRef.current = { x: p.x, y: p.y };
+        setMeasureLine({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+        capturePointer(e.currentTarget, e.pointerId);
+        return;
+      }
+      if (tool === "count") {
+        setCounters((prev) => {
+          setToast(`计数 ${prev.length + 1}`);
+          return [...prev, { x: p.x, y: p.y }];
+        });
+        return;
+      }
+
       // 自由变换进行中：画布上的一切指针动作都归这八个手柄 + 旋转圆点 + 框内平移管。
       // 命中判定按「屏幕像素」折算回文档坐标，所以放大缩小都不影响手感。
       const tf0 = freeTRef.current;
@@ -1844,6 +1932,14 @@ export default function EditorShell({
         panRef.current = { x: e.clientX, y: e.clientY };
         return;
       }
+      // 标尺拖动：只更新浮层里那一段，不进历史
+      const ms = measureStartRef.current;
+      if (ms && tool === "ruler") {
+        const q = docPoint(e);
+        setMeasureLine({ x0: ms.x, y0: ms.y, x1: q.x, y1: q.y });
+        return;
+      }
+
       // 自由变换拖动：只改 ref，浮层那支 rAF 每帧现读现画，拖拽全程零重渲染
       const fd = freeDragRef.current;
       const ft = freeTRef.current;
@@ -1993,6 +2089,8 @@ export default function EditorShell({
   const onUp = useCallback(() => {
     pickingRef.current = false;
     guideDragRef.current = null;
+    // 标尺松手：结束这一段（线段留在浮层上，直到再拉一次）
+    measureStartRef.current = null;
     if (panRef.current) {
       panRef.current = null;
       return;
@@ -2565,6 +2663,78 @@ export default function EditorShell({
    * 菜单里把当前半径印出来，避免用户不知道会改多少。
    */
   const selRadius = feather;
+
+  /**
+   * 渐隐：按百分比把「上一步之后」混回「上一步之前」。
+   * 不撤销 —— 结果是新的一步，历史里能看到「渐隐 60%」。
+   */
+  const doFade = useCallback(
+    (percent: number) => {
+      const before = onPeekHistory(historyIndex - 1);
+      if (!before) {
+        setToast("没有可渐隐的上一步");
+        return;
+      }
+      onCommit(fadeDocument(before, doc, percent), `渐隐 ${percent}%`);
+    },
+    [doc, historyIndex, onCommit, onPeekHistory],
+  );
+
+  /** 预设导出：把画笔默认参数与自定义画笔写成一份 JSON。 */
+  const exportPresets = useCallback(async () => {
+    const target = await save({
+      defaultPath: "strata-presets.json",
+      filters: [{ name: "Strata 预设", extensions: ["json"] }],
+    });
+    if (!target) return;
+    const data = {
+      version: 1,
+      brushDefaults: prefs.brushDefaults,
+      customBrushes: prefs.customBrushes,
+    };
+    await writeFileBytes(target, new TextEncoder().encode(JSON.stringify(data, null, 2)));
+    setToast("预设已导出");
+  }, [prefs.brushDefaults, prefs.customBrushes]);
+
+  /** 预设导入：读 JSON，把里面的自定义画笔逐条并入（同名覆盖）。 */
+  const importPresets = useCallback(async () => {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "Strata 预设", extensions: ["json"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    try {
+      const bytes = await readFileBytes(picked);
+      const raw = JSON.parse(new TextDecoder().decode(bytes)) as {
+        customBrushes?: { name?: string }[];
+        brushDefaults?: Record<string, unknown>;
+      };
+      const list = Array.isArray(raw.customBrushes) ? raw.customBrushes : [];
+      let n = 0;
+      for (const item of list) {
+        if (!item || typeof item.name !== "string") continue;
+        addCustomBrush(item.name, normalizeBrush(item as never));
+        n += 1;
+      }
+      if (raw.brushDefaults) setPrefs({ brushDefaults: normalizeBrush(raw.brushDefaults as never) });
+      setToast(n > 0 ? `已导入 ${n} 支画笔预设` : "文件里没有可用的画笔预设");
+    } catch {
+      setToast("预设文件读不出来");
+    }
+  }, []);
+
+  /** 迁移预设：把内置的几支常用画笔补进自定义画笔列表。 */
+  const migratePresets = useCallback(() => {
+    const base = prefs.brushDefaults;
+    const builtins: { name: string; patch: Partial<BrushPrefs> }[] = [
+      { name: "圆头软笔", patch: { tip: "round", hardness: 45, spacing: 6, flow: 100 } },
+      { name: "硬边铅笔", patch: { tip: "pencil", hardness: 95, spacing: 4, flow: 85 } },
+      { name: "粉笔", patch: { tip: "chalk", hardness: 70, texture: "paper", textureDepth: 45, spacing: 10 } },
+      { name: "喷枪", patch: { tip: "spray", hardness: 20, flow: 35, spacing: 4 } },
+    ];
+    for (const b of builtins) addCustomBrush(b.name, { ...base, ...b.patch });
+    setToast(`已导入 ${builtins.length} 支内置画笔预设`);
+  }, [prefs.brushDefaults]);
 
   const doFeather = useCallback(() => {
     if (!doc.selection || !hasSelection) return;
@@ -3271,6 +3441,99 @@ export default function EditorShell({
           return { run: onQuit };
 
         /* ---------------------------------------------------------- 编辑 */
+        case "edit.toggleLastState": {
+          const last = historyLabels.length - 1;
+          if (last < 1) return undefined;
+          const target = historyIndex === last ? last - 1 : last;
+          return {
+            run: () => onHistoryJump(target),
+            hint: historyLabels[target],
+          };
+        }
+        case "edit.fade": {
+          if (historyIndex <= 0) return undefined;
+          return {
+            run: () => setFadeDialog("60"),
+            hint: historyLabels[historyIndex],
+          };
+        }
+        case "edit.autoAlignLayers": {
+          if (!canTransform) return undefined;
+          return {
+            run: () => {
+              const res = autoAlignLayers(doc);
+              if (res.shifts.length === 0) {
+                setToast("没有需要偏移的图层（或多选里只有一层）");
+                return;
+              }
+              const desc = res.shifts
+                .map((s2) => {
+                  const l = doc.layers.find((x) => x.id === s2.id);
+                  return `${l?.name ?? "图层"} Δ(${s2.dx}, ${s2.dy})`;
+                })
+                .join("，");
+              onCommit(res.doc, "自动对齐图层");
+              setToast(`已对齐：${desc}`);
+            },
+          };
+        }
+        case "edit.autoBlendLayers":
+          return {
+            run: () => {
+              const next = autoBlendLayers(doc);
+              if (next === doc) {
+                setToast("至少需要两层可见的像素层");
+                return;
+              }
+              onCommit(next, "自动混合图层");
+            },
+          };
+        case "edit.findAndReplaceText":
+          return { run: () => setFindDialog({ find: "", replace: "" }) };
+        case "edit.definePattern":
+          return {
+            run: () => {
+              const name = definePattern(doc);
+              if (!name) {
+                setToast("没有可定义的内容：选中一个有像素的图层，或先框出选区");
+                return;
+              }
+              setToast(`已定义图案「${name}」，可用「图层 > 新建填充图层 > 图案」铺开`);
+            },
+          };
+        case "edit.defineBrushPreset":
+          return {
+            run: () => {
+              addCustomBrush(`画笔 ${prefs.customBrushes.length + 1}`, brush);
+              setToast("已把当前画笔存成预设");
+            },
+          };
+        case "edit.presets.exportImportPresets":
+          return { run: () => setPresetDialog(true) };
+        case "edit.presets.migratePresets":
+          return { run: migratePresets };
+        case "edit.presets.presetManager":
+          return {
+            run: () => {
+              setBrushPanelOpen(true);
+              setToast("预设管理在画笔面板里：可删除或另存自定义画笔");
+            },
+          };
+        case "edit.toolbar":
+          return {
+            run: () => {
+              setPrefsPage("tools");
+              setPrefsOpen(true);
+            },
+          };
+        case "edit.colorSettings":
+          return { run: () => { setProfilePick(doc.profile ?? "srgb"); setProfileDialog("settings"); } };
+        case "edit.assignProfile":
+          return { run: () => { setProfilePick(doc.profile ?? "srgb"); setProfileDialog("assign"); } };
+        case "edit.convertToProfile":
+          return { run: () => { setProfilePick(doc.profile ?? "srgb"); setProfileDialog("convert"); } };
+        case "edit.menus":
+          return { run: () => setMenusDialog(true) };
         case "edit.undo":
           return canUndo ? { run: onUndo, hint: "Ctrl+Z" } : undefined;
         case "edit.redo":
@@ -3330,6 +3593,40 @@ export default function EditorShell({
           return { run: () => setModal("shortcuts") };
         case "edit.preferences.general":
           return { run: () => setPrefsOpen(true) };
+        case "edit.preferences.integrations":
+          return { run: () => { setPrefsPage("integrations"); setPrefsOpen(true); } };
+        case "edit.preferences.interface":
+          return { run: () => { setPrefsPage("interface"); setPrefsOpen(true); } };
+        case "edit.preferences.workspace":
+          return { run: () => { setPrefsPage("workspace"); setPrefsOpen(true); } };
+        case "edit.preferences.tools":
+          return { run: () => { setPrefsPage("tools"); setPrefsOpen(true); } };
+        case "edit.preferences.historyLog":
+          return { run: () => { setPrefsPage("historyLog"); setPrefsOpen(true); } };
+        case "edit.preferences.fileHandling":
+          return { run: () => { setPrefsPage("fileHandling"); setPrefsOpen(true); } };
+        case "edit.preferences.export":
+          return { run: () => { setPrefsPage("export"); setPrefsOpen(true); } };
+        case "edit.preferences.performance":
+          return { run: () => { setPrefsPage("performance"); setPrefsOpen(true); } };
+        case "edit.preferences.scratchDisks":
+          return { run: () => { setPrefsPage("scratchDisks"); setPrefsOpen(true); } };
+        case "edit.preferences.cursors":
+          return { run: () => { setPrefsPage("cursors"); setPrefsOpen(true); } };
+        case "edit.preferences.transparencyAndGamut":
+          return { run: () => { setPrefsPage("transparencyAndGamut"); setPrefsOpen(true); } };
+        case "edit.preferences.unitsAndRulers":
+          return { run: () => { setPrefsPage("unitsAndRulers"); setPrefsOpen(true); } };
+        case "edit.preferences.guidesGridAndSlices":
+          return { run: () => { setPrefsPage("guidesGridAndSlices"); setPrefsOpen(true); } };
+        case "edit.preferences.plugIns":
+          return { run: () => { setPrefsPage("plugIns"); setPrefsOpen(true); } };
+        case "edit.preferences.type":
+          return { run: () => { setPrefsPage("type"); setPrefsOpen(true); } };
+        case "edit.preferences.enhancedControls":
+          return { run: () => { setPrefsPage("enhancedControls"); setPrefsOpen(true); } };
+        case "edit.preferences.rawDefaults":
+          return { run: () => { setPrefsPage("rawDefaults"); setPrefsOpen(true); } };
 
         /* ---------------------------------------------------------- 图像 */
         // 反相 / 去色 / 均衡是 PS 传统的一键烙印；其余弹出式调整
@@ -3399,6 +3696,81 @@ export default function EditorShell({
           };
         case "image.trim":
           return { run: doTrim };
+        /* ------------------------ 第九批：颜色模式 / 应用图像 / 测量 */
+        case "image.mode.bitmap":
+          return { run: () => setImageOps("bitmap") };
+        case "image.mode.duotone":
+          return { run: () => setImageOps("duotone") };
+        case "image.mode.indexedColor":
+          return { run: () => setImageOps("indexed") };
+        case "image.mode.cmyk":
+          return { run: () => setImageOps("cmyk") };
+        case "image.mode.lab":
+          return { run: () => setImageOps("lab") };
+        case "image.mode.multichannel":
+          return {
+            run: () => onCommit(setColorMode(doc, "multichannel"), "多通道"),
+          };
+        case "image.mode.bits8":
+          return {
+            run: () => {
+              onCommit({ ...doc, bitsPerChannel: 8 }, "8 位/通道");
+              setToast("已切到 8 位/通道");
+            },
+            checked: (doc.bitsPerChannel ?? 8) === 8,
+          };
+        case "image.mode.bits16":
+          return {
+            run: () => {
+              onCommit({ ...doc, bitsPerChannel: 16 }, "16 位/通道");
+              setToast("已切到 16 位/通道（渲染按 8 位输出）");
+            },
+            checked: doc.bitsPerChannel === 16,
+          };
+        case "image.mode.bits32":
+          return {
+            run: () => {
+              onCommit({ ...doc, bitsPerChannel: 32 }, "32 位/通道");
+              setToast("已切到 32 位/通道（渲染按 8 位输出）");
+            },
+            checked: doc.bitsPerChannel === 32,
+          };
+        case "image.mode.colorTable":
+          return { run: () => setImageOps("colorTable") };
+        case "image.revealAll":
+          return { run: () => onCommit(revealAll(doc), "显示全部") };
+        case "image.applyImage":
+          return { run: () => setImageOps("applyImage") };
+        case "image.variables.define":
+          return { run: () => setImageOps("variables") };
+        case "image.variables.dataSets":
+          return { run: () => setImageOps("dataSets") };
+        case "image.applyDataSet":
+          return { run: () => setImageOps("applyDataSet") };
+        case "image.trap":
+          return { run: () => setImageOps("trap") };
+        case "image.analysis.setMeasurementScale":
+          return { run: () => setImageOps("measureScale") };
+        case "image.analysis.selectDataPoints":
+          return { run: () => setImageOps("dataPoints") };
+        case "image.analysis.recordMeasurements":
+          return { run: () => setImageOps("recordMeasurements") };
+        case "image.analysis.placeScaleMarker":
+          return { run: () => setImageOps("placeScaleMarker") };
+        case "image.analysis.rulerTool":
+          return {
+            run: () => {
+              setTool("ruler");
+              setToast("标尺工具：在画面上拖一段即可量距离与角度");
+            },
+          };
+        case "image.analysis.countTool":
+          return {
+            run: () => {
+              setTool("count");
+              setToast("计数工具：单击画面打编号点");
+            },
+          };
         case "image.mode.grayscale":
           return { run: () => onCommit(grayscaleDocument(doc), zh.menu.grayscale) };
         case "image.mode.rgb":
@@ -3458,7 +3830,16 @@ export default function EditorShell({
             hint: "Ctrl+J",
           };
         case "layer.delete":
-          return { run: () => onCommit(removeLayer(doc), zh.menu.deleteLayer) };
+          return {
+            run: () => {
+              const many = doc.selectedLayerIds ?? [];
+              if (many.length > 1) {
+                onCommit(removeLayers(doc, many), `删除 ${many.length} 个图层`);
+                return;
+              }
+              onCommit(removeLayer(doc), zh.menu.deleteLayer);
+            },
+          };
         case "layer.delete.hiddenLayers":
           return doc.layers.some((l) => !l.visible)
             ? { run: () => onCommit(deleteHiddenLayers(doc), zh.menu.deleteHidden) }
@@ -3662,6 +4043,36 @@ export default function EditorShell({
                   ),
               }
             : undefined;
+        case "select.allLayers":
+          return {
+            run: () =>
+              onCommit(
+                setLayerSelection(doc, doc.layers.map((l) => l.id)),
+                "选择所有图层",
+              ),
+          };
+        case "select.deselectLayers":
+          return { run: () => onCommit(setLayerSelection(doc, []), "取消选择图层") };
+        case "select.findLayers":
+          return { run: () => setFindQuery("") };
+        case "select.isolateLayers":
+          return { run: () => onCommit(isolateLayers(doc), "隔离图层") };
+        case "select.convertToShape": {
+          if (!doc.selection) return undefined;
+          const box = selectionBounds(doc.selection);
+          if (!box) return undefined;
+          return {
+            run: () => {
+              // 用前景色铺满整层，再按选区裁掉 —— 得到与选区轮廓一致的形状
+              const ink = createSurface(doc.width, doc.height);
+              const ictx = mustCtx(ink);
+              ictx.fillStyle = fg;
+              ictx.fillRect(0, 0, doc.width, doc.height);
+              const shaped = applySelection(ink, doc.selection ?? null);
+              onCommit(placeRaster(doc, "形状", shaped), "选区转形状");
+            },
+          };
+        }
         case "select.grow":
           if (!doc.selection || !hasSelection) return undefined;
           return {
@@ -4008,7 +4419,8 @@ export default function EditorShell({
           };
         case "layer.newFillLayer.pattern":
           return {
-            run: () => onCommit(addPatternFillLayer(doc, fg, bg, 16), "图案填充"),
+            run: () =>
+              onCommit(addPatternFillLayer(doc, fg, bg, 16, undefined, latestPattern()), "图案填充"),
           };
         case "layer.new.layerFromBackground":
           return { run: () => onCommit(layerFromBackground(doc), "由背景图层") };
@@ -4047,6 +4459,24 @@ export default function EditorShell({
               setCasDialog({ w: String(doc.width), h: String(doc.height) }),
           };
 
+        case "filter.convertForSmartFilters":
+          return { run: () => onCommit(convertToSmartObject(doc), "转换为智能滤镜") };
+        case "filter.vanishingPoint": {
+          const inset = 0.05;
+          const q = [
+            String(Math.round(doc.width * inset)),
+            String(Math.round(doc.height * inset)),
+            String(Math.round(doc.width * (1 - inset))),
+            String(Math.round(doc.height * inset)),
+            String(Math.round(doc.width * (1 - inset))),
+            String(Math.round(doc.height * (1 - inset))),
+            String(Math.round(doc.width * inset)),
+            String(Math.round(doc.height * (1 - inset))),
+          ];
+          return {
+            run: () => setVpDialog({ q, w: String(doc.width), h: String(doc.height) }),
+          };
+        }
         case "edit.puppetWarp":
         case "layer.smartObjects.puppetWarp":
           return { run: () => setPuppet("similarity") };
@@ -4214,6 +4644,7 @@ export default function EditorShell({
 
     return groups;
   }, [
+
     at,
     beginFreeTransform,
     bg,
@@ -4280,6 +4711,10 @@ export default function EditorShell({
     workspace,
     zoom,
   ]);
+
+  /** 去掉被「编辑 > 菜单」隐藏的顶级菜单（至少保留一个，否则菜单栏就空了） */
+  const keptMenus = menuGroups.filter((g) => !prefs.hiddenMenus.includes(g.label));
+  const visibleMenuGroups = keptMenus.length > 0 ? keptMenus : menuGroups;
 
   const commands = useMemo<Command[]>(() => {
     const list: Command[] = [];
@@ -4655,7 +5090,7 @@ export default function EditorShell({
     <div className={hidePanels ? "editor is-immersive" : "editor"}>
       <header className="editor-top">
         <BrandMark size={22} />
-        <AppMenuBar groups={menuGroups} />
+        <AppMenuBar groups={visibleMenuGroups} />
         <div className="editor-ws" role="group" aria-label={zh.editor.workspace} title={zh.editor.workspaceHint}>
           <button
             type="button"
@@ -4804,7 +5239,7 @@ export default function EditorShell({
               <canvas
                 ref={canvasRef}
                 className="editor-canvas"
-                style={{ cursor: cursorOf(tool, panning) }}
+                style={{ cursor: cursorOf(tool, panning, prefs.cursorMode) }}
                 onPointerDown={onDown}
                 onPointerMove={onMove}
                 onPointerUp={onUp}
@@ -4814,12 +5249,69 @@ export default function EditorShell({
               />
               {/* 蚂蚁线 / 裁剪遮罩浮层：只负责画，不接事件 */}
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
+              {/* 分析浮层：标尺线段 + 计数标记，纯视觉，不接事件也不进历史 */}
+              {(measureLine || counters.length > 0) && (
+                <svg
+                  className="editor-measure"
+                  width={docW * scale}
+                  height={docH * scale}
+                  aria-hidden="true"
+                >
+                  {measureLine &&
+                    (() => {
+                      const x0 = measureLine.x0 * scale;
+                      const y0 = measureLine.y0 * scale;
+                      const x1 = measureLine.x1 * scale;
+                      const y1 = measureLine.y1 * scale;
+                      const dx = measureLine.x1 - measureLine.x0;
+                      const dy = measureLine.y1 - measureLine.y0;
+                      const dist = Math.hypot(dx, dy);
+                      const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
+                      const sc = doc.measureScale;
+                      const label = sc
+                        ? `${((dist / sc.px) * sc.real).toFixed(2)} ${sc.unit}`
+                        : `${dist.toFixed(1)} px`;
+                      return (
+                        <g>
+                          <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(0,0,0,0.5)" strokeWidth={3} />
+                          <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="#ffd166" strokeWidth={1.5} />
+                          <circle cx={x0} cy={y0} r={3} fill="#ffd166" />
+                          <circle cx={x1} cy={y1} r={3} fill="#ffd166" />
+                          <text x={x1 + 8} y={y1 - 8} fill="#ffd166" fontSize={12}>
+                            {label} · {ang.toFixed(1)}°
+                          </text>
+                        </g>
+                      );
+                    })()}
+                  {counters.map((c, i) => (
+                    <g key={`cnt-${i}`}>
+                      <circle
+                        cx={c.x * scale}
+                        cy={c.y * scale}
+                        r={9}
+                        fill="rgba(0,0,0,0.55)"
+                        stroke="#ffd166"
+                        strokeWidth={1.5}
+                      />
+                      <text
+                        x={c.x * scale}
+                        y={c.y * scale + 4}
+                        fill="#ffd166"
+                        fontSize={11}
+                        textAnchor="middle"
+                      >
+                        {i + 1}
+                      </text>
+                    </g>
+                  ))}
+                </svg>
+              )}
               {/* 网格：跟随缩放的重复线，只作视觉参考 */}
               {showGrid && (
                 <div
                   className="editor-grid"
                   aria-hidden="true"
-                  style={{ backgroundSize: `${64 * scale}px ${64 * scale}px` }}
+                  style={{ backgroundSize: `${prefs.gridSize * scale}px ${prefs.gridSize * scale}px` }}
                 />
               )}
               {/* 参考线：从标尺里拉出来的对齐线，纯浮层，不进像素也不进历史 */}
@@ -5151,6 +5643,456 @@ export default function EditorShell({
               <span className="field-unit">°</span>
             </span>
           </label>
+        </Modal>
+      )}
+      {/* 图像菜单：颜色模式 / 应用图像 / 陷印 / 测量等 */}
+      {imageOps && (
+        <ImageOpsDialog
+          kind={imageOps}
+          doc={doc}
+          onApply={(next, label) => onCommit(next, label)}
+          onToast={setToast}
+          onClose={() => setImageOps(null)}
+        />
+      )}
+      {/* 编辑 > 菜单：选择显示哪些顶级菜单 */}
+      {menusDialog && (
+        <Modal
+          title="菜单"
+          onClose={() => setMenusDialog(false)}
+          width={420}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setPrefs({ hiddenMenus: [] })}
+              >
+                全部显示
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={() => setMenusDialog(false)}>
+                {zh.preferences.done}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            取消勾选即从菜单栏隐藏（至少保留一个）。菜单项的可用性由文档状态决定，这里只管顶级菜单。
+          </p>
+          {menuGroups.map((g) => {
+            const hidden = prefs.hiddenMenus.includes(g.label);
+            return (
+              <label className="isz-check" key={g.label}>
+                <input
+                  type="checkbox"
+                  checked={!hidden}
+                  onChange={(e) =>
+                    setPrefs({
+                      hiddenMenus: e.target.checked
+                        ? prefs.hiddenMenus.filter((x) => x !== g.label)
+                        : [...prefs.hiddenMenus, g.label],
+                    })
+                  }
+                />
+                {g.label}
+              </label>
+            );
+          })}
+        </Modal>
+      )}
+      {/* 编辑 > 色彩设置 / 指定配置文件 / 转换为配置文件 */}
+      {profileDialog && (
+        <Modal
+          title={
+            profileDialog === "assign"
+              ? "指定配置文件"
+              : profileDialog === "convert"
+                ? "转换为配置文件"
+                : "色彩设置"
+          }
+          onClose={() => setProfileDialog(null)}
+          width={480}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setProfileDialog(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  if (profileDialog === "assign") {
+                    onCommit(assignProfile(doc, profilePick), "指定配置文件");
+                    setToast(`已指定为 ${PROFILE_LABELS[profilePick]}（像素未改动）`);
+                  } else if (profileDialog === "convert") {
+                    const from = doc.profile ?? "srgb";
+                    if (from === profilePick) {
+                      setToast("源配置文件与目标相同，无需转换");
+                      return;
+                    }
+                    onCommit(convertToProfile(doc, profilePick), "转换为配置文件");
+                    setToast(`已从 ${PROFILE_LABELS[from]} 转换到 ${PROFILE_LABELS[profilePick]}`);
+                  } else {
+                    onCommit(assignProfile(doc, profilePick), "色彩设置");
+                    setToast("已记录工作空间（Strata 渲染管线固定 sRGB 输出）");
+                  }
+                  setProfileDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            {profileDialog === "assign"
+              ? "只换解释标签，不改像素 —— 用于修正「这张图本来就是 P3，但被当成 sRGB」的情况。"
+              : profileDialog === "convert"
+                ? "真的按原色矩阵把像素换算到目标空间：线性 RGB → XYZ(D65) → 目标线性 RGB。"
+                : "设置这份文档的工作空间。Strata 的渲染与导出固定按 sRGB 输出。"}
+          </p>
+          <label className="field">
+            <span className="field-label">配置文件</span>
+            <span className="field-input">
+              <select
+                value={profilePick}
+                onChange={(e) => setProfilePick(e.target.value as NonNullable<StrataDoc["profile"]>)}
+              >
+                {(Object.keys(PROFILE_LABELS) as NonNullable<StrataDoc["profile"]>[]).map((id) => (
+                  <option key={id} value={id}>
+                    {PROFILE_LABELS[id]}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <p className="isz-note">当前文档：{PROFILE_LABELS[doc.profile ?? "srgb"]}</p>
+        </Modal>
+      )}
+      {/* 编辑 > 查找和替换文字（作用于图层名） */}
+      {findDialog && (
+        <Modal
+          title="查找和替换文字"
+          onClose={() => setFindDialog(null)}
+          width={460}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setFindDialog(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const find = findDialog.find.trim();
+                  if (!find) {
+                    setToast("请填要查找的文字");
+                    return;
+                  }
+                  let hit = 0;
+                  const layers = doc.layers.map((l) => {
+                    if (!l.name.includes(find)) return l;
+                    hit += 1;
+                    return { ...l, name: l.name.split(find).join(findDialog.replace) };
+                  });
+                  setFindDialog(null);
+                  if (hit === 0) {
+                    setToast(`没有图层名包含「${find}」`);
+                    return;
+                  }
+                  onCommit({ ...doc, layers }, `替换图层名（${hit} 处）`);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            Strata 当前的文字是直接栅格化进像素层的，没有可编辑的文本层，所以这里替换的是
+            <strong>图层名称</strong>。
+          </p>
+          <div className="isz-row">
+            <label className="field">
+              <span className="field-label">查找</span>
+              <span className="field-input">
+                <input
+                  type="text"
+                  autoFocus
+                  value={findDialog.find}
+                  onChange={(e) => setFindDialog({ ...findDialog, find: e.target.value })}
+                />
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">替换为</span>
+              <span className="field-input">
+                <input
+                  type="text"
+                  value={findDialog.replace}
+                  onChange={(e) => setFindDialog({ ...findDialog, replace: e.target.value })}
+                />
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
+      {/* 编辑 > 预设 > 导出 / 导入 */}
+      {presetDialog && (
+        <Modal
+          title="导出 / 导入预设"
+          onClose={() => setPresetDialog(false)}
+          width={440}
+          footer={
+            <button type="button" className="btn-primary btn-sm" onClick={() => setPresetDialog(false)}>
+              {zh.preferences.done}
+            </button>
+          }
+        >
+          <p className="isz-hint">
+            导出会把「默认画笔参数 + 自定义画笔」写成一个 JSON；导入按名称合并，同名覆盖。
+            当前有 {prefs.customBrushes.length} 支自定义画笔。
+          </p>
+          <div className="isz-row">
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                void exportPresets();
+              }}
+            >
+              导出到文件…
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                void importPresets();
+              }}
+            >
+              从文件导入…
+            </button>
+          </div>
+        </Modal>
+      )}
+      {/* 编辑 > 渐隐：把上一步的强度调低 */}
+      {fadeDialog !== null && (
+        <Modal
+          title="渐隐"
+          onClose={() => setFadeDialog(null)}
+          width={400}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setFadeDialog(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const v = Math.round(Number.parseFloat(fadeDialog));
+                  if (!Number.isFinite(v) || v < 0 || v > 100) {
+                    setToast("请输入 0–100 之间的百分比");
+                    return;
+                  }
+                  doFade(v);
+                  setFadeDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            上一步：{historyLabels[historyIndex] ?? "—"}。百分比越小，这一步的效果越弱
+            （100% = 不改变，0% = 完全回到上一步之前）。
+          </p>
+          <div className="isz-row">
+            <label className="field">
+              <span className="field-label">不透明度</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  autoFocus
+                  value={fadeDialog}
+                  onChange={(e) => setFadeDialog(e.target.value)}
+                />
+                <span className="field-unit">%</span>
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
+      {/* 选择 > 查找图层 */}
+      {findQuery !== null && (
+        <Modal
+          title="查找图层"
+          onClose={() => setFindQuery(null)}
+          width={420}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setFindQuery(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const next = findLayers(doc, findQuery);
+                  if (next === doc) {
+                    setToast("没有匹配的图层");
+                    return;
+                  }
+                  onCommit(next, "查找图层");
+                  setFindQuery(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            按名称模糊匹配；也可以直接输入「像素 / 调整 / 组 / 隐藏」按类型查找。匹配到的图层会一起被多选。
+          </p>
+          <label className="field">
+            <span className="field-label">关键字</span>
+            <span className="field-input">
+              <input
+                type="text"
+                autoFocus
+                value={findQuery}
+                onChange={(e) => setFindQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const next = findLayers(doc, findQuery);
+                  if (next === doc) {
+                    setToast("没有匹配的图层");
+                    return;
+                  }
+                  onCommit(next, "查找图层");
+                  setFindQuery(null);
+                }}
+              />
+            </span>
+          </label>
+        </Modal>
+      )}
+      {/* 滤镜 > 灭点：把四点围出的平面拉正 */}
+      {vpDialog && (
+        <Modal
+          title="灭点（平面校正）"
+          onClose={() => setVpDialog(null)}
+          width={520}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setVpDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => {
+                  const nums = vpDialog.q.map((v) => Number.parseFloat(v));
+                  if (nums.some((n) => !Number.isFinite(n))) {
+                    setToast("四个角的坐标都要填有效数字");
+                    return;
+                  }
+                  const ow = Math.round(Number.parseFloat(vpDialog.w));
+                  const oh = Math.round(Number.parseFloat(vpDialog.h));
+                  if (!Number.isFinite(ow) || !Number.isFinite(oh) || ow < 1 || oh < 1) {
+                    setToast("请输入有效的输出尺寸");
+                    return;
+                  }
+                  const quad: [number, number][] = [];
+                  for (let i = 0; i < 4; i += 1) quad.push([nums[i * 2], nums[i * 2 + 1]]);
+                  onCommit(
+                    rectifyPerspectivePlane(doc, quad, ow, oh),
+                    "灭点（平面校正）",
+                  );
+                  setVpDialog(null);
+                }}
+              >
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">
+            把歪掉的平面（墙面、桌面、翻拍的纸张、屏幕）的四个角填进来，Strata 会用
+            单应矩阵把它拉成正矩形，输出到画布左上角。四个角按「左上 → 右上 → 右下 → 左下」
+            的顺时针顺序。
+          </p>
+          {(["左上", "右上", "右下", "左下"] as const).map((label, i) => (
+            <div className="isz-row" key={label}>
+              <span className="field-label" style={{ width: 48 }}>
+                {label}
+              </span>
+              <label className="field">
+                <span className="field-label">X</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={vpDialog.q[i * 2]}
+                    onChange={(e) => {
+                      const q = vpDialog.q.slice();
+                      q[i * 2] = e.target.value;
+                      setVpDialog({ ...vpDialog, q });
+                    }}
+                  />
+                  <span className="field-unit">px</span>
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">Y</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    value={vpDialog.q[i * 2 + 1]}
+                    onChange={(e) => {
+                      const q = vpDialog.q.slice();
+                      q[i * 2 + 1] = e.target.value;
+                      setVpDialog({ ...vpDialog, q });
+                    }}
+                  />
+                  <span className="field-unit">px</span>
+                </span>
+              </label>
+            </div>
+          ))}
+          <div className="isz-row">
+            <label className="field">
+              <span className="field-label">输出宽度</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  value={vpDialog.w}
+                  onChange={(e) => setVpDialog({ ...vpDialog, w: e.target.value })}
+                />
+                <span className="field-unit">px</span>
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">输出高度</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  value={vpDialog.h}
+                  onChange={(e) => setVpDialog({ ...vpDialog, h: e.target.value })}
+                />
+                <span className="field-unit">px</span>
+              </span>
+            </label>
+          </div>
         </Modal>
       )}
       {/* 编辑 > 内容识别缩放（接缝雕刻） */}
@@ -5695,11 +6637,28 @@ export default function EditorShell({
       )}
       {prefsOpen && (
         <Preferences
+          page={prefsPage}
+          onPage={setPrefsPage}
           onClose={() => setPrefsOpen(false)}
           themeMode={themeMode}
           onSetTheme={onSetTheme}
           brush={brush}
           onBrush={(patch) => setBrush((b) => ({ ...b, ...patch }))}
+          onResetLayout={() =>
+            setDockOpen({
+              props: true,
+              color: true,
+              layers: true,
+              history: false,
+              navigator: false,
+              histogram: false,
+              scopes: false,
+            })
+          }
+          onClearRecent={() => {
+            clearStoredRecent();
+            setToast("已清空最近文件");
+          }}
         />
       )}
       {error && <div className="editor-errorbar">{error}</div>}

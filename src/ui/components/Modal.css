@@ -60,10 +60,18 @@
 
 .modal-foot {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
   padding: var(--sp-4) var(--sp-5);
   border-top: 1px solid var(--border);
+}
+
+/* 底部左侧的说明文字（液化、木偶变形等）占满剩余空间，按钮组始终靠右 */
+.modal-foot > .lq-note {
+  margin-right: auto;
+  min-width: 0;
 }
 
 @keyframes mask-in {

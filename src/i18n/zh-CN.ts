@@ -156,6 +156,8 @@ export const zh = {
     shapeEllipse: "椭圆",
     shapeLine: "直线",
     text: "文字",
+    ruler: "标尺",
+    count: "计数",
     crop: "裁剪",
     eyedropper: "吸管",
     brush: "画笔",

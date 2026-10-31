@@ -80,6 +80,45 @@ export interface CustomBrush extends BrushPrefs {
 export interface Prefs {
   /** 工具栏列数：1 / 2 / 3 列 */
   columns: 1 | 2 | 3;
+  /* ---------------- 通用 / 界面 ---------------- */
+  /** 界面密度：舒适 / 紧凑（影响行高与内边距） */
+  density: "comfortable" | "compact";
+  /** 画布光标：笔尖光圈 / 十字 / 系统箭头 */
+  cursorMode: "tip" | "crosshair" | "system";
+  /** 工具轨是否显示工具名 */
+  toolLabels: boolean;
+  /** 拖动 / 点击的判定阈值（像素），越小越灵敏 */
+  dragThreshold: number;
+  /** 被隐藏的顶级菜单（编辑 > 菜单） */
+  hiddenMenus: string[];
+  /* ---------------- 历史 / 性能 ---------------- */
+  /** 历史记录步数上限 */
+  historyLimit: number;
+  /** 滤镜预览质量：0 低（640）1 中（1024）2 高（1600） */
+  previewQuality: 0 | 1 | 2;
+  /* ---------------- 视图 ---------------- */
+  /** 透明棋盘格单元大小（像素） */
+  checkerSize: number;
+  /** 网格间距（像素） */
+  gridSize: number;
+  /** 标尺单位 */
+  rulerUnit: "px" | "cm" | "mm" | "in";
+  /* ---------------- 文件 / 导出 ---------------- */
+  /** 关闭文档前确认 */
+  confirmClose: boolean;
+  /** 打开文档时恢复上次的缩放与平移 */
+  restoreView: boolean;
+  /** 快速导出格式 */
+  exportFormat: "png" | "jpg" | "webp";
+  /** 快速导出质量（jpg / webp 有效） */
+  exportQuality: number;
+  /** 记住面板布局 */
+  rememberDock: boolean;
+  /* ---------------- 文字 / RAW ---------------- */
+  /** 文字工具默认字号（像素） */
+  typeSize: number;
+  /** RAW 导入时自动做色调调整 */
+  rawAutoTone: boolean;
   /** 被隐藏的工具（从工具栏移除，快捷键仍然生效） */
   hiddenTools: ToolId[];
   /** 上次用过的画笔参数，下次启动沿用 */
@@ -90,6 +129,23 @@ export interface Prefs {
 
 export const DEFAULT_PREFS: Prefs = {
   columns: 2,
+  density: "comfortable",
+  cursorMode: "tip",
+  toolLabels: false,
+  dragThreshold: 3,
+  hiddenMenus: [],
+  historyLimit: 40,
+  previewQuality: 1,
+  checkerSize: 8,
+  gridSize: 64,
+  rulerUnit: "px",
+  confirmClose: true,
+  restoreView: true,
+  exportFormat: "png",
+  exportQuality: 92,
+  rememberDock: true,
+  typeSize: 48,
+  rawAutoTone: true,
   hiddenTools: [],
   brushDefaults: {
     size: 32,
@@ -149,11 +205,35 @@ function read(): Prefs {
       const columns = v.columns === 1 || v.columns === 2 || v.columns === 3 ? v.columns : 2;
       const hidden = Array.isArray(v.hiddenTools) ? (v.hiddenTools as ToolId[]) : [];
       const d = v.brushDefaults ?? DEFAULT_PREFS.brushDefaults;
+      const dp = DEFAULT_PREFS;
       return {
+        ...dp,
         columns,
         hiddenTools: hidden,
         brushDefaults: normalizeBrush(d),
         customBrushes: readBrushes(v.customBrushes),
+        density: v.density === "compact" ? "compact" : dp.density,
+        cursorMode:
+          v.cursorMode === "crosshair" || v.cursorMode === "system" ? v.cursorMode : dp.cursorMode,
+        toolLabels: bool(v.toolLabels, dp.toolLabels),
+        dragThreshold: clampNum(v.dragThreshold, 1, 20, dp.dragThreshold),
+        hiddenMenus: Array.isArray(v.hiddenMenus) ? (v.hiddenMenus as string[]) : [],
+        historyLimit: clampNum(v.historyLimit, 10, 500, dp.historyLimit),
+        previewQuality: v.previewQuality === 0 || v.previewQuality === 2 ? v.previewQuality : dp.previewQuality,
+        checkerSize: clampNum(v.checkerSize, 4, 64, dp.checkerSize),
+        gridSize: clampNum(v.gridSize, 8, 512, dp.gridSize),
+        rulerUnit:
+          v.rulerUnit === "cm" || v.rulerUnit === "mm" || v.rulerUnit === "in"
+            ? v.rulerUnit
+            : dp.rulerUnit,
+        confirmClose: bool(v.confirmClose, dp.confirmClose),
+        restoreView: bool(v.restoreView, dp.restoreView),
+        exportFormat:
+          v.exportFormat === "jpg" || v.exportFormat === "webp" ? v.exportFormat : dp.exportFormat,
+        exportQuality: clampNum(v.exportQuality, 10, 100, dp.exportQuality),
+        rememberDock: bool(v.rememberDock, dp.rememberDock),
+        typeSize: clampNum(v.typeSize, 6, 400, dp.typeSize),
+        rawAutoTone: bool(v.rawAutoTone, dp.rawAutoTone),
       };
     }
   } catch {
@@ -200,6 +280,12 @@ export function normalizeBrush(raw: Partial<BrushPrefs> | null | undefined): Bru
 /** 内核画笔 → 可存档参数（丢掉 color，补齐所有动态字段）。 */
 export function toBrushPrefs(b: BrushPrefs): BrushPrefs {
   return normalizeBrush(b);
+}
+
+/** 数值字段规整：非数字退回默认，越界夹到区间内。 */
+function clampNum(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
 }
 
 function num(v: unknown, fallback: number): number {
@@ -261,7 +347,7 @@ export function setPrefs(patch: Partial<Prefs>) {
 /** 恢复出厂设置。 */
 export function resetPrefs() {
   setPrefs({
-    columns: DEFAULT_PREFS.columns,
+    ...DEFAULT_PREFS,
     hiddenTools: [],
     brushDefaults: { ...DEFAULT_PREFS.brushDefaults },
     customBrushes: [],
@@ -285,6 +371,11 @@ export function addCustomBrush(name: string, b: BrushPrefs): CustomBrush {
 /** 删掉一支自定义画笔。 */
 export function removeCustomBrush(id: string) {
   setPrefs({ customBrushes: current.customBrushes.filter((x) => x.id !== id) });
+}
+
+/** 模块级快照（非 React 环境读取当前偏好，例如新建撤销栈时）。 */
+export function currentPrefs(): Prefs {
+  return current;
 }
 
 export function usePrefs(): Prefs {

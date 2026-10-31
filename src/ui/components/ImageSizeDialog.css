@@ -1,3 +1,17 @@
+/* 一行并排的字段（内容识别缩放 / 灭点的尺寸输入等），窄屏自动换行 */
+.isz-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: flex-end;
+  margin-bottom: var(--sp-3);
+}
+
+.isz-row .field {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
 .isz-hint {
   margin: 0 0 var(--sp-4);
   font-size: var(--fs-sm);
