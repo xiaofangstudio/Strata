@@ -229,27 +229,20 @@ function wheelVector(x: number, y: number): [number, number, number] {
 }
 
 /**
- * 施加整台调色。
+ * 三张 256 项通道查询表：白平衡 + Lift/Gamma/Gain + 对比度 + 曲线。
  *
- * @param src 源像素
- * @param p   参数表（缺项按中性处理）
- * @param curves 曲线（可选，与曲线调整层的控制点同构）
+ * 这一整段都是**逐通道重映射**（每个通道只看自己那个值），所以它既能逐像素查表，
+ * 也能整段交给 SVG 的 feComponentTransfer 在 GPU 上做 —— 两条路共用这一份实现，
+ * 界面效果与 SVG 快路径必然一致（否则会"拖动时一个样、松手变另一个样"）。
  */
-export function applyGrade(
-  src: RgbaBuffer,
+export function gradeChannelLuts(
   p: Record<string, number>,
   curves?: GradeCurves,
-): RgbaBuffer {
-  const out = makeBuffer(src.width, src.height);
-  const d = src.data;
-  const o = out.data;
-
+): { r: Float32Array; g: Float32Array; b: Float32Array } {
   const num = (k: string, def = 0): number => {
     const v = p[k];
     return typeof v === "number" && Number.isFinite(v) ? v : def;
   };
-
-  /* ---- ① 三张 256 项 LUT：白平衡 + LGG + 对比度 + 曲线 ---- */
   const pivot = clamp01(num("pivot", 50) / 100);
   const contrast = 1 + (num("contrast") / 100) * 0.9;
   const temp = num("temp") / 100;
@@ -275,31 +268,82 @@ export function applyGrade(
     1 / Math.max(0.05, 1 + (num("gammaB") / 100) * 0.9),
   ];
   const master = curveToTable(curves?.rgb);
-  const lutR = curveToTable(curves?.r);
-  const lutG = curveToTable(curves?.g);
-  const lutB = curveToTable(curves?.b);
+  const perCh = [curveToTable(curves?.r), curveToTable(curves?.g), curveToTable(curves?.b)];
 
-  const buildLut = (c: 0 | 1 | 2): Uint8ClampedArray => {
-    const t = new Uint8ClampedArray(256);
-    const perCh = c === 0 ? lutR : c === 1 ? lutG : lutB;
+  const build = (c: 0 | 1 | 2): Float32Array => {
+    const t = new Float32Array(256);
     for (let i = 0; i < 256; i += 1) {
       let v = i / 255;
-      v *= gain[c]; // 亮部
-      v = lift[c] + v * (1 - lift[c]); // 暗部抬底
-      v = Math.pow(clamp01(v), gammaExp[c]); // 中间调
-      v *= chGain[c]; // 白平衡
-      v = (v - pivot) * contrast + pivot; // 对比度（绕轴心）
+      v *= gain[c];
+      v = lift[c] + v * (1 - lift[c]);
+      v = Math.pow(clamp01(v), gammaExp[c]);
+      v *= chGain[c];
+      v = (v - pivot) * contrast + pivot;
       v = clamp01(v);
-      // 复合曲线 → 分通道曲线
       v = master[Math.round(v * 255)];
-      v = perCh[Math.round(clamp01(v) * 255)];
-      t[i] = Math.round(clamp01(v) * 255);
+      v = perCh[c][Math.round(clamp01(v) * 255)];
+      t[i] = clamp01(v);
     }
     return t;
   };
-  const rLut = buildLut(0);
-  const gLut = buildLut(1);
-  const bLut = buildLut(2);
+  return { r: build(0), g: build(1), b: build(2) };
+}
+
+/**
+ * 这一层调色是否**必须**逐像素处理。
+ *
+ * 一级校色里的白平衡 / LGG / 对比度 / 曲线都是逐通道重映射，SVG 的
+ * feComponentTransfer 能在 GPU 上做完（见 core/layer 的 adjustFilter）；
+ * 只有下面这些需要「邻域或色相上下文」，才非得走 JS 逐像素：
+ *   阴影 / 高光 / 中间调对比 / 黑场、四档色轮（含曝光与饱和）、全局饱和与色相、色彩切片器。
+ *
+ * 返回 false 就是"可以完全交给 GPU"—— 大图上这一条能省掉整幅读回与回写，
+ * 拖动滑杆立刻跟手。
+ */
+export function gradeNeedsPixels(p: Record<string, number>): boolean {
+  const num = (k: string): number => {
+    const v = p[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
+  for (const k of ["shadow", "highlight", "midDetail", "blackOffset", "sat", "hue"]) {
+    if (num(k) !== 0) return true;
+  }
+  for (const w of GRADE_WHEELS) {
+    for (const s of ["X", "Y", "Exp", "Sat"]) {
+      if (num(`${w.key}${s}`) !== 0) return true;
+    }
+  }
+  for (const r of SLICER_RANGES) {
+    for (const s of ["hue", "sat", "lum"]) {
+      if (num(`sl_${r.key}_${s}`) !== 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 施加整台调色。
+ *
+ * @param src 源像素
+ * @param p   参数表（缺项按中性处理）
+ * @param curves 曲线（可选，与曲线调整层的控制点同构）
+ */
+export function applyGrade(
+  src: RgbaBuffer,
+  p: Record<string, number>,
+  curves?: GradeCurves,
+): RgbaBuffer {
+  const out = makeBuffer(src.width, src.height);
+  const d = src.data;
+  const o = out.data;
+
+  const num = (k: string, def = 0): number => {
+    const v = p[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : def;
+  };
+
+  /* ---- ① 三张 256 项 LUT：白平衡 + LGG + 对比度 + 曲线 ---- */
+  const luts = gradeChannelLuts(p, curves);
 
   /* ---- ② 色轮 / 切片器 / 整体的逐像素系数 ---- */
   const wheels: WheelBank = {
@@ -358,9 +402,9 @@ export function applyGrade(
       o[k + 3] = 0;
       continue;
     }
-    let r = rLut[d[k]] / 255;
-    let g = gLut[d[k + 1]] / 255;
-    let b = bLut[d[k + 2]] / 255;
+    let r = luts.r[d[k]];
+    let g = luts.g[d[k + 1]];
+    let b = luts.b[d[k + 2]];
 
     if (needPixel) {
       let l = lumaOf(r, g, b);

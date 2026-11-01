@@ -12,9 +12,10 @@
 import { adjustFilter, blendOp, type StrataLayer } from "../core/layer";
 import type { StrataDoc } from "../core/document";
 import { mustCtx } from "./surface";
+import { windowBounds } from "../core/gradeWindow";
 import { pruneFilters } from "./filters";
 import { clipBaseOf, maskedSurface, paintStyledLayer } from "./styles";
-import { isPixelAdjust, applyPixelAdjust } from "./adjustPixels";
+import { needsPixelPass, applyPixelAdjust } from "./adjustPixels";
 
 export { maskedSurface };
 
@@ -130,11 +131,34 @@ function applyAdjust(
   const bc = mustCtx(buf);
   bc.drawImage(ctx.canvas, 0, 0);
 
+  /**
+   * 只处理「范围包围盒」里的像素。
+   *
+   * 局部调色的蒙版只在范围四周非零（羽化也含在 bounds 里），所以盒外一个像素都不用碰。
+   * 大图上圈一小块时，这一条把「整幅读回 + 回写」变成「小块读回 + 回写」——
+   * 拖动滑杆跟不跟手就体现在这儿。
+   */
+  const box = (() => {
+    // 没有范围 / 没有生效的蒙版时，整幅都要处理（否则会留下一个硬边的方框）
+    if (!layer.window || !layer.mask || layer.maskActive === false) return { x: 0, y: 0, w, h };
+    const b = windowBounds(layer.window);
+    const x = Math.max(0, Math.floor(b.x));
+    const y = Math.max(0, Math.floor(b.y));
+    const x2 = Math.min(w, Math.ceil(b.x + b.w));
+    const y2 = Math.min(h, Math.ceil(b.y + b.h));
+    if (x2 <= x || y2 <= y) return { x: 0, y: 0, w: 0, h: 0 };
+    return { x, y, w: x2 - x, h: y2 - y };
+  })();
+  if (box.w === 0 || box.h === 0) return;
+
   // 像素级调整：无法用 SVG 滤镜表达的一类，走 ImageData 内核
-  if (isPixelAdjust(layer.adjust.id)) {
-    const img = bc.getImageData(0, 0, w, h);
+  if (needsPixelPass(layer.adjust)) {
+    const img =
+      box.w === w && box.h === h && box.x === 0 && box.y === 0
+        ? bc.getImageData(0, 0, w, h)
+        : bc.getImageData(box.x, box.y, box.w, box.h);
     applyPixelAdjust(layer.adjust, img);
-    bc.putImageData(img, 0, 0);
+    bc.putImageData(img, box.x, box.y);
   } else {
     const filter = adjustFilter(layer.adjust, layer.id);
     if (!filter) return;
@@ -160,9 +184,15 @@ function applyAdjust(
     mc.setTransform(1, 0, 0, 1, 0, 0);
     mc.globalCompositeOperation = "source-over";
     mc.clearRect(0, 0, w, h);
+    // 盒外的蒙版恒为 0，所以只算盒内；外面留空 = 不覆盖下面（下面本来就是原样）
+    mc.save();
+    mc.beginPath();
+    mc.rect(box.x, box.y, box.w, box.h);
+    mc.clip();
     mc.drawImage(buf, 0, 0);
     mc.globalCompositeOperation = "destination-in";
     mc.drawImage(mask, 0, 0);
+    mc.restore();
     mc.globalCompositeOperation = "source-over";
     src = mb;
   }

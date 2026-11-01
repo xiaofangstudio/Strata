@@ -492,6 +492,7 @@ import {
   traceAlphaLoops,
 } from "./lib/engines.gen.mjs";
 import { exrDecode, exrInfo } from "./lib/exr.mjs";
+import { blendByMask, buildWindowMask, normalizeWindow } from "./lib/gradeMask.mjs";
 
 /** 滤镜 id → 定义（含参数表与内核）。索引一次，供工具与能力清单共用。 */
 const FILTER_BY_ID = new Map(FILTER_DEFS.map((d) => [d.id, d]));
@@ -2533,6 +2534,70 @@ server.registerTool(
     const recipe = { kind: "strata-droplet", version: 1, name: String(name || "未命名配方"), ops: cleaned };
     writeFileSync(abs, JSON.stringify(recipe, null, 2), "utf8");
     return ok({ ok: true, path: abs, recipe, hint: "双击这个文件即可在 Strata 里装载配方。" });
+  }),
+);
+
+/* ==================================================================
+ * 局部调色（Power Window）
+ * ================================================================== */
+
+server.registerTool(
+  "strata_local_grade",
+  {
+    title: "局部调色（按范围）",
+    description:
+      "只调画面里的一块 —— 达芬奇的 Power Window。先用 window 描述范围，再给调色参数：" +
+      "范围外的像素一个都不动，边界按 feather 平滑淡出。" +
+      "四种范围：ellipse（椭圆，可 rot 旋转）/ quad（四边形，四点各自独立、四条边可各调羽化）/ " +
+      "line（线性渐变，一侧调一侧不调）/ poly（多边形）。" +
+      "参数与 strata_adjust_image 的 type=grade 完全一致（见 capabilities 的 imageOps.gradeParams）。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id（strata_open_image / strata_exr_read 返回的）"),
+      window: z
+        .record(z.string(), z.any())
+        .describe(
+          "范围：{kind:'ellipse',cx,cy,rx,ry,feather,rot?} | " +
+            "{kind:'quad',points:[{x,y}×4],feather,edges?:[f1,f2,f3,f4]} | " +
+            "{kind:'line',x1,y1,x2,y2,feather} | {kind:'poly',points:[{x,y}…],feather}；都可加 invert:true",
+        ),
+      params: z
+        .record(z.string(), z.number())
+        .optional()
+        .describe("调色参数（temp / contrast / liftR / darkX / sat …，键见 capabilities.gradeParams）"),
+      curves: z
+        .record(z.string(), z.any())
+        .optional()
+        .describe("可选曲线：{rgb|r|g|b: [{x:0..1,y:0..1}]}"),
+      preview: z.boolean().optional().describe("是否回传 320px 预览（默认 false）"),
+    },
+  },
+  guard(async ({ sessionId, window: win, params, curves, preview }) => {
+    const s0 = sessionImage(sessionId);
+    const geo = normalizeWindow(win);
+    const graded = ADJUSTERS.grade.run(s0.img, {
+      type: "grade",
+      params: params ?? {},
+      curves,
+    });
+    const mask = buildWindowMask(s0.img.width, s0.img.height, geo);
+    const out = blendByMask(s0.img, graded, mask.alpha);
+    const next = { width: out.width, height: out.height, data: out.data };
+    sessions.set(sessionId, { ...s0, img: next });
+    const total = out.width * out.height;
+    const payload = {
+      ok: true,
+      sessionId,
+      width: out.width,
+      height: out.height,
+      window: geo,
+      affectedPixels: out.fullyAffected,
+      affectedRatio: Number((out.fullyAffected / total).toFixed(4)),
+    };
+    if (preview === true) {
+      const small = resize(next, 320);
+      payload.previewBase64 = encodeImagePng(small).toString("base64");
+    }
+    return ok(payload);
   }),
 );
 

@@ -505,8 +505,20 @@ export function buildCapabilities() {
       gradeWheels: GRADE_WHEELS,
       gradeSlicerRanges: SLICER_RANGES.map((r) => ({ key: r.key, label: r.label, center: r.center })),
       adjustersList: Object.keys(ADJUSTERS),
+      /** 局部调色的范围类型（给 AI 看怎么传 window） */
+      gradeWindows: [
+        { kind: "ellipse", fields: ["cx", "cy", "rx", "ry", "rot?", "feather"], note: "椭圆，rot 为弧度" },
+        {
+          kind: "quad",
+          fields: ["points: {x,y}×4", "feather", "edges?: [f1,f2,f3,f4]"],
+          note: "四边形：四点各自独立，四条边羽化可各不相同",
+        },
+        { kind: "line", fields: ["x1", "y1", "x2", "y2", "feather"], note: "线性渐变：一侧调、一侧不调" },
+        { kind: "poly", fields: ["points: {x,y}…", "feather"], note: "多边形（钢笔）" },
+      ],
       engines: [
         { id: "grade", label: "调色台（一级/色轮/切片器/曲线）", tool: "strata_adjust_image · type=grade" },
+        { id: "localGrade", label: "局部调色（按范围，Power Window）", tool: "strata_local_grade" },
         { id: "contentAwareScale", label: "内容识别缩放（接缝雕刻）", tool: "strata_content_aware_scale" },
         { id: "meshWarp", label: "木偶变形（MLS 钉点）", tool: "strata_mesh_warp" },
         { id: "smartSelect", label: "智能选区", tool: "strata_smart_select" },
@@ -552,6 +564,7 @@ export function buildCapabilities() {
       "strata_trace_paths",
       "strata_make_gif",
       "strata_make_droplet",
+      "strata_local_grade",
       "strata_edit_image",
       "strata_export_image",
       "strata_image_preview",

@@ -12,7 +12,7 @@
  * crates/doc/src/adjust.rs、crates/engine/src/extra_cmds.rs。
  */
 import { clamp01, hexToRgb01, luma01, linearToSrgb, srgbToLinear } from "./filters";
-import { applyGrade } from "./grading";
+import { applyGrade, gradeIsNeutral, gradeNeedsPixels } from "./grading";
 import type { AdjustState } from "../core/layer";
 
 /** 必须走逐像素通道的调整种类。 */
@@ -34,6 +34,23 @@ export const PIXEL_ADJUST_IDS: readonly string[] = [
 /** 这条调整是否必须逐像素处理（合成器据此选通道）。 */
 export function isPixelAdjust(id: string): boolean {
   return PIXEL_ADJUST_IDS.includes(id);
+}
+
+/**
+ * 合成器真正该问的问题：**这一层现在必须走逐像素吗？**
+ *
+ * 调色台是"看参数决定"的：只要没用色轮 / 切片器 / 阴影高光这些要上下文的东西，
+ * 它完全可以交给 SVG 的 LUT（GPU）走 —— 大图上这是"拖动卡死"和"跟手"的差别。
+ */
+export function needsPixelPass(state: AdjustState): boolean {
+  if (state.id === "grade") {
+    const curves =
+      Boolean(state.curve) || Boolean(state.curveR) || Boolean(state.curveG) || Boolean(state.curveB);
+    // 全中性又没曲线：这一层等于不存在 —— 既不逐像素，也不注册滤镜（adjustFilter 会返回空）
+    if (!curves && gradeIsNeutral(state.params ?? {})) return false;
+    return gradeNeedsPixels(state.params ?? {});
+  }
+  return isPixelAdjust(state.id);
 }
 
 /** 参数缺省兜底。 */
@@ -742,6 +759,10 @@ export function applyPixelAdjust(state: AdjustState, img: ImageData): void {
   const p = state.params;
   switch (state.id) {
     case "grade": {
+      // 全中性（且没曲线）时一个像素都不用碰 —— 这是最省的一次早退
+      const curves =
+        Boolean(state.curve) || Boolean(state.curveR) || Boolean(state.curveG) || Boolean(state.curveB);
+      if (!curves && gradeIsNeutral(p ?? {})) return;
       // 调色台：一级 + 色轮 + 切片器 + 曲线一趟算完（engine/grading.ts）
       const graded = applyGrade(
         { data: img.data, width: img.width, height: img.height },

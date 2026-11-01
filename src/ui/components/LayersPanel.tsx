@@ -658,16 +658,7 @@ function LayerTab({
   /** 被折叠起来的组 id（只影响面板显示，不动文档） */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const shown = dragOpacity ?? cur.opacity;
-  const canRemove = doc.layers.length > 1;
-  const at = doc.layers.findIndex((l) => l.id === cur.id);
   const rows = buildRows(doc, collapsed);
-
-  /** 向下合并的可用态：与 layerOps.mergeDown 的守卫一一对应 */
-  const mergeOk =
-    at > 0 &&
-    doc.layers[at].kind !== "group" &&
-    doc.layers[at - 1].kind === "pixel" &&
-    (doc.layers[at].parent ?? null) === (doc.layers[at - 1].parent ?? null);
 
   const toggleCollapse = (id: string) => {
     setCollapsed((prev) => {
@@ -779,111 +770,143 @@ function LayerTab({
         ))}
       </div>
 
-      <div className="ly-foot">
-        <button
-          type="button"
-          className="ly-act"
-          title={`${zh.layers.new}（Ctrl + Shift + N）`}
-          onClick={() => onChange(addLayer(doc), zh.layers.new)}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className="ly-act"
-          title={`${zh.layers.duplicate}（Ctrl + J）`}
-          onClick={() => onChange(duplicateLayer(doc), zh.layers.duplicate)}
-        >
-          ⧉
-        </button>
-        <button
-          type="button"
-          className="ly-act"
-          disabled={!canRemove}
-          title={canRemove ? zh.layers.delete : zh.layers.onlyOne}
-          onClick={() => onChange(removeLayer(doc), zh.layers.delete)}
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className={cur.mask ? "ly-act is-on" : "ly-act"}
-          disabled={Boolean(cur.mask)}
-          title={cur.mask ? zh.layers.mask : zh.layers.maskAdd}
-          onClick={() => {
-            onMaskEdit(true);
-            onChange(addMask(doc, "reveal"), zh.layers.maskAdd);
-          }}
-        >
-          ▣
-        </button>
-        <button
-          type="button"
-          className={cur.clip ? "ly-act is-on" : "ly-act"}
-          disabled={at <= 0 || cur.kind === "adjust"}
-          title={
-            cur.kind === "adjust"
-              ? zh.layers.clipAdjustDenied
-              : at <= 0
-                ? zh.layers.clipDenied
-                : cur.clip
-                  ? zh.layers.clipOn
-                  : zh.layers.clipOff
-          }
-          onClick={() =>
-            onChange(toggleClip(doc), cur.clip ? zh.layers.clipRelease : zh.layers.clipCreate)
-          }
-        >
-          ⊂
-        </button>
-        <AdjustMenu onAdd={(id) => onChange(addAdjustLayer(doc, newAdjustState(id)), zh.layers.adjustAdd)} />
-        <button
-          type="button"
-          className="ly-act"
-          title={`${zh.layers.group}（Ctrl + G）`}
-          onClick={() => onChange(groupLayers(doc), zh.layers.group)}
-        >
-          <GroupIcon />
-        </button>
-        <button
-          type="button"
-          className="ly-act"
-          disabled={cur.kind !== "group"}
-          title={cur.kind === "group" ? `${zh.layers.ungroup}（Ctrl + Shift + G）` : zh.layers.groupDenied}
-          onClick={() => onChange(ungroupLayers(doc), zh.layers.ungroup)}
-        >
-          <UngroupIcon />
-        </button>
-        <span className="ly-foot-gap" />
-        <button
-          type="button"
-          className="ly-act"
-          disabled={!mergeOk}
-          title={zh.layers.mergeDown}
-          onClick={() => onChange(mergeDown(doc), zh.layers.mergeDown)}
-        >
-          ⤓
-        </button>
-        <button
-          type="button"
-          className="ly-act"
-          disabled={!canShiftLayer(doc, 1)}
-          title={zh.layers.up}
-          onClick={() => onChange(moveLayer(doc, 1), zh.layers.up)}
-        >
-          ↑
-        </button>
-        <button
-          type="button"
-          className="ly-act"
-          disabled={!canShiftLayer(doc, -1)}
-          title={zh.layers.down}
-          onClick={() => onChange(moveLayer(doc, -1), zh.layers.down)}
-        >
-          ↓
-        </button>
-      </div>
     </>
+  );
+}
+
+
+/**
+ * 图层面板底部那排操作（新建 / 复制 / 删除 / 建组 / 合并 / 上下移动）。
+ *
+ * 从面板里抽出来单独渲染，是因为它要**永远钉在停靠坞底部**：
+ * 上面那些面板怎么拖高拖矮、怎么折叠，这排按钮的位置都不能动 ——
+ * 否则用户一缩小图层列表，常用的「新建图层」就跟着跑到半空了。
+ */
+export function LayersFooter({
+  doc,
+  onChange,
+  onMaskEdit,
+}: {
+  doc: StrataDoc;
+  onChange: (next: StrataDoc, label: string) => void;
+  /** 加蒙版后顺手把蒙版编辑模式打开（面板里原本就是这个行为） */
+  onMaskEdit: (on: boolean) => void;
+}) {
+  const at = doc.layers.findIndex((l) => l.id === doc.activeLayerId);
+  /** 当前图层：底部这排按钮都作用于它 */
+  const cur = doc.layers[at] ?? doc.layers[0];
+  const canRemove = doc.layers.length > 1;
+  /** 向下合并的可用态：与 layerOps.mergeDown 的守卫一一对应 */
+  const mergeOk =
+    at > 0 &&
+    doc.layers[at].kind !== "group" &&
+    doc.layers[at - 1].kind === "pixel" &&
+    (doc.layers[at].parent ?? null) === (doc.layers[at - 1].parent ?? null);
+  return (
+    <div className="ly-foot">
+      <button
+        type="button"
+        className="ly-act"
+        title={`${zh.layers.new}（Ctrl + Shift + N）`}
+        onClick={() => onChange(addLayer(doc), zh.layers.new)}
+      >
+        +
+      </button>
+      <button
+        type="button"
+        className="ly-act"
+        title={`${zh.layers.duplicate}（Ctrl + J）`}
+        onClick={() => onChange(duplicateLayer(doc), zh.layers.duplicate)}
+      >
+        ⧉
+      </button>
+      <button
+        type="button"
+        className="ly-act"
+        disabled={!canRemove}
+        title={canRemove ? zh.layers.delete : zh.layers.onlyOne}
+        onClick={() => onChange(removeLayer(doc), zh.layers.delete)}
+      >
+        −
+      </button>
+      <button
+        type="button"
+        className={cur.mask ? "ly-act is-on" : "ly-act"}
+        disabled={Boolean(cur.mask)}
+        title={cur.mask ? zh.layers.mask : zh.layers.maskAdd}
+        onClick={() => {
+          onMaskEdit(true);
+          onChange(addMask(doc, "reveal"), zh.layers.maskAdd);
+        }}
+      >
+        ▣
+      </button>
+      <button
+        type="button"
+        className={cur.clip ? "ly-act is-on" : "ly-act"}
+        disabled={at <= 0 || cur.kind === "adjust"}
+        title={
+          cur.kind === "adjust"
+            ? zh.layers.clipAdjustDenied
+            : at <= 0
+              ? zh.layers.clipDenied
+              : cur.clip
+                ? zh.layers.clipOn
+                : zh.layers.clipOff
+        }
+        onClick={() =>
+          onChange(toggleClip(doc), cur.clip ? zh.layers.clipRelease : zh.layers.clipCreate)
+        }
+      >
+        ⊂
+      </button>
+      <AdjustMenu onAdd={(id) => onChange(addAdjustLayer(doc, newAdjustState(id)), zh.layers.adjustAdd)} />
+      <button
+        type="button"
+        className="ly-act"
+        title={`${zh.layers.group}（Ctrl + G）`}
+        onClick={() => onChange(groupLayers(doc), zh.layers.group)}
+      >
+        <GroupIcon />
+      </button>
+      <button
+        type="button"
+        className="ly-act"
+        disabled={cur.kind !== "group"}
+        title={cur.kind === "group" ? `${zh.layers.ungroup}（Ctrl + Shift + G）` : zh.layers.groupDenied}
+        onClick={() => onChange(ungroupLayers(doc), zh.layers.ungroup)}
+      >
+        <UngroupIcon />
+      </button>
+      <span className="ly-foot-gap" />
+      <button
+        type="button"
+        className="ly-act"
+        disabled={!mergeOk}
+        title={zh.layers.mergeDown}
+        onClick={() => onChange(mergeDown(doc), zh.layers.mergeDown)}
+      >
+        ⤓
+      </button>
+      <button
+        type="button"
+        className="ly-act"
+        disabled={!canShiftLayer(doc, 1)}
+        title={zh.layers.up}
+        onClick={() => onChange(moveLayer(doc, 1), zh.layers.up)}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        className="ly-act"
+        disabled={!canShiftLayer(doc, -1)}
+        title={zh.layers.down}
+        onClick={() => onChange(moveLayer(doc, -1), zh.layers.down)}
+      >
+        ↓
+      </button>
+    </div>
   );
 }
 

@@ -19,6 +19,7 @@ import {
   createGroupLayer,
   createLayer,
   createMask,
+  newAdjustState,
   newLayerStyle,
   type AdjustState,
   type BlendId,
@@ -27,7 +28,13 @@ import {
   type StyleId,
 } from "./layer";
 import { activeLayer, type StrataDoc } from "./document";
-import { windowToMask } from "./gradeWindow";
+import {
+  defaultEllipse,
+  defaultLine,
+  defaultPoly,
+  defaultQuad,
+  windowToMask,
+} from "./gradeWindow";
 import {
   decontaminateData,
   defringeData,
@@ -1202,6 +1209,43 @@ export function applyGradeWindow(
   if (!target) return doc;
   const mask = windowToMask(doc.width, doc.height, win);
   return updateLayer(doc, layerId, { window: win, mask, maskActive: true });
+}
+
+/** 局部调色的形状种类（与面板上那四个按钮一一对应）。 */
+export type LocalGradeKind = "line" | "ellipse" | "quad" | "poly";
+
+const LOCAL_GRADE_LABEL: Record<LocalGradeKind, string> = {
+  line: "线性",
+  ellipse: "椭圆",
+  quad: "四边形",
+  poly: "钢笔",
+};
+
+/**
+ * 新建一个「局部调色」层 —— 这是加范围的**唯一正确姿势**。
+ *
+ * 每个范围都是一层独立的调色层（adjust + window + mask），所以：
+ *   · 想要第二个范围 → 再点一次，又多一层；
+ *   · 想临时关掉某个范围 → 在图层面板点眼睛（图层可见性）；
+ *   · 想删掉范围 → 删这一层；
+ *   · 想改叠放顺序（谁先调） → 拖图层顺序。
+ * 这比"一层里塞多个范围"干净得多，也不用另造一套列表 UI。
+ */
+export function addLocalGradeLayer(doc: StrataDoc, kind: LocalGradeKind): StrataDoc {
+  const { width, height } = doc;
+  const win =
+    kind === "line"
+      ? defaultLine(width, height)
+      : kind === "ellipse"
+        ? defaultEllipse(width, height)
+        : kind === "quad"
+          ? defaultQuad(width, height)
+          : defaultPoly(width, height);
+  let next = addAdjustLayer(doc, newAdjustState("grade"));
+  const created = next.layers.find((l) => l.id === next.activeLayerId);
+  if (!created) return next;
+  next = updateLayer(next, created.id, { name: `调色 · ${LOCAL_GRADE_LABEL[kind]}` });
+  return applyGradeWindow(next, created.id, win);
 }
 
 /**

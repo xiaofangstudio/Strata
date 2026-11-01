@@ -612,3 +612,72 @@
 .gr-btn:disabled {
   opacity: 0.4;
 }
+
+/* ---------- 新建范围（四个形状按钮） ---------- */
+
+.gr-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: none;
+  min-width: 0;
+}
+
+.gr-range {
+  flex-wrap: wrap;
+}
+
+.gr-shape {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+.gr-shape:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.gr-shape-icon {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+/* ---------- 调色层列表（没选中时用来切回去） ---------- */
+
+.grade-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+
+.grade-pick-item {
+  flex: 0 0 auto;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grade-pick-item:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

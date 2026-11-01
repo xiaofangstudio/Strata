@@ -96,24 +96,60 @@ function sanitizeWindow(raw: unknown): StrataLayer["window"] {
   const w = raw as Record<string, unknown>;
   const feather = Math.max(0, Math.min(400, Number(w.feather) || 0));
   const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const rot = Number.isFinite(Number(w.rot)) ? Number(w.rot) : undefined;
+  const inv = w.invert === true ? { invert: true } : {};
   if (w.kind === "ellipse") {
     const rx = num(w.rx);
     const ry = num(w.ry);
     if (rx <= 0 || ry <= 0) return undefined;
-    return { kind: "ellipse", cx: num(w.cx), cy: num(w.cy), rx, ry, feather };
+    return { kind: "ellipse", cx: num(w.cx), cy: num(w.cy), rx, ry, feather, rot, ...inv };
   }
   if (w.kind === "rect") {
+    // 旧工程里的「矩形」读成四边形（四个角），行为一致
+    const x = num(w.x);
+    const y = num(w.y);
     const width = num(w.w);
     const height = num(w.h);
     if (width <= 0 || height <= 0) return undefined;
-    return { kind: "rect", x: num(w.x), y: num(w.y), w: width, h: height, feather };
+    return {
+      kind: "quad",
+      points: [
+        { x, y },
+        { x: x + width, y },
+        { x: x + width, y: y + height },
+        { x, y: y + height },
+      ],
+      feather,
+      ...inv,
+    };
+  }
+  if (w.kind === "quad" && Array.isArray(w.points)) {
+    const points = w.points
+      .filter((p) => p && typeof p === "object")
+      .map((p) => ({ x: num((p as Record<string, unknown>).x), y: num((p as Record<string, unknown>).y) }));
+    if (points.length !== 4) return undefined;
+    const edges = Array.isArray(w.edges)
+      ? (w.edges as unknown[]).slice(0, 4).map((v) => Math.max(0, Math.min(400, Number(v) || 0)))
+      : undefined;
+    return { kind: "quad", points, feather, edges, ...inv };
+  }
+  if (w.kind === "line") {
+    return {
+      kind: "line",
+      x1: num(w.x1),
+      y1: num(w.y1),
+      x2: num(w.x2),
+      y2: num(w.y2),
+      feather,
+      ...inv,
+    };
   }
   if (w.kind === "poly" && Array.isArray(w.points)) {
     const points = w.points
       .filter((p) => p && typeof p === "object")
       .map((p) => ({ x: num((p as Record<string, unknown>).x), y: num((p as Record<string, unknown>).y) }));
     if (points.length < 3) return undefined;
-    return { kind: "poly", points, feather };
+    return { kind: "poly", points, feather, ...inv };
   }
   return undefined;
 }

@@ -38,6 +38,8 @@ interface Props {
   histogram: ReactNode;
   /** 色彩示波器（波形 / Parade / 矢量） */
   scopes: ReactNode;
+  /** 钉死在坞底的固定条（图层操作那排）——不参与任何面板的伸缩 */
+  footer?: ReactNode;
   /** 受控开关（「窗口 > 面板」菜单直接控制）；不传则坞内自持。 */
   open?: Record<GroupId, boolean>;
   onToggle?: (id: GroupId) => void;
@@ -190,6 +192,7 @@ export default function RightDock({
   navigator,
   histogram,
   scopes,
+  footer,
   open: outer,
   onToggle,
 }: Props) {
@@ -323,6 +326,8 @@ export default function RightDock({
 
   return (
     <aside className="dock" aria-label={zh.panel.dock} style={{ width: dockW }}>
+      {/* 上半部分：把手 + 开关轨 + 面板列（这部分才跟着窗口伸缩） */}
+      <div className="dock-row">
       <div
         className="dock-grip"
         role="separator"
@@ -388,6 +393,13 @@ export default function RightDock({
         {/* 最后一块之下给一点空白，避免贴底太紧 */}
         <div className="dock-tail" aria-hidden="true" />
       </div>
+      </div>
+
+      {/**
+       * 坞底固定条：不属于任何面板，所以面板怎么拖高拖矮、折叠展开，
+       * 它都钉在同一个位置（用户要的「永永远远在那儿」）。
+       */}
+      {footer && <div className="dock-footer">{footer}</div>}
     </aside>
   );
 }

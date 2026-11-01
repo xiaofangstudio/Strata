@@ -11,11 +11,21 @@
   /* 实际宽度由组件的 inline style 给（左边缘可拖），这里只兜底 */
   width: 326px;
   min-height: 0;
+  /* 竖排：上面是可伸缩的面板列，下面是钉死的底栏 */
   display: flex;
+  flex-direction: column;
   align-items: stretch;
   position: relative;
   background: var(--surface);
   border-left: 1px solid var(--border);
+}
+
+/* 面板列那一行：把手 + 开关轨 + 面板，横向排列并吃掉剩余高度 */
+.dock-row {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
 }
 
 /* 左边缘的宽度把手：命中区 6px，视觉上只在悬停时亮一条线 */
@@ -287,4 +297,17 @@
    否则看起来像凭空多了一块深色方块（用户说的「大黑块」） */
 .dock-body {
   background: var(--surface);
+}
+
+/* ---------- 坞底固定条（图层面板那排操作） ---------- */
+
+.dock-footer {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* 底栏里的按钮排不需要自己的上边框（外层已经有了） */
+.dock-footer .ly-foot {
+  border-top: none;
 }

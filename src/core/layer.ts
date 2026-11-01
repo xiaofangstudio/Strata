@@ -27,7 +27,12 @@ import {
   type CurvePoint,
 } from "../engine/filters";
 import type { TextLayerState } from "../engine/text";
-import { GRADE_PARAMS } from "../engine/grading";
+import {
+  GRADE_PARAMS,
+  gradeChannelLuts,
+  gradeIsNeutral,
+  gradeNeedsPixels,
+} from "../engine/grading";
 
 /**
  * 混合模式。
@@ -1104,6 +1109,31 @@ export function adjustFilter(state: AdjustState, layerId: string): string {
           ),
         );
       }
+      break;
+    }
+    /**
+     * 调色台：**只用得到通道重映射的那部分走 SVG**（白平衡 / LGG / 对比度 / 曲线）。
+     *
+     * 这些恰好是 256 项 LUT 能完全表达的东西，交给 feComponentTransfer 在 GPU 上做，
+     * 比逐像素 JS 快一到两个数量级 —— 大图上拖动滑杆跟不跟手就差在这。
+     * 一旦用到色轮 / 切片器 / 阴影高光这类需要上下文的效果，
+     * compositor 会改走逐像素通路（见 needsPixelPass），这里不参与。
+     */
+    case "grade": {
+      // 中性层什么都不做：返回空串，合成器会直接跳过这一层（连 copy 都不做）
+      const hasCurves =
+        Boolean(state.curve) || Boolean(state.curveR) || Boolean(state.curveG) || Boolean(state.curveB);
+      if (!hasCurves && gradeIsNeutral(p ?? {})) break;
+      if (gradeNeedsPixels(p)) break;
+      const luts = gradeChannelLuts(p, {
+        rgb: state.curve,
+        r: state.curveR,
+        g: state.curveG,
+        b: state.curveB,
+      });
+      const tab = (arr: Float32Array) =>
+        tableOf((x) => arr[Math.max(0, Math.min(255, Math.round(x * 255)))], 256);
+      parts.push(register(layerId, rgbTransfer(tab(luts.r), tab(luts.g), tab(luts.b))));
       break;
     }
     case "noise": {

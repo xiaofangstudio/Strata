@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, "..", "mcp", "strata-mcp.mjs");
 const require = createRequire(join(HERE, "..", "mcp", "package.json"));
-const { createCanvas } = require("@napi-rs/canvas");
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 
 /* ------------------------------------------------------------ MCP 客户端 */
 
@@ -229,6 +229,18 @@ function makeExr(w, h, rgb) {
   const ver = Buffer.alloc(4);
   ver.writeUInt32LE(2, 0);
   return Buffer.concat([magic, ver, header, table, chunk, raw]);
+}
+
+
+/** 把磁盘上的 PNG 读成 {width,height,data}，用于像素断言。 */
+async function readPng(path) {
+  const img = await loadImage(path);
+  // loadImage 是同步返回 Image；画到画布上再取像素
+  const c = createCanvas(img.width, img.height);
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, img.width, img.height);
+  return { width: img.width, height: img.height, data: d.data };
 }
 
 const client = new McpClient();
@@ -529,6 +541,87 @@ try {
   });
   check("strata_make_droplet 拒绝未知操作", () => {
     if (!badDrop.isError) throw new Error("未知操作竟然通过了");
+  });
+
+  /* ---------------- 局部调色（Power Window）：范围外必须一点不动 ---------------- */
+
+  const lgBefore = join(dir, "lg-before.png");
+  const lgAfter = join(dir, "lg-after.png");
+  const lgOpen = await client.call("strata_open_image", { path: imgPath });
+  const lgSid = lgOpen.parsed.sessionId;
+  const lgW = lgOpen.parsed.width;
+  const lgH = lgOpen.parsed.height;
+  await client.call("strata_export_image", { sessionId: lgSid, path: lgBefore });
+
+  // 椭圆范围放在左半边，暖调 80（明显改变像素）
+  const lg = await client.call("strata_local_grade", {
+    sessionId: lgSid,
+    window: {
+      kind: "ellipse",
+      cx: lgW * 0.25,
+      cy: lgH * 0.5,
+      rx: lgW * 0.18,
+      ry: lgH * 0.3,
+      feather: 12,
+    },
+    params: { temp: 80 },
+  });
+  await client.call("strata_export_image", { sessionId: lgSid, path: lgAfter });
+
+  const lgA = await readPng(lgBefore);
+  const lgB = await readPng(lgAfter);
+  check("strata_local_grade · 范围内变、范围外不变", () => {
+    if (lg.isError) throw new Error(lg.parsed.error);
+    if (!(lg.parsed.affectedRatio > 0)) throw new Error("没有像素被影响");
+    const a = lgA;
+    const b = lgB;
+    const px = (img, x, y) => {
+      const i = (y * img.width + x) * 4;
+      return [img.data[i], img.data[i + 1], img.data[i + 2]];
+    };
+    // 范围中心：应该被暖调改了（红↑蓝↓）
+    const cIn = px(a, Math.round(lgW * 0.25), Math.round(lgH * 0.5));
+    const cOut = px(b, Math.round(lgW * 0.25), Math.round(lgH * 0.5));
+    if (cIn[0] === cOut[0] && cIn[2] === cOut[2]) throw new Error("范围中心没变化");
+    // 右边角落：完全在范围外，必须逐字节相同
+    const farX = lgW - 6;
+    const farY = lgH - 6;
+    const fIn = px(a, farX, farY);
+    const fOut = px(b, farX, farY);
+    if (fIn[0] !== fOut[0] || fIn[1] !== fOut[1] || fIn[2] !== fOut[2]) {
+      throw new Error(`范围外被改了：${fIn} → ${fOut}`);
+    }
+  });
+
+  // 四边形：只羽化第 2 条边时，第 1 条边附近应该是硬的
+  const quadRes = await client.call("strata_local_grade", {
+    sessionId: lgSid,
+    window: {
+      kind: "quad",
+      points: [
+        { x: 20, y: 20 },
+        { x: lgW - 20, y: 20 },
+        { x: lgW - 20, y: lgH - 20 },
+        { x: 20, y: lgH - 20 },
+      ],
+      feather: 0,
+      edges: [0, 24, 0, 0],
+    },
+    params: { contrast: 60 },
+  });
+  check("strata_local_grade · 四边形四条边独立羽化", () => {
+    if (quadRes.isError) throw new Error(quadRes.parsed.error);
+    if (quadRes.parsed.window.edges[1] !== 24) throw new Error("edges 没被保留");
+  });
+
+  // 非法范围必须报错，不能静默什么都不做
+  const badWin = await client.call("strata_local_grade", {
+    sessionId: lgSid,
+    window: { kind: "triangle" },
+    params: { temp: 10 },
+  });
+  check("strata_local_grade 拒绝未知范围类型", () => {
+    if (!badWin.isError) throw new Error("未知 kind 竟然通过了");
   });
 
   // 能力清单应能列出全部滤镜与颜色模式

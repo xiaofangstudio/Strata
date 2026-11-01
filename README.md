@@ -33,7 +33,7 @@
 - 🚀 **更新频率高**：功能一周一周往外冒，灰项持续点亮中
 - 💰 **完全免费开源**：MIT 许可，没有订阅、没有买断
 
-**关于 AI**：Strata 目前不内置 AI 功能。想接 AI？让你的 Agent 来——自带 MCP 服务器（stdio 传输，49 个工具），AI 一连就能调用修图能力。整个项目 **MIT 许可**，你可以随意 fork、随意改，改出好东西欢迎在我们的 GitHub 上再传一个分支，一起把它养大。
+**关于 AI**：Strata 目前不内置 AI 功能。想接 AI？让你的 Agent 来——自带 MCP 服务器（stdio 传输，50 个工具），AI 一连就能调用修图能力。整个项目 **MIT 许可**，你可以随意 fork、随意改，改出好东西欢迎在我们的 GitHub 上再传一个分支，一起把它养大。
 
 **至于专业的活**：Adobe 老师还是那个 Adobe 老师，该买 PS 的买 PS，Strata 只是给不想订阅、不想折腾的人多一个免费的选择。
 
@@ -242,7 +242,7 @@
 }
 ```
 
-先 `cd mcp && npm install`，再 `npm run selftest` 自检（应输出「已注册 49 个工具」）；`npm test` 跑底层图元单测，`npm run mcp:check` 一次跑完自检 + 新工具检查。完整工具表见 [mcp/README.md](mcp/README.md)。
+先 `cd mcp && npm install`，再 `npm run selftest` 自检（应输出「已注册 50 个工具」）；`npm test` 跑底层图元单测，`npm run mcp:check` 一次跑完自检 + 新工具检查。完整工具表见 [mcp/README.md](mcp/README.md)。
 
 **边界说清楚**：MCP 是「外部 AI 遥控本地文件」，不是内嵌 AI。软件自己不上传、不联网、不调用任何云模型。
 

@@ -117,6 +117,17 @@ overlay / softLight / darken / lighten / add。文字与形状由 `@napi-rs/canv
 | `strata_make_gif` | 多帧合成循环 GIF（与应用同一个 GIF89a + LZW 编码器） | 渲染视频 |
 | `strata_make_droplet` | 写 `.strata-droplet` 配方（严格校验，未知操作直接拒） | 创建 Droplet |
 
+### 局部调色（Power Window）
+
+| 工具 | 作用 |
+| --- | --- |
+| `strata_local_grade` | **只调一块地方**：用 `window` 描述范围（椭圆 / 四边形 / 线性 / 多边形），
+范围外一个像素都不动，边界按 `feather` 平滑淡出。参数与 `type=grade` 完全一致。 |
+
+范围的四种形状与界面**同一套几何规则**：椭圆可旋转、四边形四点各自独立且四条边羽化可各调、
+线性是沿法线的一侧渐变、多边形逐点。Node 侧用 `@napi-rs/canvas` 重画蒙版
+（`ctx.filter=blur` 在这套画布里不生效，羽化改用手写的盒式模糊）。
+
 **EXR 压缩支持范围**：NONE / RLE / ZIPS / ZIP（OpenEXR 默认就是 ZIP）。
 PIZ / PXR24 / B44 / DWAA / DWAB 会**明确报错**并建议改用应用内打开，不会解出花屏。
 

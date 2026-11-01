@@ -36,6 +36,7 @@ import {
 import { DEFAULT_DPI, PRESETS } from "../core/presets";
 import {
   addAdjustLayer,
+  selectLayer,
   applyGradeWindow,
   addFillLayer,
   addLayer,
@@ -346,7 +347,7 @@ import { Check } from "./components/controls";
 import ColorPanel from "./components/ColorPanel";
 import LiquifyDialog from "./components/LiquifyDialog";
 import PuppetWarpDialog from "./components/PuppetWarpDialog";
-import LayersPanel from "./components/LayersPanel";
+import LayersPanel, { LayersFooter } from "./components/LayersPanel";
 import HistoryPanel from "./components/HistoryPanel";
 import HistogramPanel from "./components/HistogramPanel";
 import ScopesPanel from "./components/ScopesPanel";
@@ -873,14 +874,22 @@ export default function EditorShell({
   });
 
   /**
-   * 调色台面板绑定的那一层：优先当前选中的调色层，
-   * 否则退回文档里第一张调色层（切到别的图层时面板不至于突然空白）。
+   * 当前正在编辑的调色层 = **选中的那个**。
+   *
+   * 以前会"退回第一张调色层"，结果是：用户选中别的图层时，面板和画布手柄
+   * 还挂在另一层上 —— 一拖就改到了没选中的地方。现在只认选中的层，
+   * 想改哪个就在图层面板点哪个（点回来手柄立刻出现，随时可继续改）。
    */
   const gradeLayer = useMemo(() => {
     const cur = doc.layers.find((l) => l.id === doc.activeLayerId);
-    if (cur && cur.kind === "adjust" && cur.adjust?.id === "grade") return cur;
-    return doc.layers.find((l) => l.kind === "adjust" && l.adjust?.id === "grade") ?? null;
+    return cur && cur.kind === "adjust" && cur.adjust?.id === "grade" ? cur : null;
   }, [doc.layers, doc.activeLayerId]);
+
+  /** 文档里全部调色层（没选中任何一层时，面板把它们列出来供点选）。 */
+  const gradeAll = useMemo(
+    () => doc.layers.filter((l) => l.kind === "adjust" && l.adjust?.id === "grade"),
+    [doc.layers],
+  );
 
   const { items: recentItems, push: pushRecent, clear: clearRecent } = useRecentFiles();
   const [toast, setToast] = useState("");
@@ -8791,7 +8800,7 @@ export default function EditorShell({
                * 调色范围手柄：只在「调色台开着 + 当前调色层带范围」时出现。
                * 拖动中按 100ms 节流重算蒙版（整幅 blur 是重活），松手才落一条历史。
                */}
-              {gradeLayer?.window && dockOpen.grade && (
+              {gradeLayer?.window && gradeLayer.visible !== false && (
                 <GradeWindowOverlay
                   docW={docW}
                   docH={docH}
@@ -9075,6 +9084,7 @@ export default function EditorShell({
         <RightDock
           open={dockOpen}
           onToggle={toggleDock}
+          footer={<LayersFooter doc={doc} onChange={onCommit} onMaskEdit={setMaskEdit} />}
           navigator={
             <NavigatorPanel
               docW={docW}
@@ -9107,10 +9117,24 @@ export default function EditorShell({
               />
             ) : (
               <div className="grade-create">
-                <p className="grade-create-lead">
-                  调色台是非破坏的：先建一个「调色台」调整层，再在它上面拉滑杆。
-                  它只作用于下方已合成的画面，随时可关、可删、可撤。
-                </p>
+                {/**
+                 * 没选中调色层时：把文档里已有的调色层列出来，点一下切回去继续改。
+                 * 光给一个"新建"按钮会让用户以为之前调的那层没了 —— 那正是"改不回去"的来源。
+                 */}
+                {gradeAll.length > 0 && (
+                  <div className="grade-pick">
+                    {gradeAll.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        className="grade-pick-item"
+                        onClick={() => onCommit(selectLayer(doc, l.id), "切换到调色层")}
+                      >
+                        {l.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button
                   type="button"
                   className="btn-primary btn-sm"
@@ -9120,9 +9144,6 @@ export default function EditorShell({
                 >
                   新建调色层
                 </button>
-                <p className="grade-create-note">
-                  一级校色 / 四档色轮 / 色彩切片器 / 曲线都在这一层上；滑杆松手才记一步历史。
-                </p>
               </div>
             )
           }
