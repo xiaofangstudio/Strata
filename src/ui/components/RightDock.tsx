@@ -9,11 +9,21 @@ import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { zh } from "../../i18n/zh-CN";
 import "./RightDock.css";
 
-type GroupId = "props" | "color" | "layers" | "history" | "navigator" | "histogram" | "scopes";
+type GroupId =
+  | "grade"
+  | "props"
+  | "color"
+  | "layers"
+  | "history"
+  | "navigator"
+  | "histogram"
+  | "scopes";
 
 export type { GroupId };
 
 interface Props {
+  /** 调色台（一级 / 色轮 / 切片器 / 曲线） */
+  grade: ReactNode;
   /** 颜色 | 色板 */
   color: ReactNode;
   /** 属性 | 调整 */
@@ -37,8 +47,15 @@ interface Props {
 
 const HEIGHT_KEY = "strata.dock.heights";
 
+/** 坞宽（整列）持久化键与取值范围。 */
+const W_KEY = "strata.dock.width";
+const DEFAULT_W = 326;
+const MIN_W = 264;
+const MAX_W = 720;
+
 /** 各面板默认高度（px）。 */
 const DEFAULT_HEIGHTS: Record<GroupId, number> = {
+  grade: 470,
   navigator: 152,
   scopes: 214,
   histogram: 150,
@@ -50,6 +67,7 @@ const DEFAULT_HEIGHTS: Record<GroupId, number> = {
 
 /** 各面板允许的最小高度。 */
 const MIN_H: Record<GroupId, number> = {
+  grade: 200,
   navigator: 90,
   scopes: 120,
   histogram: 90,
@@ -93,6 +111,17 @@ const RAIL: { id: GroupId; label: string; icon: ReactNode }[] = [
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
         <path d="M2 13h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         <path d="M3 13V9M6 13V5M9 13V7M12 13V3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: "grade",
+    label: zh.panel.grade,
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+        <path d="M8 2.4a5.6 5.6 0 0 1 5.6 5.6H8Z" fill="currentColor" opacity="0.55" />
+        <circle cx="8" cy="8" r="1.3" fill="currentColor" />
       </svg>
     ),
   },
@@ -153,6 +182,7 @@ const RAIL: { id: GroupId; label: string; icon: ReactNode }[] = [
 ];
 
 export default function RightDock({
+  grade,
   color,
   properties,
   layers,
@@ -165,6 +195,7 @@ export default function RightDock({
 }: Props) {
   // 默认开颜色 / 属性 / 图层，历史 / 导航器 / 直方图按需拉出 —— 与 PhotoCraft 的初始状态一致。
   const [inner, setInner] = useState<Record<GroupId, boolean>>({
+    grade: false,
     props: true,
     color: true,
     layers: true,
@@ -226,6 +257,52 @@ export default function RightDock({
     dragRef.current = null;
   }, []);
 
+  /* ------------------------------------------------- 坞宽（整列横向拖拽） */
+
+  /**
+   * 右侧这一列的宽度。
+   *
+   * 之前写死 326px：调色台那种要横着摆滑杆的面板塞进去就挤成一团，
+   * 用户只能对着几十像素的滑杆调色。现在左边缘可以拖（还没拖过就用默认值），
+   * 拖完记住，双击把手的回默认。
+   */
+  const [dockW, setDockW] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem(W_KEY));
+      return Number.isFinite(v) && v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
+    } catch {
+      return DEFAULT_W;
+    }
+  });
+  const wDrag = useRef<{ x: number; w: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(W_KEY, String(dockW));
+    } catch {
+      /* 存不了就只管本次会话 */
+    }
+  }, [dockW]);
+
+  const onGripDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      wDrag.current = { x: e.clientX, w: dockW };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [dockW],
+  );
+  const onGripMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = wDrag.current;
+    if (!d) return;
+    // 往左拖变宽（坞贴在右边）
+    const next = Math.round(d.w - (e.clientX - d.x));
+    const cap = Math.max(MIN_W, Math.min(MAX_W, window.innerWidth * 0.62));
+    setDockW(Math.max(MIN_W, Math.min(cap, next)));
+  }, []);
+  const onGripUp = useCallback(() => {
+    wDrag.current = null;
+  }, []);
+
   /** 双击分隔条：恢复该面板默认高度。 */
   const onSplitReset = useCallback(
     (id: GroupId) => () => {
@@ -235,6 +312,7 @@ export default function RightDock({
   );
 
   const groups: { id: GroupId; node: ReactNode; cls: string }[] = [];
+  if (open.grade) groups.push({ id: "grade", node: grade, cls: "is-grade" });
   if (open.navigator) groups.push({ id: "navigator", node: navigator, cls: "is-navigator" });
   if (open.scopes) groups.push({ id: "scopes", node: scopes, cls: "is-scopes" });
   if (open.histogram) groups.push({ id: "histogram", node: histogram, cls: "is-histogram" });
@@ -244,7 +322,19 @@ export default function RightDock({
   if (open.history) groups.push({ id: "history", node: history, cls: "is-history" });
 
   return (
-    <aside className="dock" aria-label={zh.panel.dock}>
+    <aside className="dock" aria-label={zh.panel.dock} style={{ width: dockW }}>
+      <div
+        className="dock-grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整面板列宽度"
+        title="拖动调整宽度 · 双击恢复默认"
+        onPointerDown={onGripDown}
+        onPointerMove={onGripMove}
+        onPointerUp={onGripUp}
+        onPointerCancel={onGripUp}
+        onDoubleClick={() => setDockW(DEFAULT_W)}
+      />
       <div className="dock-rail" role="toolbar" aria-label={zh.panel.dockRail}>
         {RAIL.map((g) => (
           <button
@@ -268,8 +358,12 @@ export default function RightDock({
               className={`dock-group ${g.cls}`}
               style={{
                 height: heights[g.id] ?? DEFAULT_HEIGHTS[g.id],
-                // 一律按固定高度排：谁也不再抢「剩余空间」，用户说了算
-                flex: "0 0 auto",
+                /**
+                 * 最后一块负责吃掉剩余高度 —— 否则所有面板都拖到最短时，
+                 * 底下会空出一大片（看起来像凭空多了一块深色方块）。
+                 * 它仍然按自己拖出来的高度为基准，只是多出来的部分归它。
+                 */
+                flex: i === groups.length - 1 ? "1 1 auto" : "0 0 auto",
                 minHeight: MIN_H[g.id] ?? 80,
               }}
             >

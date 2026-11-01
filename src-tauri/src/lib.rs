@@ -7,6 +7,10 @@
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
+use tauri::{Emitter, Manager};
+
+mod exr;
+mod wia;
 
 /// 运行环境信息，开始页面的「关于」区块使用。
 #[derive(Serialize)]
@@ -104,14 +108,85 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// 返回进程启动时的命令行参数。
+/// 启动意图：这次进程到底是「用户主动打开软件」还是「用 Strata 打开某个文件」。
 ///
-/// 用于「双击 .strata 文件用 Strata 打开」：Windows 会把被双击文件的完整路径
-/// 作为命令行参数传给应用，前端从这里取到路径后，经由开始页面按工程方式打开。
-/// 与 Tauri 的其它内置能力不同，这里直接用标准库的 env::args，不必再引一个插件。
+/// 两件事在界面上必须分开：前者进欢迎页，后者直接进编辑器。
+/// 之前前端只拿到一串命令行参数自己去猜，猜不到就停在欢迎页，
+/// 于是「双击图片用 Strata 打开」看起来像是没生效。判定改在内核做，
+/// 前端拿到的就是一个已经判好的结论。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchIntent {
+    /// "file" = 带文件启动；"home" = 主动打开软件。
+    kind: &'static str,
+    /// kind == "file" 时的文件绝对路径。
+    path: Option<String>,
+    /// 排除了程序自身路径的命令行参数，排错时有用。
+    args: Vec<String>,
+}
+
+/// 判定本次启动的意图。
+///
+/// 规则与前端 `core/launch.ts` 的兜底实现保持一致：跳过开关参数，
+/// 取第一个指向真实存在文件的参数。带引号的路径（Windows 传参常见）先去引号。
+/// 找不到就当作主动打开软件 —— 判定不出错最多是让用户自己点。
 #[tauri::command]
-fn initial_open_args() -> Vec<String> {
-    std::env::args().collect()
+fn launch_intent() -> LaunchIntent {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let target = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|a| a.trim().trim_matches('"'))
+        .find(|p| !p.is_empty() && std::path::Path::new(p).exists())
+        .map(|p| p.to_string());
+
+    match target {
+        Some(path) => LaunchIntent {
+            kind: "file",
+            path: Some(path),
+            args,
+        },
+        None => LaunchIntent {
+            kind: "home",
+            path: None,
+            args,
+        },
+    }
+}
+
+/// 单个文件夹条目。「浏览」（Bridge 式文件浏览）用。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+/// 列出一个文件夹的直接子项（不递归）。
+///
+/// 单个子项读失败就跳过而不是整次失败：浏览一个有几万个文件的目录时，
+/// 个别文件被占用/无权限是常态，不该让整个面板因此空白。
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    let mut out = Vec::new();
+    let rd = std::fs::read_dir(&path).map_err(|e| format!("读不了这个文件夹：{e}"))?;
+    for e in rd.flatten() {
+        let p = e.path();
+        let is_dir = p.is_dir();
+        let size = e
+            .metadata()
+            .map(|m| if m.is_file() { m.len() } else { 0 })
+            .unwrap_or(0);
+        out.push(DirEntry {
+            name: e.file_name().to_string_lossy().into_owned(),
+            path: p.to_string_lossy().into_owned(),
+            is_dir,
+            size,
+        });
+    }
+    Ok(out)
 }
 
 /// 启动 Strata。
@@ -119,6 +194,24 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 单实例：Strata 已经在跑时再双击一张图，不再新起一个进程，
+        // 而是把要打开的文件转给已经在跑的那个窗口。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let target = argv
+                .iter()
+                .skip(1)
+                .filter(|a| !a.starts_with('-'))
+                .map(|a| a.trim().trim_matches('"'))
+                .find(|p| !p.is_empty() && std::path::Path::new(p).exists())
+                .map(|p| p.to_string());
+
+            if let Some(path) = target {
+                let _ = app.emit("strata://launch-open", path);
+            }
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
@@ -126,7 +219,13 @@ pub fn run() {
             files_stat,
             quit_app,
             app_info,
-            initial_open_args
+            launch_intent,
+            list_dir,
+            exr::exr_part_info,
+            exr::exr_read_all,
+            wia::wia_devices,
+            wia::wia_device_count,
+            wia::wia_acquire
         ])
         .run(tauri::generate_context!())
         .expect("Strata 启动失败");

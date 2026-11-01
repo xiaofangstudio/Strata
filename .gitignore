@@ -55,3 +55,10 @@ coverage/
 
 # ---- WorkBuddy 内部目录（不入库） ----
 .workbuddy/
+
+# ---- 参考软件（只作对照，不入库；统一放仓库外，见 docs/参考软件回收说明.md）----
+MyPaint/
+PhotoCraft/
+Compositor/
+reference/
+*.lnk

@@ -4,9 +4,33 @@
   display: grid;
   grid-template-columns: 148px 1fr;
   gap: var(--sp-5);
-  /* 固定高度：切换页面时窗口不再忽大忽小（内容区自己滚动） */
-  height: 460px;
+  /* 高度吃满弹窗内容区：弹窗本身已是固定高度，这里不再自己定高度 */
+  height: 100%;
   min-height: 0;
+}
+
+.pref-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  border-bottom: 1px dashed var(--border);
+}
+
+.pref-group:last-child {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.pref-group-title {
+  padding: 0 var(--sp-3) 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  user-select: none;
 }
 
 .pref-tabs {
@@ -126,7 +150,12 @@
 }
 
 .pref-seg-btn {
-  width: 40px;
+  /* 以前写死 40px：「笔尖光圈」四个字被裁成「笔尖光」。
+     改成按内容自适应 + 最小宽度，长短标签都不会溢出 */
+  width: auto;
+  min-width: 40px;
+  padding: 0 10px;
+  white-space: nowrap;
   height: 26px;
   font-size: var(--fs-xs);
   color: var(--text-2);

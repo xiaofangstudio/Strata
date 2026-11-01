@@ -142,6 +142,10 @@ import ImageOpsDialog, { type ImageOpsKind } from "./components/ImageOpsDialog";
 import TextPanel, { type TextPanelTab } from "./components/TextPanel";
 import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
 import CompareView, { type CompareLayout } from "./components/CompareView";
+import GradePanel from "./components/GradePanel";
+import BrowseDialog from "./components/BrowseDialog";
+import ExrDialog from "./components/ExrDialog";
+import { CreateDropletDialog, ScriptEventsDialog } from "./components/AutomationDialogs";
 import FloatingDoc, { type FloatRect } from "./components/FloatingDoc";
 import { applyStackModeToDoc, autoAlignLayers, autoBlendLayers } from "../core/stackOps";
 import { applyStackMode, type StackMode } from "../core/stackModes";
@@ -172,10 +176,15 @@ import {
   restoreFrame,
   setFrameRate,
   setShowAltered,
+  isVideoLayer,
   videoSummary,
 } from "../core/videoLayer";
 import { PROFILE_LABELS } from "../core/colorProfile";
 import { buildPdf } from "../core/pdf";
+import { encodeGif } from "../engine/gif";
+import { loopsToSvg, traceAlphaLoops } from "../core/tracePath";
+import { openFileToDoc } from "../engine/openFile";
+import { invoke } from "@tauri-apps/api/core";
 import { findPhotoRegions } from "../core/photoCrop";
 import { CUBE_SIZE, identityLut, lutToCube } from "../core/lut";
 import { applyFixes, checkText, ISSUE_LABEL, type Issue } from "../core/proofread";
@@ -851,6 +860,7 @@ export default function EditorShell({
   const [brushPanelOpen, setBrushPanelOpen] = useState(false);
   /** 右侧面板坞的开关：由「窗口 > 颜色 / 属性 / 图层 / 历史」直接控制。 */
   const [dockOpen, setDockOpen] = useState<Record<DockGroupId, boolean>>({
+    grade: false,
     props: true,
     color: true,
     layers: true,
@@ -859,6 +869,17 @@ export default function EditorShell({
     histogram: false,
     scopes: false,
   });
+
+  /**
+   * 调色台面板绑定的那一层：优先当前选中的调色层，
+   * 否则退回文档里第一张调色层（切到别的图层时面板不至于突然空白）。
+   */
+  const gradeLayer = useMemo(() => {
+    const cur = doc.layers.find((l) => l.id === doc.activeLayerId);
+    if (cur && cur.kind === "adjust" && cur.adjust?.id === "grade") return cur;
+    return doc.layers.find((l) => l.kind === "adjust" && l.adjust?.id === "grade") ?? null;
+  }, [doc.layers, doc.activeLayerId]);
+
   const { items: recentItems, push: pushRecent, clear: clearRecent } = useRecentFiles();
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -893,6 +914,13 @@ export default function EditorShell({
   const [selDragging, setSelDragging] = useState(false);
   /** 多边形套索：已落的顶点（文档坐标）；null 表示还没开始画 */
   const [polyPts, setPolyPts] = useState<{ x: number; y: number }[] | null>(null);
+  /**
+   * 多边形套索的「橡皮筋」端：光标当前位置（文档坐标）。
+   *
+   * 用 ref 而不是 state —— 覆盖层的绘制本来就是 RAF 循环，读 ref 就能逐帧跟上，
+   * 不必每动一下鼠标就重渲染整个编辑壳。
+   */
+  const polyHoverRef = useRef<{ x: number; y: number } | null>(null);
   const polyModeRef = useRef<SelectionMode>("new");
   /** 是否正在拖绘形状（驱动形状浮层的动画只在拖动时开动） */
   const [shapeDragging, setShapeDragging] = useState(false);
@@ -1699,6 +1727,8 @@ export default function EditorShell({
       const live = selRef.current;
       const sp = shapeRef.current;
       let path: Path2D | null = null;
+      /** 多边形套索「回到起点」的提示线（虚线，不参与选区） */
+      let rubberBack: Path2D | null = null;
       let box: { x: number; y: number; w: number; h: number } | null = null;
 
       if (live) {
@@ -1723,10 +1753,21 @@ export default function EditorShell({
           path.rect(x, y, w, h);
         }
       } else if (polyPts && polyPts.length > 0) {
-        // 多边形套索：已落的顶点连成折线（不闭合，闭合线等真正落选区）
+        // 多边形套索：已落的顶点连成折线，再拖一条「橡皮筋」到光标处 ——
+        // 不跟手的话根本没法判断下一段会画到哪（这是老版的硬伤）
         path = new Path2D();
         path.moveTo(polyPts[0].x, polyPts[0].y);
         for (let i = 1; i < polyPts.length; i += 1) path.lineTo(polyPts[i].x, polyPts[i].y);
+        const hover = polyHoverRef.current;
+        if (hover) {
+          path.lineTo(hover.x, hover.y);
+          // 回到起点那一截用半透明虚线单独画，提示「点这里闭合」
+          if (polyPts.length >= 2) {
+            rubberBack = new Path2D();
+            rubberBack.moveTo(hover.x, hover.y);
+            rubberBack.lineTo(polyPts[0].x, polyPts[0].y);
+          }
+        }
       } else if (antsPath) {
         path = antsPath;
       }
@@ -1774,6 +1815,16 @@ export default function EditorShell({
           ctx.strokeStyle = "#ffffff";
           ctx.stroke(path);
           ctx.setLineDash([]);
+        }
+
+        if (rubberBack) {
+          const u = 1 / scale;
+          ctx.save();
+          ctx.setLineDash([3 * u, 3 * u]);
+          ctx.strokeStyle = "rgba(90, 160, 255, 0.9)";
+          ctx.lineWidth = u;
+          ctx.stroke(rubberBack);
+          ctx.restore();
         }
 
         // 智能参考线：选区 / 裁剪框的尺寸徽标与中线对齐提示
@@ -2200,6 +2251,8 @@ export default function EditorShell({
   const onMove = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
       syncCursor(e.clientX, e.clientY);
+      // 套索进行中：记下光标位置，覆盖层的 RAF 循环会读它画橡皮筋
+      if (polyPts) polyHoverRef.current = docXY(e.clientX, e.clientY);
       const from = panRef.current;
       if (from) {
         setPan((p) => ({
@@ -3551,6 +3604,160 @@ export default function EditorShell({
     setToast(`已导出 ${w}×${h}（${(bytes.length / 1024).toFixed(0)} KB）`);
   }, [webOpts, doc, docW, docH, composeClean, canvasJpeg]);
 
+  /**
+   * 文件 > 导出 > 渲染视频：把视频图层的帧序列逐帧合成后导出为 GIF。
+   *
+   * Strata 的视频图层是帧序列模型，没有视频编码器（H.264 那些是几百 KB 起步
+   * 的原生依赖，碰体积红线），所以这里的落点是 GIF —— 纯 TS 编码器
+   * （engine/gif.ts，经 PIL 实测对账），导出的就是真正能动的动图。
+   */
+  const [renderVideo, setRenderVideo] = useState<
+    { scale: number; maxSide: number } | null
+  >(null);
+
+  /** 文件 > 脚本 > 浏览（Bridge 式文件夹浏览）。 */
+  const [browseOpen, setBrowseOpen] = useState(false);
+
+  /** 文件 > 打开 EXR 部件：先选文件，再进部件选择弹窗。 */
+  const [exrPath, setExrPath] = useState<string | null>(null);
+
+  /** Droplet / 脚本事件管理器两个弹窗共用一个状态。 */
+  const [automate, setAutomate] = useState<"droplet" | "events" | null>(null);
+
+  const openExr = useCallback(async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "OpenEXR", extensions: ["exr", "exrs"] }],
+      });
+      if (typeof picked === "string") setExrPath(picked);
+    } catch (e) {
+      setToast(`选文件失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
+  /**
+   * 文件 > 导入 > WIA 支持：真实的 Windows 图像采集。
+   *
+   * 先如实检查设备（没有就明说），再由 WIA 弹出系统自带的设备选择与
+   * 厂商扫描对话框；扫好的文件落进用户选的文件夹，随后逐张作为文档打开。
+   */
+  const wiaImport = useCallback(async () => {
+    try {
+      const count = await invoke<number>("wia_device_count", { all: false });
+      if (!count) {
+        setToast(
+          "本机没有检测到 WIA 扫描仪 / 相机 —— 请先接好设备并装上厂商驱动，再试一次。",
+        );
+        return;
+      }
+      const dir = await open({
+        directory: true,
+        multiple: false,
+        title: "选择扫描结果保存的文件夹",
+      });
+      if (typeof dir !== "string") return;
+      setToast("已打开系统扫描对话框，扫好的图会自动进入 Strata…");
+      const files = await invoke<string[]>("wia_acquire", {
+        folder: dir,
+        baseName: `strata-scan-${Date.now()}`,
+      });
+      if (!files.length) {
+        setToast("扫描已取消，没有新文件");
+        return;
+      }
+      for (const f of files) {
+        const opened = await openFileToDoc(f);
+        onOpenDoc(opened.doc);
+      }
+      setToast(`已从扫描仪导入 ${files.length} 张图`);
+    } catch (e) {
+      setToast(`WIA 扫描失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [onOpenDoc]);
+
+  /**
+   * 文件 > 导出 > 路径到 Illustrator。
+   *
+   * Strata 没有矢量路径对象（如实声明过），所以这里导出的是活动图层
+   * Alpha 剪影描出来的 SVG 轮廓 —— Illustrator 可以直接打开再加工。
+   * Adobe 私有的 .ai 格式写不了，界面上不冒充。
+   */
+  const exportPathsToIllustrator = useCallback(async () => {
+    if (!doc) return;
+    const layer = doc.layers.find((l) => l.id === doc.activeLayerId) ?? doc.layers[0];
+    if (!layer) {
+      setToast("这份文档没有可描的图层");
+      return;
+    }
+    try {
+      const ctx = mustCtx(layer.surface);
+      const img = ctx.getImageData(0, 0, layer.surface.width, layer.surface.height);
+      const loops = traceAlphaLoops(img.data, img.width, img.height);
+      if (loops.length === 0) {
+        setToast("这个图层没有不透明像素，描不出轮廓");
+        return;
+      }
+      const target = await save({
+        defaultPath: `${layer.name}.svg`,
+        filters: [{ name: "SVG 轮廓（Illustrator 可打开）", extensions: ["svg"] }],
+      });
+      if (typeof target !== "string") return;
+      const svg = loopsToSvg(loops, img.width, img.height);
+      await writeFileBytes(target, new TextEncoder().encode(svg));
+      setToast(
+        `已导出 ${loops.length} 条轮廓为 SVG（Illustrator 可直接打开；.ai 是 Adobe 私有格式，Strata 不冒充）`,
+      );
+    } catch (e) {
+      setToast(`导出路径失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [doc]);
+
+  const renderVideoGif = useCallback(async () => {
+    if (!renderVideo || !doc) return;
+    const idx = doc.layers.findIndex((l) => isVideoLayer(l));
+    const vid = doc.layers[idx];
+    if (!vid || !isVideoLayer(vid)) {
+      setToast("这份文档没有视频图层 —— 先用「图层 > 视频图层」建一层，或导入视频帧");
+      setRenderVideo(null);
+      return;
+    }
+    try {
+      const scale = renderVideo.scale;
+      const cap = renderVideo.maxSide;
+      const k = Math.min(scale, cap / Math.max(doc.width, doc.height), 1);
+      const w = Math.max(1, Math.round(doc.width * k));
+      const h = Math.max(1, Math.round(doc.height * k));
+      const frames = vid.video.frames.map((fr, fi) => {
+        const frameSrc = vid.video.showAltered ? fr.surface : vid.video.originals[fi];
+        const full = createSurface(doc.width, doc.height);
+        composeDoc(doc, full, { index: idx, layer: { ...vid, surface: frameSrc } });
+        const out = createSurface(w, h);
+        const ctx = mustCtx(out);
+        ctx.imageSmoothingQuality = "high";
+        // GIF 没有半透明，垫白底再合成，避免透明区被量化成脏色
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(full, 0, 0, w, h);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        return { data: new Uint8ClampedArray(data), width: w, height: h, delay: fr.hold };
+      });
+      const bytes = encodeGif(frames);
+      const target = await save({
+        defaultPath: `${doc.name}.gif`,
+        filters: [{ name: "GIF 动图", extensions: ["gif"] }],
+      });
+      if (typeof target !== "string") return;
+      await writeFileBytes(target, bytes);
+      setRenderVideo(null);
+      setToast(
+        `已渲染 ${frames.length} 帧（${w}×${h}，共 ${(bytes.length / 1024).toFixed(0)} KB）`,
+      );
+    } catch (e) {
+      setToast(`渲染视频失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [renderVideo, doc]);
+
   /** 文件 > 导入 > 视频帧到图层：多张图按顺序成为帧。 */
   const importVideoFrames = useCallback(async () => {
     const picked = await open({
@@ -4002,14 +4209,31 @@ export default function EditorShell({
     [doc, onCommit],
   );
 
+  /**
+   * 删除像素：有选区删选区，没选区清整层（对齐 PS —— 空选区时 Ctrl+X / Delete
+   * 作用对象就是整个图层）。以前这里只认选区，于是没选区时「剪切 / 清除」
+   * 两个菜单项一直是灰的，用户看着像功能没做。
+   */
   const doDeletePixels = useCallback(() => {
+    if (!hasSelection) {
+      const act = activeLayer(doc);
+      if (!act || act.kind !== "pixel" || act.locked) {
+        setError(zh.selection.noPixelLayer);
+        return;
+      }
+      onCommit(
+        updateLayer(doc, act.id, { surface: createSurface(doc.width, doc.height) }),
+        "清除整层",
+      );
+      return;
+    }
     const next = deleteSelection(doc);
     if (next === doc) {
       setError(zh.selection.noPixelLayer);
       return;
     }
     onCommit(next, zh.selection.deleted);
-  }, [doc, onCommit]);
+  }, [doc, hasSelection, onCommit]);
 
   /**
    * 内容识别填充：把选区里的东西抹掉，再用图里别处的纹理补回来。
@@ -4097,7 +4321,25 @@ export default function EditorShell({
   /* ---------------------------------------------------- 剪切 / 复制 / 粘贴 */
 
   /** 剪切：先拷进剪贴板，再抹掉选区内的像素。 */
+  /** 剪切：无选区时把整层剪进剪贴板（PS 同款行为）。 */
   const doCut = useCallback(() => {
+    if (!hasSelection) {
+      const act = activeLayer(doc);
+      if (!act || act.kind !== "pixel" || act.locked) {
+        setError(zh.selection.noPixelLayer);
+        return;
+      }
+      if (!copyToClipboard(doc, false)) {
+        setError(zh.selection.noPixelLayer);
+        return;
+      }
+      setClipTick((v) => v + 1);
+      onCommit(
+        updateLayer(doc, act.id, { surface: createSurface(doc.width, doc.height) }),
+        "剪切整层",
+      );
+      return;
+    }
     const next = cutSelection(doc);
     if (next === doc) {
       setError(zh.selection.noPixelLayer);
@@ -4105,7 +4347,7 @@ export default function EditorShell({
     }
     setClipTick((v) => v + 1);
     onCommit(next, zh.hint.cutDone);
-  }, [doc, onCommit]);
+  }, [doc, hasSelection, onCommit]);
 
   /** 复制；merged = true 时连可见图层一起合成（PS 的「复制合并」）。 */
   const doCopy = useCallback(
@@ -4593,7 +4835,7 @@ export default function EditorShell({
           };
         }
         case "edit.fade": {
-          if (historyIndex <= 0) return undefined;
+          if (historyIndex <= 0) return { hint: "还没有上一步可以渐隐" };
           return {
             run: () => setFadeDialog("60"),
             hint: historyLabels[historyIndex],
@@ -5397,6 +5639,20 @@ export default function EditorShell({
           return { run: () => void revertFile() };
         case "file.export.saveForWebLegacy":
           return { run: () => setWebOpts({ format: "jpg", quality: 80, scale: 1 }) };
+        case "file.export.renderVideo":
+          return { run: () => setRenderVideo({ scale: 1, maxSide: 1024 }) };
+        case "file.scripts.browse":
+          return { run: () => setBrowseOpen(true) };
+        case "file.openExrParts":
+          return { run: () => void openExr() };
+        case "file.export.pathsToIllustrator":
+          return { run: () => void exportPathsToIllustrator() };
+        case "file.automate.createDroplet":
+          return { run: () => setAutomate("droplet") };
+        case "file.scripts.scriptEventsManager":
+          return { run: () => setAutomate("events") };
+        case "file.import.wiaSupport":
+          return { run: () => void wiaImport() };
         case "file.import.videoFramesToLayers":
           return { run: () => void importVideoFrames() };
         case "file.scripts.imageProcessor":
@@ -5623,7 +5879,7 @@ export default function EditorShell({
         case "window.workspace.graphicAndWeb":
           return {
             run: () => {
-              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
+              setDockOpen({ grade: false, props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
               setPrefs({ activeWorkspace: "平面与 Web" });
               setToast("工作区：平面与 Web（颜色 + 属性 + 图层）");
             },
@@ -5632,7 +5888,7 @@ export default function EditorShell({
         case "window.workspace.motion":
           return {
             run: () => {
-              setDockOpen({ props: false, color: false, layers: true, history: true, navigator: false, histogram: false, scopes: true });
+              setDockOpen({ grade: false, props: false, color: false, layers: true, history: true, navigator: false, histogram: false, scopes: true });
               setPrefs({ activeWorkspace: "动效" });
               setToast("工作区：动效（图层 + 历史 + 示波器）");
             },
@@ -6576,23 +6832,33 @@ export default function EditorShell({
             },
           };
         case "edit.undo":
-          return canUndo ? { run: onUndo, hint: "Ctrl+Z" } : undefined;
+          return canUndo
+            ? { run: onUndo, hint: "Ctrl+Z" }
+            : { hint: "还没有可撤销的步骤" };
         case "edit.redo":
-          return canRedo ? { run: onRedo, hint: "Ctrl+Shift+Z" } : undefined;
+          return canRedo
+            ? { run: onRedo, hint: "Ctrl+Shift+Z" }
+            : { hint: "没有可重做的步骤" };
         case "edit.cut":
-          return hasSelection ? { run: doCut, hint: "Ctrl+X" } : undefined;
+          return { run: doCut, hint: hasSelection ? "Ctrl+X" : "Ctrl+X · 无选区时剪整层" };
         case "edit.copy":
           return { run: () => doCopy(false), hint: "Ctrl+C" };
         case "edit.copyMerged":
           return { run: () => doCopy(true) };
         case "edit.paste":
-          return canPaste ? { run: doPaste, hint: "Ctrl+V" } : undefined;
+          return canPaste
+            ? { run: doPaste, hint: "Ctrl+V" }
+            : { hint: "剪贴板里还没有内容（先拷贝或剪切）" };
         case "edit.clear":
-          return hasSelection ? { run: doDeletePixels, hint: "Delete" } : undefined;
+          return {
+            run: doDeletePixels,
+            hint: hasSelection ? "Delete" : "Delete · 无选区时清整层",
+          };
         case "edit.fill":
           return { run: () => doFill(fg) };
         case "edit.stroke":
           // 描边宽度默认给 3px；选项条上的羽化值若已设，顺手沿用
+          if (!hasSelection) return { hint: "需要先建立选区" };
           return hasSelection
             ? {
                 run: () =>
@@ -6607,13 +6873,15 @@ export default function EditorShell({
         case "edit.search":
           return { run: () => setPalette(true) };
         case "edit.contentAwareFill":
-          return hasSelection ? { run: doInpaint } : undefined;
+          return hasSelection
+            ? { run: doInpaint }
+            : { hint: "需要先建立选区（告诉程序补哪一块）" };
         case "edit.freeTransform":
           return freeActive
             ? { run: commitFreeTransform, hint: "Enter" }
             : canTransform
-              ? { run: beginFreeTransform }
-              : undefined;
+              ? { run: beginFreeTransform, hint: "Ctrl+T" }
+              : { hint: "当前图层不能变换（调整层 / 图层组 / 已锁定）" };
         case "edit.transform.rotate90Cw":
           return { run: () => onCommit(rotateLayerQuarter(doc, 90), "图层旋转 90°（顺时针）") };
         case "edit.transform.rotate90Ccw":
@@ -6621,15 +6889,15 @@ export default function EditorShell({
         case "edit.transform.rotate180":
           return canTransform
             ? { run: () => onCommit(rotateLayerHalf(doc), zh.menu.rotateHalf) }
-            : undefined;
+            : { hint: "当前图层不能变换（调整层 / 图层组 / 已锁定）" };
         case "edit.transform.flipHorizontal":
           return canTransform
             ? { run: () => onCommit(flipLayer(doc, "h"), zh.menu.flipH) }
-            : undefined;
+            : { hint: "当前图层不能变换（调整层 / 图层组 / 已锁定）" };
         case "edit.transform.flipVertical":
           return canTransform
             ? { run: () => onCommit(flipLayer(doc, "v"), zh.menu.flipV) }
-            : undefined;
+            : { hint: "当前图层不能变换（调整层 / 图层组 / 已锁定）" };
         case "edit.keyboardShortcuts":
           return { run: () => setModal("shortcuts") };
         case "edit.preferences.general":
@@ -7360,7 +7628,7 @@ export default function EditorShell({
           return {
             run: () => {
               pickWorkspace("photo");
-              setDockOpen({ props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
+              setDockOpen({ grade: false, props: true, color: true, layers: true, history: false, navigator: false, histogram: false, scopes: false });
             },
           };
         case "window.theme.toggle":
@@ -7604,7 +7872,81 @@ export default function EditorShell({
       }
     };
 
-    const groups = buildMenuGroups(resolve);
+
+    /**
+     * 「为什么这一项灰着」。
+     *
+     * 656 个菜单项全都接了入口 —— 剩下的灰不是没做，而是缺前置条件
+     * （没有选区 / 图层类型不对 / 没有历史 / 剪贴板空）。以前这些项灰着
+     * 又没有任何说明，用户自然会以为"入口没开"。这里给一份集中说明，
+     * 悬停就能看到缺什么；判断逻辑一行没改。
+     */
+    const GREY_REASON: Record<string, string> = {
+      "file.closeOthers": "只有一份文档时没有「其它」可关",
+      "filter.lastFilter": "还没用过滤镜（用一次之后这里会变成「上次滤镜」）",
+      "edit.pasteSpecial.pasteInPlace": "剪贴板里还没有内容（先拷贝或剪切）",
+      "edit.pasteSpecial.pasteInto": "需要同时有选区与剪贴板内容",
+      "layer.new.layerViaCopy": "需要先建立选区（拷贝出来的新层就是选区内容）",
+      "layer.new.layerViaCut": "需要先建立选区（剪切出来的新层就是选区内容）",
+      "layer.delete.hiddenLayers": "当前没有隐藏的图层",
+      "layer.quickExportAsPng": "选中的不是像素图层（调整层 / 图层组导不出图）",
+      "layer.exportAs": "选中的不是像素图层（调整层 / 图层组导不出图）",
+      "layer.mergeVisible": "当前没有可见图层",
+      "layer.mergeLayers": "需要至少两层，且最底层不能是调整层或组",
+      "layer.ungroupLayers": "选中的不是图层组",
+      "layer.layerStyle.copy": "这一层还没有图层样式",
+      "layer.layerStyle.copyLayerStyle": "这一层还没有图层样式",
+      "layer.layerStyle.paste": "剪贴板里还没有图层样式",
+      "layer.layerStyle.pasteLayerStyle": "剪贴板里还没有图层样式",
+      "layer.layerStyle.clear": "这一层还没有图层样式",
+      "layer.layerStyle.createLayer": "这一层还没有图层样式",
+      "layer.matting.removeWhiteMatte": "选中的不是像素图层",
+      "layer.matting.colorDecontaminate": "选中的不是像素图层",
+      "layer.smartObjects.convertToSmartObject": "选中的不是像素图层",
+      "layer.smartObjects.rasterize": "选中的不是智能对象",
+      "layer.rasterize.smartObject": "选中的不是智能对象",
+      "layer.smartObjects.convertToLayers": "选中的不是智能对象",
+      "layer.smartObjects.newSmartObjectViaCopy": "选中的不是智能对象",
+      "layer.layerMask.add": "需要选中一个没有蒙版的像素图层",
+      "layer.layerMask.addReveal": "需要选中一个没有蒙版的像素图层",
+      "layer.layerMask.revealAll": "需要选中一个没有蒙版的像素图层",
+      "layer.layerMask.hideAll": "需要选中一个没有蒙版的像素图层",
+      "layer.layerMask.fromTransparency": "需要选中一个没有蒙版的像素图层",
+      "layer.layerMask.addSelection": "需要像素图层 + 选区，且该层还没有蒙版",
+      "layer.layerMask.revealSelection": "需要像素图层 + 选区，且该层还没有蒙版",
+      "layer.layerMask.hideSelection": "需要像素图层 + 选区，且该层还没有蒙版",
+      "layer.layerMask.toggle": "这一层还没有蒙版",
+      "layer.layerMask.enabled": "这一层还没有蒙版",
+      "layer.layerMask.delete": "这一层还没有蒙版",
+      "layer.layerMask.apply": "这一层没有可应用的蒙版",
+      "layer.clipping.toggle": "选中的图层不能做剪贴蒙版（调整层不行）",
+      "layer.createClippingMask": "选中的图层不能做剪贴蒙版（调整层不行）",
+      "layer.releaseClippingMask": "这一层当前不是剪贴蒙版",
+      "layer.arrange.bringForward": "已经是最上层，或图层组内无法移动",
+      "layer.arrange.bringToFront": "已经是最上层，或图层组内无法移动",
+      "layer.arrange.sendBackward": "已经是最下层，或图层组内无法移动",
+      "layer.arrange.sendToBack": "已经是最下层，或图层组内无法移动",
+      "layer.arrange.reverse": "至少要两层才能反转顺序",
+      "select.deselect": "当前没有选区",
+      "select.inverse": "当前没有选区（反转需要一个基础选区）",
+      "select.modify.feather": "需要先建立选区",
+      "select.modify.expand": "需要先建立选区",
+      "select.modify.contract": "需要先建立选区",
+      "select.modify.border": "需要先建立选区",
+      "select.modify.smooth": "需要先建立选区",
+      "select.similar": "需要先建立选区",
+      "select.transformSelection": "需要选区 + 可变换的像素图层",
+    };
+
+    /** 包一层：拿不到可执行动作时，至少给一句「为什么灰」。 */
+    const resolveWithReason: MenuResolver = (id) => {
+      const st = resolve(id);
+      if (st) return st;
+      const why = GREY_REASON[id];
+      return why ? { hint: why } : undefined;
+    };
+
+    const groups = buildMenuGroups(resolveWithReason);
 
     // 右键菜单与顶部菜单共用同一份命令表：把 resolve 转发给上面的 resolveRef
     resolveRef.current = resolve;
@@ -7656,8 +7998,15 @@ export default function EditorShell({
       { kind: "item", label: "最近打开", children: recent },
     ]);
 
-    /* 窗口末尾：已打开的文档列表，当前文档打勾。 */
+    /* 窗口末尾：调色台入口 + 已打开的文档列表，当前文档打勾。 */
     appendToGroup(groups, "window", [
+      { kind: "sep" },
+      {
+        kind: "item",
+        label: "调色台",
+        checked: dockOpen.grade,
+        onSelect: () => setDockOpen((d) => ({ ...d, grade: !d.grade })),
+      },
       { kind: "sep" },
       ...docs.map((d) => ({
         kind: "item" as const,
@@ -7818,12 +8167,44 @@ export default function EditorShell({
       return;
     }
     const el = e.target as HTMLElement | null;
-    if (el?.tagName === "INPUT" || el?.tagName === "TEXTAREA" || el?.isContentEditable) return;
+    /**
+     * 只有「真的在打字」的控件才让路给浏览器的原生撤销。
+     *
+     * 之前是一刀切 `INPUT 就 return` —— 于是拖完滑杆（input[type=range]）
+     * 焦点还留在滑杆上，Ctrl+Z 被整个吞掉，用户眼里就是「撤销对很多操作无效」。
+     * range / checkbox / radio / button / color 这些控件根本没有原生撤销可言，
+     * 一律交给应用的撤销栈。
+     */
+    const inputType = el instanceof HTMLInputElement ? el.type : "";
+    const typing =
+      el?.tagName === "TEXTAREA" ||
+      Boolean(el?.isContentEditable) ||
+      ["text", "search", "url", "email", "password", "tel"].includes(inputType);
 
-    // Enter：把进行中的自由变换落库（放在输入框早退之后，打字时不受影响）
-    if (e.key === "Enter" && commitFreeTransform()) {
-      e.preventDefault();
-      return;
+    // 撤销 / 重做提到输入框判断之前：这是全应用最常用的键，不能被控件吞掉
+    if ((e.ctrlKey || e.metaKey) && !typing) {
+      const key = e.key.toLowerCase();
+      if (key === "z" || key === "y") {
+        e.preventDefault();
+        if (key === "y" || e.shiftKey) onRedo();
+        else onUndo();
+        return;
+      }
+    }
+
+    if (typing) return;
+
+    // Enter：多边形套索先闭合（PS 的老规矩），其次才轮到自由变换落库
+    if (e.key === "Enter") {
+      if (polyPts && polyPts.length >= 3) {
+        e.preventDefault();
+        commitPoly(polyPts);
+        return;
+      }
+      if (commitFreeTransform()) {
+        e.preventDefault();
+        return;
+      }
     }
 
     const mod = e.ctrlKey || e.metaKey;
@@ -7834,18 +8215,7 @@ export default function EditorShell({
         setPalette((v) => !v);
         return;
       }
-      if (k === "z") {
-        e.preventDefault();
-        if (e.shiftKey) onRedo();
-        else onUndo();
-        return;
-      }
-      if (k === "y") {
-        e.preventDefault();
-        onRedo();
-        return;
-      }
-      // 编辑区通用快捷键：全选 / 复制 / 剪切 / 粘贴 / 重做（之前只绑了 Z/Y，A/C/X/V 缺失）
+      // 编辑区通用快捷键：全选 / 复制 / 剪切 / 粘贴（Z / Y 已在上面处理）
       if (k === "a") {
         e.preventDefault();
         doSelectAll();
@@ -8322,7 +8692,33 @@ export default function EditorShell({
             onOpenBrushPanel={() => setBrushPanelOpen(true)}
           />
           )}
-          <div className="editor-viewport" ref={viewportRef}>
+          <div
+            className="editor-viewport"
+            ref={viewportRef}
+            onPointerDown={(e) => {
+              /**
+               * 多边形套索允许点到画布外（对齐 PS）：
+               * 画布内的点击由 canvas 自己的逻辑处理（这里直接跳过），
+               * 落在画布外的灰底上则补一个顶点 —— 老版只能在画布内点，
+               * 想把猫连同外圈的空白一起套进去就做不到。
+               */
+              if (tool !== "polyLasso") return;
+              if (e.target === canvasRef.current) return;
+              if (e.button !== 0) return;
+              const p = docXY(e.clientX, e.clientY);
+              if (!polyPts) {
+                polyModeRef.current = modeWithMods(e.shiftKey, e.altKey, selectionMode);
+                setPolyPts([p]);
+                return;
+              }
+              const first = polyPts[0];
+              if (polyPts.length >= 3 && Math.hypot(p.x - first.x, p.y - first.y) <= 10 / scale) {
+                commitPoly(polyPts);
+                return;
+              }
+              setPolyPts([...polyPts, p]);
+            }}
+          >
             <div
               className="editor-stage"
               style={{
@@ -8660,6 +9056,35 @@ export default function EditorShell({
           }
           histogram={<HistogramPanel source={compRef.current} version={panelTick} />}
           scopes={<ScopesPanel source={compRef.current} version={panelTick} />}
+          grade={
+            gradeLayer ? (
+              <GradePanel
+                doc={doc}
+                layer={gradeLayer}
+                onChange={onCommit}
+                onPreview={onPreview}
+              />
+            ) : (
+              <div className="grade-create">
+                <p className="grade-create-lead">
+                  调色台是非破坏的：先建一个「调色台」调整层，再在它上面拉滑杆。
+                  它只作用于下方已合成的画面，随时可关、可删、可撤。
+                </p>
+                <button
+                  type="button"
+                  className="btn-primary btn-sm"
+                  onClick={() =>
+                    onCommit(addAdjustLayer(doc, newAdjustState("grade")), "新建调色台")
+                  }
+                >
+                  新建调色层
+                </button>
+                <p className="grade-create-note">
+                  一级校色 / 四档色轮 / 色彩切片器 / 曲线都在这一层上；滑杆松手才记一步历史。
+                </p>
+              </div>
+            )
+          }
           color={
             <ColorPanel
               fg={fg}
@@ -8931,6 +9356,76 @@ export default function EditorShell({
             （质量只对 JPG / WebP 有效）
           </p>
         </Modal>
+      )}
+      {/* 文件 > 导出 > 渲染视频（帧序列 → GIF 动图） */}
+      {renderVideo && (
+        <Modal
+          title="渲染视频（导出 GIF 动图）"
+          onClose={() => setRenderVideo(null)}
+          width={440}
+          footer={
+            <>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setRenderVideo(null)}>
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={() => void renderVideoGif()}>
+                渲染…
+              </button>
+            </>
+          }
+        >
+          <label className="field">
+            <span className="field-label">缩放</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={0.05}
+                min={0.05}
+                max={4}
+                value={renderVideo.scale}
+                onChange={(e) =>
+                  setRenderVideo({ ...renderVideo, scale: Number(e.target.value) || 1 })
+                }
+              />
+              <span className="field-unit">×</span>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">最长边上限</span>
+            <span className="field-input">
+              <input
+                type="number"
+                step={128}
+                min={64}
+                max={4096}
+                value={renderVideo.maxSide}
+                onChange={(e) =>
+                  setRenderVideo({ ...renderVideo, maxSide: Number(e.target.value) || 1024 })
+                }
+              />
+              <span className="field-unit">px</span>
+            </span>
+          </label>
+          <p className="isz-hint">
+            把视频图层的每一帧按图层栈合成后导出为 GIF 动图（循环播放）。
+            GIF 没有半透明与 HDR，透明区按白底导出；大图会被压到最长边上限再编码。
+          </p>
+        </Modal>
+      )}
+      {/* 文件 > 脚本 > 浏览（Bridge 式文件夹浏览） */}
+      {browseOpen && (
+        <BrowseDialog onClose={() => setBrowseOpen(false)} onOpenDoc={onOpenDoc} />
+      )}
+      {/* 文件 > 打开 EXR 部件 */}
+      {exrPath && (
+        <ExrDialog path={exrPath} onClose={() => setExrPath(null)} onOpenDoc={onOpenDoc} />
+      )}
+      {/* 文件 > 自动 > 创建 Droplet / 文件 > 脚本 > 脚本事件管理器 */}
+      {automate === "droplet" && (
+        <CreateDropletDialog onClose={() => setAutomate(null)} onDone={setToast} />
+      )}
+      {automate === "events" && (
+        <ScriptEventsDialog onClose={() => setAutomate(null)} onDone={setToast} />
       )}
       {/* 编辑 > 检查拼写（文本层的排版与错拼检查） */}
       {proofread && (
@@ -10426,6 +10921,7 @@ export default function EditorShell({
           onBrush={(patch) => setBrush((b) => ({ ...b, ...patch }))}
           onResetLayout={() =>
             setDockOpen({
+              grade: false,
               props: true,
               color: true,
               layers: true,

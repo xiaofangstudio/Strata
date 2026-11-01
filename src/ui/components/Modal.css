@@ -22,6 +22,12 @@
   animation: modal-in var(--dur) var(--ease);
 }
 
+/* 固定高度弹窗：内容区吃掉剩余空间自己滚，弹窗整体尺寸恒定 */
+.modal.is-fixed .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -170,4 +176,40 @@
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: var(--r-sm);
+}
+
+/* ---------- 关于页：免责声明 ---------- */
+
+.about-disclaimer {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.about-disclaimer-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.about-disclaimer ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.about-disclaimer li {
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+.about-disclaimer-full {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
 }

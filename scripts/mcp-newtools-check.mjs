@@ -324,6 +324,52 @@ try {
     if (!String(proof.parsed.fixed).includes("，")) throw new Error("半角逗号没被修正");
   });
 
+  /**
+   * 调色台：必须**真的改变像素**，不能只看有没有报错。
+   *
+   * 之前就是这么漏掉的：算子读参数的键口径和调用方不一致，调用返回 success，
+   * 但内部参数全是中性 —— 结果像素一点没动。这里用预览 base64 前后比对，
+   * 中性 vs 暖调必须不同。
+   */
+  const gBase = await client.call("strata_adjust_image", {
+    sessionId: sid,
+    ops: [{ type: "grade" }],
+    preview: true,
+  });
+  const gFlat = await client.call("strata_adjust_image", {
+    sessionId: sid,
+    ops: [{ type: "grade", temp: 80, contrast: 30 }],
+    preview: true,
+  });
+  const gNest = await client.call("strata_adjust_image", {
+    sessionId: sid,
+    ops: [{ type: "grade", params: { temp: 80, contrast: 30 } }],
+    preview: true,
+  });
+  check("strata_adjust_image · grade 真的改变了像素（平铺 / 嵌套）", () => {
+    if (gBase.isError) throw new Error(`中性调用失败：${gBase.parsed.error}`);
+    if (gFlat.isError) throw new Error(`平铺写法失败：${gFlat.parsed.error}`);
+    if (gNest.isError) throw new Error(`嵌套写法失败：${gNest.parsed.error}`);
+    const b = gBase.parsed.previewBase64;
+    const f = gFlat.parsed.previewBase64;
+    const n = gNest.parsed.previewBase64;
+    if (!b || !f) throw new Error("没有拿到预览图");
+    if (b === f) throw new Error("暖调后像素没变 —— 参数没被算子读到");
+  });
+
+  // 曲线也要跟着生效（同一层上的复合曲线）
+  const gCurve = await client.call("strata_adjust_image", {
+    sessionId: sid,
+    ops: [{ type: "grade", curves: { rgb: [{ x: 0, y: 0 }, { x: 0.5, y: 0.72 }, { x: 1, y: 1 }] } }],
+    preview: true,
+  });
+  check("strata_adjust_image · grade 曲线也生效", () => {
+    if (gCurve.isError) throw new Error(gCurve.parsed.error);
+    if (gCurve.parsed.previewBase64 === gBase.parsed.previewBase64) {
+      throw new Error("曲线没被应用");
+    }
+  });
+
   // 能力清单应能列出全部滤镜与颜色模式
   const caps = await client.call("strata_capabilities", {});
   check("strata_capabilities · imageOps", () => {

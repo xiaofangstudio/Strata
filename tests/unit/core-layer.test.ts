@@ -90,8 +90,8 @@ describe("混合模式表 BLEND_MODES", () => {
 });
 
 describe("调整定义表 ADJUST_DEFS", () => {
-  it("31 条且 id 唯一", () => {
-    expect(ADJUST_DEFS).toHaveLength(31);
+  it("32 条（新增调色台）且 id 唯一", () => {
+    expect(ADJUST_DEFS).toHaveLength(32);
     const ids = ADJUST_DEFS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
   });

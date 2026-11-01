@@ -1,0 +1,539 @@
+/**
+ * 调色台面板样式（达芬奇 Color 页的取向：紧凑、暗底、以数值为主）。
+ *
+ * 两条硬约束（上一版被打回的原因）：
+ *  · **不横向溢出**：每个滑杆行的滑杆列用 minmax(0, 1fr)，range 的固有最小宽度
+ *    不会把右侧数值框顶出面板；内容区禁止横向滚动。
+ *  · **窄面板可用、宽面板更好用**：卡片按 auto-fit 排列，坞拖宽了自动变两列。
+ */
+
+.grade {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  font-size: var(--fs-xs);
+}
+
+.grade-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* ---------- 顶栏：预设 / 对比 / 复位 ---------- */
+
+.grade-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+}
+
+.grade-preset {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.grade-preset:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.grade-tool {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+.grade-tool:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.grade-tool.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.grade-tool:disabled {
+  opacity: 0.45;
+}
+
+/* ---------- 子页签 ---------- */
+
+.grade-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.grade-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.grade-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.grade-tab.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.grade-tab-icon {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.grade-tabs-sub {
+  margin-bottom: 4px;
+}
+
+/* ---------- 内容区 ---------- */
+
+.grade-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+.grade-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.grade-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong, var(--border));
+  border-radius: 4px;
+}
+
+.grade-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 宽面板自动两列；窄面板一列。下限 156px：326 宽的坞仍是单列 */
+.gp-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.gp-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ---------- 卡片 ---------- */
+
+.gc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 7px 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.gc-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gc-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gc-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gc-reset {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: 3px;
+}
+
+.gc-reset:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.gc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* ---------- 滑杆行 ---------- */
+
+.gs {
+  display: grid;
+  /* 1fr 必须写成 minmax(0, 1fr)：range 的固有最小宽度否则会顶开布局 */
+  grid-template-columns: minmax(38px, 58px) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gs-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.gs-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  height: 16px;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.gs-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong, var(--border));
+}
+
+.gs-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.gs-range:hover::-webkit-slider-thumb,
+.gs-range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.gs-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong, var(--border));
+}
+
+.gs-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.gs-range:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.gs-num {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  padding: 0 3px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  text-align: right;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  -moz-appearance: textfield;
+}
+
+.gs-num:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.gs-num::-webkit-outer-spin-button,
+.gs-num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ---------- 色轮 ---------- */
+
+.gp-wheels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 6px;
+}
+
+.gp-wheel-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 5px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.gw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.gw-wheel {
+  position: relative;
+  width: 68px;
+  height: 68px;
+  max-width: 100%;
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.gw-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  /* 色相按角度、饱和按半径：中心偏灰，与内核「向量越远越浓」一致 */
+  background:
+    radial-gradient(closest-side, var(--surface) 0%, transparent 76%),
+    conic-gradient(
+      from 0deg,
+      hsl(0 85% 55%),
+      hsl(60 85% 55%),
+      hsl(120 85% 55%),
+      hsl(180 85% 55%),
+      hsl(240 85% 55%),
+      hsl(300 85% 55%),
+      hsl(360 85% 55%)
+    );
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.gw-puck {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.gw-label {
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.gw-meta {
+  display: flex;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.gw-meta b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.gp-wheel-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+}
+
+/* ---------- 切片器 ---------- */
+
+.gs-card {
+  display: grid;
+  grid-template-columns: 10px minmax(26px, 34px) 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 5px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gs-card:hover {
+  background: var(--surface-2);
+}
+
+/* 这段动过参数：留个记号，一眼看出调了哪几段 */
+.gs-card.is-active {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.gs-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.gs-name {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gs-row-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* ---------- 曲线 ---------- */
+
+.gp-curve {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.gp-curve-svg {
+  width: 100%;
+  height: 190px;
+  max-height: 42vh;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  touch-action: none;
+  cursor: crosshair;
+  background: var(--surface-2);
+}
+
+.gp-curve-bg {
+  fill: var(--surface-2);
+}
+
+.gp-curve-grid line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.gp-curve-diag {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* ---------- 还没有调色层时的引导 ---------- */
+
+.grade-create {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 2px;
+}
+
+.grade-create-lead,
+.grade-create-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+.grade-create-lead {
+  color: var(--text-2);
+}

@@ -3,7 +3,7 @@
  *
  * 布局与 PS 首选项同构：左侧页面列表 + 右侧内容。
  *
- * **尺寸稳定**：整个面板的高度固定（见 Preferences.css 的 `.pref` 高度），
+ * **尺寸稳定**：弹窗整体固定 620px 高（Modal 的 height 参数），
  * 右侧内容区自己滚动。之前是按内容撑高，切换页面时窗口忽大忽小 —— 现在不会了。
  *
  * 每一条设置都真的被代码消费（不是装饰）：历史步数进 HistoryStack、网格间距进网格浮层、
@@ -58,26 +58,64 @@ interface Props {
   onClearRecent?: () => void;
 }
 
-const PAGES: { id: PrefPage; label: string }[] = [
-  { id: "general", label: "常规" },
-  { id: "interface", label: "界面" },
-  { id: "workspace", label: "工作区" },
-  { id: "tools", label: "工具" },
-  { id: "brush", label: "画笔" },
-  { id: "historyLog", label: "历史记录" },
-  { id: "fileHandling", label: "文件处理" },
-  { id: "export", label: "导出" },
-  { id: "performance", label: "性能" },
-  { id: "scratchDisks", label: "暂存盘" },
-  { id: "cursors", label: "光标" },
-  { id: "transparencyAndGamut", label: "透明与色域" },
-  { id: "unitsAndRulers", label: "单位与标尺" },
-  { id: "guidesGridAndSlices", label: "参考线、网格" },
-  { id: "type", label: "文字" },
-  { id: "enhancedControls", label: "增强控件" },
-  { id: "rawDefaults", label: "Raw 默认" },
-  { id: "plugIns", label: "增效工具" },
-  { id: "integrations", label: "AI 集成" },
+/**
+ * 19 个页签按语义归成 6 组，左侧栏两级结构。
+ * 页签 id 一个没动 —— Edit > Preferences 各菜单条目仍按原 id 直达。
+ */
+const GROUPS: { id: string; label: string; pages: { id: PrefPage; label: string }[] }[] = [
+  {
+    id: "general",
+    label: "常规",
+    pages: [
+      { id: "general", label: "常规" },
+      { id: "interface", label: "界面" },
+      { id: "cursors", label: "光标" },
+      { id: "enhancedControls", label: "增强控件" },
+      { id: "workspace", label: "工作区" },
+      { id: "unitsAndRulers", label: "单位与标尺" },
+      { id: "guidesGridAndSlices", label: "参考线、网格" },
+    ],
+  },
+  {
+    id: "editing",
+    label: "编辑",
+    pages: [
+      { id: "tools", label: "工具" },
+      { id: "brush", label: "画笔" },
+      { id: "type", label: "文字" },
+      { id: "historyLog", label: "历史记录" },
+    ],
+  },
+  {
+    id: "files",
+    label: "文件",
+    pages: [
+      { id: "fileHandling", label: "文件处理" },
+      { id: "export", label: "导出" },
+      { id: "rawDefaults", label: "Raw 默认" },
+    ],
+  },
+  {
+    id: "color",
+    label: "色彩",
+    pages: [{ id: "transparencyAndGamut", label: "透明与色域" }],
+  },
+  {
+    id: "performance",
+    label: "性能",
+    pages: [
+      { id: "performance", label: "性能" },
+      { id: "scratchDisks", label: "暂存盘" },
+    ],
+  },
+  {
+    id: "misc",
+    label: "其他",
+    pages: [
+      { id: "plugIns", label: "增效工具" },
+      { id: "integrations", label: "AI 集成" },
+    ],
+  },
 ];
 
 /** 本地存储占用（KB），暂存盘页显示用。 */
@@ -128,6 +166,7 @@ export default function Preferences({
       title={zh.preferences.title}
       onClose={onClose}
       width={760}
+      height={620}
       footer={
         <>
           <button type="button" className="btn-ghost btn-sm" onClick={resetPrefs}>
@@ -141,15 +180,20 @@ export default function Preferences({
     >
       <div className="pref">
         <nav className="pref-tabs">
-          {PAGES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`pref-tab${tab === t.id ? " is-on" : ""}`}
-              onClick={() => go(t.id)}
-            >
-              {t.label}
-            </button>
+          {GROUPS.map((g) => (
+            <div key={g.id} className="pref-group">
+              <span className="pref-group-title">{g.label}</span>
+              {g.pages.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`pref-tab${tab === t.id ? " is-on" : ""}`}
+                  onClick={() => go(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
 

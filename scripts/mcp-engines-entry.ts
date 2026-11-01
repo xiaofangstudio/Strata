@@ -39,6 +39,17 @@ export {
   removeVerticalSeam,
 } from "../src/core/seamCarve";
 
+/* 调色台：一级校色 + 色轮 + 色彩切片器 + 曲线（达芬奇 Color 页那套） */
+export {
+  applyGrade,
+  curveToTable,
+  GRADE_PARAMS,
+  GRADE_WHEELS,
+  SLICER_RANGES,
+  gradeIsNeutral,
+  neutralGrade,
+} from "../src/engine/grading";
+
 /* 木偶变形（MLS） */
 export { mlsWarp } from "../src/engine/meshWarp";
 

@@ -1151,3 +1151,15 @@
 .ch-act.is-icon svg {
   display: block;
 }
+
+/* 调色层：参数太多，指到专门的调色台面板 */
+.ly-adjust-note {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}

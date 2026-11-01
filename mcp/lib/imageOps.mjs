@@ -15,6 +15,14 @@
  */
 import { decodePng, encodePng } from "./png.mjs";
 import jpeg from "jpeg-js";
+// 调色台与界面共用同一份内核（scripts/mcp-engines-entry.ts 打包而来）
+import {
+  applyGrade,
+  GRADE_PARAMS,
+  SLICER_RANGES,
+  GRADE_WHEELS,
+  neutralGrade,
+} from "./engines.gen.mjs";
 
 /* ---------------------------------------------------------------- 编解码 */
 
@@ -733,7 +741,41 @@ export function resize(img, maxSide) {
  * 可用调整算子表：名字 → 执行函数 + 参数说明。
  * MCP 工具只认这里的名字，客户端可以先问 strata_capabilities 取清单。
  */
+/** 调色台的参数键与取值范围（给 AI 看，也用于校验）。 */
+export const GRADE_PARAM_SPEC = GRADE_PARAMS.map((d) => ({
+  id: d.id,
+  label: d.label,
+  min: d.min,
+  max: d.max,
+  def: d.def,
+  group: d.group,
+}));
+
 export const ADJUSTERS = {
+  grade: {
+    label: "调色台（一级校色 + 四档色轮 + 色彩切片器 + 曲线）",
+    params: [
+      "params: 数值表，键见 capabilities 的 imageOps.gradeParams（如 {temp:20, contrast:15, darkX:-40}）",
+      "curves: 可选 { rgb | r | g | b: [{x:0..1, y:0..1}] }",
+    ],
+    run: (img, p) => {
+      /**
+       * 参数两种写法都认：
+       *   · 平铺：{ type: "grade", temp: 20, contrast: 15 }（与其它算子一致）
+       *   · 嵌套：{ type: "grade", params: { temp: 20 } }（调色台参数太多，写起来更像一张表）
+       * 早先只按嵌套解析，结果平铺调用「成功但像素没变」—— 必须两种都吃。
+       */
+      const src = p ?? {};
+      const nums =
+        src.params && typeof src.params === "object" && !Array.isArray(src.params)
+          ? src.params
+          : Object.fromEntries(
+              Object.entries(src).filter(([k]) => k !== "type" && k !== "curves" && k !== "params"),
+            );
+      const curves = src.curves ?? src.params?.curves;
+      return applyGrade(img, { ...neutralGrade(), ...nums }, curves ?? undefined);
+    },
+  },
   brightnessContrast: {
     label: "亮度 / 对比度",
     params: ["brightness (-100…100)", "contrast (-100…100)"],

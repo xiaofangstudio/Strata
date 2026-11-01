@@ -38,6 +38,7 @@ const TOP_GROUPS = [
   "puppet",
   "inpaint",
   "hint",
+  "launch",
   "error",
 ] as const;
 

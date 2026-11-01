@@ -1024,7 +1024,16 @@ export function AdjustProps({
         <GradientEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={onPreview} />
       )}
 
-      {sections.map((sec, si) => (
+      {/* 调色台有五十多个参数，塞进这里会糊成一片 —— 指到专门的调色台面板 */}
+      {st.id === "grade" && (
+        <p className="ly-adjust-note">
+          这一层的参数在右侧「调色台」面板里调：一级校色 / 四档色轮 / 色彩切片器 / 曲线。
+          打开方式：窗口 &gt; 调色台。
+        </p>
+      )}
+
+      {st.id !== "grade" &&
+        sections.map((sec, si) => (
         <Fragment key={sec.title ?? `s${si}`}>
           {sec.title && <span className="ly-group">{sec.title}</span>}
           {sec.items.map((p) => {

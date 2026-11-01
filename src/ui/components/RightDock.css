@@ -8,12 +8,40 @@
 
 .dock {
   flex: none;
+  /* 实际宽度由组件的 inline style 给（左边缘可拖），这里只兜底 */
   width: 326px;
   min-height: 0;
   display: flex;
   align-items: stretch;
+  position: relative;
   background: var(--surface);
   border-left: 1px solid var(--border);
+}
+
+/* 左边缘的宽度把手：命中区 6px，视觉上只在悬停时亮一条线 */
+.dock-grip {
+  flex: none;
+  width: 6px;
+  margin-right: -3px;
+  margin-left: -3px;
+  cursor: ew-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 3;
+}
+
+.dock-grip::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.dock-grip:hover::after,
+.dock-grip:active::after {
+  background: var(--accent);
+  opacity: 0.55;
 }
 
 /* ---------- 竖排开关轨 ---------- */
@@ -123,19 +151,13 @@
   flex: 0 0 auto;
 }
 
-.dock-group.is-props {
-  flex: 0 1 auto;
-  max-height: 150px;
-}
-
-.dock-group.is-layers {
-  flex: 1 1 auto;
-  min-height: 200px;
-}
-
+/* 每一块的高度都由 inline style 给（用户拖出来的），
+   这里不再写 max-height —— 早先给「属性 / 历史」加了 150 / 208 的上限，
+   拖到上限就拖不动了，看着像"这块调不大" */
+.dock-group.is-props,
+.dock-group.is-layers,
 .dock-group.is-history {
-  flex: 0 1 auto;
-  max-height: 208px;
+  flex: 0 0 auto;
 }
 
 /* 导航器 / 直方图 / 示波器按内容收紧，不跟图层抢剩余高度，
@@ -218,7 +240,8 @@
 
 .dock-split {
   flex: none;
-  height: 7px;
+  /* 视觉上是两条细线，命中区给足 9px —— 7px 的抓握条实测很难一次抓准 */
+  height: 9px;
   margin: 0;
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -257,5 +280,11 @@
 .dock-tail {
   flex: none;
   height: 6px;
+  background: var(--surface);
+}
+
+/* 面板高度都拖到最短时，下面会剩一段空白 —— 让它跟面板同色，
+   否则看起来像凭空多了一块深色方块（用户说的「大黑块」） */
+.dock-body {
   background: var(--surface);
 }

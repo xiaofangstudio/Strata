@@ -537,6 +537,7 @@ export const zh = {
 
   /** 右侧单列标签面板。 */
   panel: {
+    grade: "调色台",
     layers: "图层",
     channels: "通道",
     paths: "路径",
@@ -820,6 +821,14 @@ export const zh = {
       { k: "仓库", v: "github.com/xiaofangstudio/strata" },
     ],
     noAi: "本产品不含任何 AI / 机器学习功能，这是定位的一部分，不是暂缺。",
+    disclaimerTitle: "免责声明",
+    disclaimer: [
+      "与 Adobe 无任何隶属或授权关系；Photoshop 等名称仅用于说明操作对标，商标归其权利人。",
+      "部分调色与通道算法移植自 PhotoCraft（MIT OR Apache-2.0），笔迹思路参考 MyPaint（LGPL），已在源文件保留来源声明。",
+      "软件按「现状」提供，不附带任何担保；请自行备份文件，作者不承担数据丢失等损失。",
+      "全部处理都在本机完成：不上传文件、无账号、无遥测。你所处理内容的版权与合规由你负责。",
+    ],
+    disclaimerFull: "完整免责声明见仓库根目录 DISCLAIMER.md",
     close: "知道了",
   },
 
@@ -1023,6 +1032,16 @@ export const zh = {
     transformNoLayer: "请先选中一个未锁定的像素图层",
     transformed: "已变换",
     autoBalanced: "这幅图已经铺满全色域，自动调整没有可再优化的余地",
+  },
+
+  /** 启动意图判定与带文件启动（见 core/launch.ts）。 */
+  launch: {
+    judging: "正在启动…",
+    opening: "正在打开",
+    failedTitle: "打不开这个文件",
+    failedHint:
+      "Strata 目前只能直接打开图片（PNG / JPG / WebP / BMP / GIF / TIFF）与 .strata 工程文件。若确认是这类文件仍打不开，多半是文件已损坏或没有读取权限。",
+    backHome: "回到欢迎页",
   },
 
   error: {

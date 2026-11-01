@@ -85,6 +85,17 @@ export default function InfoModals({ which, onClose, info }: Props) {
           ))}
         </dl>
         <p className="about-noai">{zh.about.noAi}</p>
+
+        {/* 免责声明：关于页只放要点，完整版在仓库 DISCLAIMER.md */}
+        <section className="about-disclaimer">
+          <h4 className="about-disclaimer-title">{zh.about.disclaimerTitle}</h4>
+          <ul>
+            {zh.about.disclaimer.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <p className="about-disclaimer-full">{zh.about.disclaimerFull}</p>
+        </section>
       </Modal>
     );
   }

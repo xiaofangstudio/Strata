@@ -1,0 +1,91 @@
+.boot {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(520px, calc(100vw - 48px));
+  padding: 28px 26px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18);
+  text-align: center;
+}
+
+.boot-mark {
+  display: grid;
+  place-items: center;
+  margin-bottom: 2px;
+}
+
+.boot-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: boot-spin 0.8s linear infinite;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.boot-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  /* 路径可能很长，从中间断开，保证文件名还看得见 */
+  word-break: break-all;
+}
+
+.boot-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.boot-path {
+  margin: 0;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.boot-error {
+  margin: 0;
+  padding: 10px 12px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--danger, #d0453b);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger, #d0453b) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+  word-break: break-all;
+}
+
+.boot-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.boot-fail .boot-card {
+  gap: 10px;
+}

@@ -12,7 +12,24 @@
  * 改动以上任一文件后，这里必须同步。
  */
 
-import { FILTER_DEFS, PROFILE_LABELS } from "./engines.gen.mjs";
+import {
+  FILTER_DEFS,
+  GRADE_PARAMS,
+  GRADE_WHEELS,
+  PROFILE_LABELS,
+  SLICER_RANGES,
+} from "./engines.gen.mjs";
+import { ADJUSTERS } from "./imageOps.mjs";
+
+/** 调色台参数键：直接从内核的 GRADE_PARAMS 派生，不手抄。 */
+const GRADE_PARAM_SPEC = GRADE_PARAMS.map((d) => ({
+  id: d.id,
+  label: d.label,
+  min: d.min,
+  max: d.max,
+  def: d.def,
+  group: d.group,
+}));
 
 /**
  * 滤镜目录直接从引擎包派生 —— 与界面共用同一份 FILTER_DEFS，
@@ -59,7 +76,7 @@ export const PROTOCOL_VERSION = "2024-11-05";
 
 /** ServerInfo 名称与版本。 */
 export const SERVER_NAME = "strata";
-export const SERVER_VERSION = "1.0.0";
+export const SERVER_VERSION = "2.6.2";
 
 /* ------------------------------------------------ .strata 工程格式常量 */
 
@@ -483,7 +500,13 @@ export function buildCapabilities() {
       colorModes: COLOR_MODES,
       smartSelects: SMART_SELECTS,
       colorProfiles: COLOR_PROFILES,
+      /** 调色台的参数键（AI 得知道能传哪些数字） */
+      gradeParams: GRADE_PARAM_SPEC,
+      gradeWheels: GRADE_WHEELS,
+      gradeSlicerRanges: SLICER_RANGES.map((r) => ({ key: r.key, label: r.label, center: r.center })),
+      adjustersList: Object.keys(ADJUSTERS),
       engines: [
+        { id: "grade", label: "调色台（一级/色轮/切片器/曲线）", tool: "strata_adjust_image · type=grade" },
         { id: "contentAwareScale", label: "内容识别缩放（接缝雕刻）", tool: "strata_content_aware_scale" },
         { id: "meshWarp", label: "木偶变形（MLS 钉点）", tool: "strata_mesh_warp" },
         { id: "smartSelect", label: "智能选区", tool: "strata_smart_select" },

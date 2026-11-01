@@ -4,29 +4,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { zh } from "../i18n/zh-CN";
 import {
   IMAGE_EXTENSIONS,
-  extOf,
   fileStat,
   loadImage,
   makeThumbnail,
-  readFileBytes,
 } from "../engine/image";
-import {
-  baseName,
-  docFromBitmap,
-  docFromBlank,
-  type StrataDoc,
-} from "../core/document";
-import {
-  composeDoc,
-} from "../engine/compositor";
-import {
-  createSurface,
-} from "../engine/surface";
-import {
-  decodeProject,
-  isStrataPath,
-  STRATA_EXTENSION,
-} from "../engine/project";
+import { docFromBlank, type StrataDoc } from "../core/document";
+import { STRATA_EXTENSION } from "../engine/project";
+import { openFileToDoc } from "../engine/openFile";
+import { isOpenablePath } from "../core/launch";
 import {
   DEFAULT_DPI,
   MAX_DPI,
@@ -67,26 +52,10 @@ interface Props {
   themeMode: "light" | "dark";
   onToggleTheme: () => void;
   onOpenDoc: (doc: StrataDoc) => void;
-  /** 启动时被命令行参数指定的待打开文件（双击 .strata 等场景）。 */
-  initialPath?: string | null;
 }
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-function isImagePath(p: string): boolean {
-  return IMAGE_EXTENSIONS.includes(extOf(p));
-}
-
-/** 是否为 Strata 工程文件（.strata）。 */
-function isProjectPath(p: string): boolean {
-  return isStrataPath(p);
-}
-
-/** 开始页面能直接打开的文件：图片或 Strata 工程。 */
-function isOpenablePath(p: string): boolean {
-  return isImagePath(p) || isProjectPath(p);
 }
 
 function toInt(v: string): number {
@@ -105,7 +74,6 @@ export default function StartPage({
   themeMode,
   onToggleTheme,
   onOpenDoc,
-  initialPath,
 }: Props) {
   const { items: recentItems, push, patch, remove, clear } = useRecentFiles();
 
@@ -119,39 +87,25 @@ export default function StartPage({
   const [busy, setBusy] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
 
-  /** 打开一个本地文件并进入编辑壳。图片走位图解码，.strata 工程走工程解码。 */
+  /**
+   * 打开一个本地文件并进入编辑壳。
+   *
+   * 解码过程与「双击图片用 Strata 打开」共用 engine/openFile.ts，
+   * 两条路的打开结果因此完全一致；这里只多管开始页面自己的忙态与错误横幅。
+   */
   const openPath = useCallback(
     async (path: string) => {
       setError(null);
       setBusy(true);
       setOpening(path);
       try {
-        // 文件属性先取好（图片与工程通用），缩略图稍后按需生成。
-        const stat = await fileStat(path);
-        let next: StrataDoc;
-        let thumb: string | undefined;
-        if (isProjectPath(path)) {
-          const bytes = await readFileBytes(path);
-          const decoded = await decodeProject(bytes);
-          decoded.sourcePath = path;
-          next = decoded;
-          // 工程缩略图：把图层栈合成到一张离屏画布，再缩成 96×96 的方块。
-          const surface = createSurface(decoded.width, decoded.height);
-          composeDoc(decoded, surface);
-          const preview = await createImageBitmap(surface);
-          thumb = await makeThumbnail(preview);
-          preview.close();
-        } else {
-          const bitmap = await loadImage(path);
-          thumb = await makeThumbnail(bitmap);
-          next = docFromBitmap(bitmap, baseName(path), path);
-        }
+        const opened = await openFileToDoc(path);
         push(path, {
-          thumb: thumb || undefined,
-          mtime: stat.modified ?? undefined,
-          size: stat.exists ? stat.size : undefined,
+          thumb: opened.thumb,
+          mtime: opened.mtime,
+          size: opened.size,
         });
-        onOpenDoc(next);
+        onOpenDoc(opened.doc);
       } catch (e) {
         setError(`${zh.error.openFailed}：${msgOf(e)}`);
       } finally {
@@ -161,14 +115,6 @@ export default function StartPage({
     },
     [onOpenDoc, push],
   );
-
-  // 启动参数带进来的待打开文件（双击 .strata / 图片）：只在挂载时打开一次。
-  const launched = useRef(false);
-  useEffect(() => {
-    if (launched.current || !initialPath) return;
-    launched.current = true;
-    void openPath(initialPath);
-  }, [initialPath, openPath]);
 
   const pickFile = useCallback(async () => {
     try {

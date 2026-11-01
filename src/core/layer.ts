@@ -27,6 +27,7 @@ import {
   type CurvePoint,
 } from "../engine/filters";
 import type { TextLayerState } from "../engine/text";
+import { GRADE_PARAMS } from "../engine/grading";
 
 /**
  * 混合模式。
@@ -181,7 +182,8 @@ export type AdjustId =
   | "motionblur"
   | "sharpen"
   | "grain"
-  | "noise";
+  | "noise"
+  | "grade";
 
 /** 调整类型的族别，只用于菜单与面板分组。 */
 export type AdjustFamily = "tone" | "color" | "effect";
@@ -584,6 +586,29 @@ export const ADJUST_DEFS: readonly AdjustDef[] = [
       { id: "amount", label: "数量", min: 0, max: 100, step: 1, def: 20, unit: "%" },
       { id: "size", label: "大小", min: 1, max: 12, step: 1, def: 1, unit: "px" },
     ],
+  },
+  {
+    /**
+     * 调色台：对齐达芬奇 Color 页的一体化校色层。
+     *
+     * 参数全部是数值（一级 / 色轮 / 切片器的滑杆值），曲线复用 AdjustState
+     * 的 curve / curveR / curveG / curveB —— 因此它能像别的调整层一样被
+     * 序列化、被历史快照深拷贝、被撤销栈完整覆盖。
+     */
+    id: "grade",
+    label: "调色台",
+    family: "color",
+    params: GRADE_PARAMS.map((g) => ({
+      id: g.id,
+      label: g.label,
+      min: g.min,
+      max: g.max,
+      step: g.step,
+      def: g.def,
+      dec: g.dec,
+      unit: g.unit,
+      group: g.group,
+    })),
   },
 ];
 

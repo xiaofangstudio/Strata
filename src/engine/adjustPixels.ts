@@ -12,6 +12,7 @@
  * crates/doc/src/adjust.rs、crates/engine/src/extra_cmds.rs。
  */
 import { clamp01, hexToRgb01, luma01, linearToSrgb, srgbToLinear } from "./filters";
+import { applyGrade } from "./grading";
 import type { AdjustState } from "../core/layer";
 
 /** 必须走逐像素通道的调整种类。 */
@@ -27,6 +28,7 @@ export const PIXEL_ADJUST_IDS: readonly string[] = [
   "matchcolor",
   "replacecolor",
   "shadowhighlight",
+  "grade",
 ];
 
 /** 这条调整是否必须逐像素处理（合成器据此选通道）。 */
@@ -739,6 +741,16 @@ function applyReplaceColor(img: ImageData, p: Record<string, number>): void {
 export function applyPixelAdjust(state: AdjustState, img: ImageData): void {
   const p = state.params;
   switch (state.id) {
+    case "grade": {
+      // 调色台：一级 + 色轮 + 切片器 + 曲线一趟算完（engine/grading.ts）
+      const graded = applyGrade(
+        { data: img.data, width: img.width, height: img.height },
+        p,
+        { rgb: state.curve, r: state.curveR, g: state.curveG, b: state.curveB },
+      );
+      img.data.set(graded.data);
+      return;
+    }
     case "vibrance": {
       const vib = num(p, "vibrance", 0) / 100;
       const sat = num(p, "saturation", 0) / 100;
