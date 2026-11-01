@@ -141,6 +141,12 @@ function applyAdjust(
   const box = (() => {
     // 没有范围 / 没有生效的蒙版时，整幅都要处理（否则会留下一个硬边的方框）
     if (!layer.window || !layer.mask || layer.maskActive === false) return { x: 0, y: 0, w, h };
+    /**
+     * 线性例外：它的蒙版是**半个画面全为 1**（线的一侧整片都调），
+     * 而 windowBounds 只是"线段 ± 羽化"那么一块 —— 按它裁的话，
+     * 渐变会被切成一条横带，两侧的调色被吞掉。所以线性一律处理整幅。
+     */
+    if (layer.window.kind === "line") return { x: 0, y: 0, w, h };
     const b = windowBounds(layer.window);
     const x = Math.max(0, Math.floor(b.x));
     const y = Math.max(0, Math.floor(b.y));

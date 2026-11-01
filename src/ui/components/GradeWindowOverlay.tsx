@@ -16,6 +16,7 @@ import {
   dragWindow,
   hitHandle,
   quadEdgeFeathers,
+  windowBounds,
   windowHandles,
   type GradeWindow,
   type HandleId,
@@ -39,6 +40,15 @@ function outwardNormalOf(a: Pt, b: Pt, center: Pt): Pt {
 }
 import "./GradeWindowOverlay.css";
 
+/** 钢笔绘制中的临时状态（还没闭合，所以不进文档）。 */
+export interface PenState {
+  points: Pt[];
+  cursor: Pt | null;
+  onAdd: (p: Pt) => void;
+  onCursor: (p: Pt | null) => void;
+  onClose: () => void;
+}
+
 interface Props {
   docW: number;
   docH: number;
@@ -47,6 +57,8 @@ interface Props {
   win: GradeWindow;
   /** 拖动中（节流）与松手时都会调用；commit=false 表示只是预览 */
   onChange: (next: GradeWindow, commit: boolean) => void;
+  /** 钢笔逐点绘制（非空时这一层进入"画形状"状态） */
+  pen?: PenState | null;
 }
 
 
@@ -76,7 +88,7 @@ function doubleArrow(c: { x: number; y: number }, dir: { x: number; y: number },
   return `${arrowHead(p1, dir, size * 0.7)} ${arrowHead(p2, { x: -ux, y: -uy }, size * 0.7)}`;
 }
 
-export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }: Props) {
+export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, pen }: Props) {
   const [live, setLive] = useState<GradeWindow | null>(null);
   const drag = useRef<{
     id: HandleId;
@@ -105,8 +117,9 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
 
   const begin = (e: React.PointerEvent<SVGSVGElement>) => {
     const p = toDoc(e);
-    const id = hitHandle(cur, p.x, p.y, scale);
-    if (!id) return;
+    // 没命中任何手柄也按住不放：整块范围当作"整体拖动"。
+    // 否则这一下会漏到画布上，在调整图层里落笔 → 弹「调整图层没有像素」。
+    const id = hitHandle(cur, p.x, p.y, scale) ?? "move";
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { id, from: cur, startX: p.x, startY: p.y, lastAt: 0 };
@@ -116,7 +129,10 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
     const d = drag.current;
     if (!d) return;
     const p = toDoc(e);
-    const next = dragWindow(d.id, d.from, p.x - d.startX, p.y - d.startY);
+    const next = dragWindow(d.id, d.from, p.x - d.startX, p.y - d.startY, {
+      x: d.startX,
+      y: d.startY,
+    });
     setLive(next);
     // 节流：拖动中重算蒙版（羽化要大范围重建，不然会顿）
     const now = performance.now();
@@ -157,6 +173,9 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
           fill="none"
           strokeWidth={stroke}
           className="gwf-feather-edge"
+          transform={
+            cur.rot ? `rotate(${(cur.rot * 180) / Math.PI} ${cur.cx} ${cur.cy})` : undefined
+          }
         />
       );
     }
@@ -192,17 +211,101 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
   return (
     <svg
       ref={svgRef}
-      className="gwf"
+      className={pen ? "gwf is-pen" : "gwf"}
       viewBox={`0 0 ${docW} ${docH}`}
       preserveAspectRatio="none"
-      onPointerDown={begin}
-      onPointerMove={move}
+      onPointerDown={(e) => {
+        if (pen) {
+          const p = toDoc(e);
+          // 点回起点附近 = 闭合（也可以双击 / 回车）
+          if (pen.points.length >= 3) {
+            const first = pen.points[0];
+            const tol = 12 / Math.max(0.05, scale);
+            if (Math.hypot(p.x - first.x, p.y - first.y) <= tol) {
+              pen.onClose();
+              return;
+            }
+          }
+          pen.onAdd(p);
+          return;
+        }
+        begin(e);
+      }}
+      onPointerMove={(e) => {
+        if (pen) {
+          pen.onCursor(toDoc(e));
+          return;
+        }
+        move(e);
+      }}
       onPointerUp={end}
       onPointerCancel={end}
+      onDoubleClick={() => {
+        if (pen && pen.points.length >= 3) pen.onClose();
+      }}
     >
+      {/**
+       * 抓取区：把整块范围的包围盒兜住。
+       * 手滑落在手柄旁边时，这一下会被当成"整块拖动"，而不是漏到画布上
+       * 在调整图层里落笔（那会弹「调整图层没有像素」）。
+       */}
+      {!pen &&
+        (() => {
+          const b = windowBounds(cur);
+          if (b.w < 2 || b.h < 2) return null;
+          const m = 18 / Math.max(0.05, scale);
+          return (
+            <rect
+              x={b.x - m}
+              y={b.y - m}
+              width={b.w + m * 2}
+              height={b.h + m * 2}
+              className="gwf-grab"
+            />
+          );
+        })()}
+
+      {/* 钢笔草稿：已落的点 + 到光标的橡皮筋 + 回起点的提示线 */}
+      {pen && (
+        <g className="gwf-pen">
+          {pen.points.length >= 2 && (
+            <path
+              d={pen.points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x} ${p.y}`).join(" ")}
+              fill="none"
+              strokeWidth={stroke * 1.4}
+              className="gwf-edge is-line"
+            />
+          )}
+          {pen.cursor && pen.points.length > 0 && (
+            <line
+              x1={pen.points[pen.points.length - 1].x}
+              y1={pen.points[pen.points.length - 1].y}
+              x2={pen.cursor.x}
+              y2={pen.cursor.y}
+              strokeWidth={stroke}
+              className="gwf-edge"
+            />
+          )}
+          {pen.cursor && pen.points.length >= 2 && (
+            <line
+              x1={pen.cursor.x}
+              y1={pen.cursor.y}
+              x2={pen.points[0].x}
+              y2={pen.points[0].y}
+              strokeWidth={stroke}
+              className="gwf-leader"
+            />
+          )}
+          {pen.points.map((p, i) => (
+            <circle key={`pen${i}`} cx={p.x} cy={p.y} r={knob * 0.8} className="gwf-knob" />
+          ))}
+        </g>
+      )}
+
       {featherShape}
 
       {cur.kind === "ellipse" && (
+        // 必须按 rot 旋转：只改蒙版不转轮廓的话，用户看着就是"旋转没生效"
         <ellipse
           cx={cur.cx}
           cy={cur.cy}
@@ -211,6 +314,9 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
           fill="none"
           strokeWidth={stroke}
           className="gwf-edge"
+          transform={
+            cur.rot ? `rotate(${(cur.rot * 180) / Math.PI} ${cur.cx} ${cur.cy})` : undefined
+          }
         />
       )}
       {cur.kind === "quad" && (
@@ -243,20 +349,12 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange }:
             const tip = { x: mx - nx * (unit * 2.6), y: my - ny * (unit * 2.6) };
             return (
               <>
-                {/* 过渡带边界：淡出到这儿 */}
+                {/* 单向渐变：只在淡出那一侧标一条"到这儿刚好为 0"的虚线 */}
                 <line
                   x1={cur.x1 + nx * f}
                   y1={cur.y1 + ny * f}
                   x2={cur.x2 + nx * f}
                   y2={cur.y2 + ny * f}
-                  strokeWidth={stroke}
-                  className="gwf-feather-edge"
-                />
-                <line
-                  x1={cur.x1 - nx * f}
-                  y1={cur.y1 - ny * f}
-                  x2={cur.x2 - nx * f}
-                  y2={cur.y2 - ny * f}
                   strokeWidth={stroke}
                   className="gwf-feather-edge"
                 />

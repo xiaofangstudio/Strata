@@ -99,3 +99,23 @@
   stroke: none;
   pointer-events: auto;
 }
+
+/* ---------- 抓取区与钢笔绘制 ---------- */
+
+/* 包围盒抓取区：透明、吃掉点击，手滑落在手柄旁边时变成"整块拖动" */
+.gwf-grab {
+  fill: transparent;
+  stroke: none;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.gwf-grab:active {
+  cursor: grabbing;
+}
+
+/* 钢笔绘制中：整层接管指针，画布上的点击都用来落点 */
+.gwf.is-pen {
+  pointer-events: auto;
+  cursor: crosshair;
+}

@@ -624,6 +624,16 @@ function buildRows(
     }
     return d;
   };
+  /**
+   * 调色层不在图层面板里显示 —— 它们统一在「调色台 > 二级」里管理。
+   *
+   * 理由：每圈一个范围就多一层，图层列表很快被「调色 · 椭圆」塞满，
+   * 而这些层既不能画也不能拖像素，留在列表里只会碍事。
+   * 隐藏 / 删除 / 切换在二级页的列表里都有对应的按钮。
+   */
+  const isGradeLayer = (l: StrataLayer): boolean =>
+    l.kind === "adjust" && l.adjust?.id === "grade";
+
   const hidden = (l: StrataLayer): boolean => {
     let p = l.parent ?? null;
     while (p) {
@@ -639,6 +649,7 @@ function buildRows(
   for (let i = doc.layers.length - 1; i >= 0; i -= 1) {
     const l = doc.layers[i];
     if (hidden(l)) continue;
+    if (isGradeLayer(l)) continue; // 调色层交给「调色台 > 二级」
     rows.push({ layer: l, depth: depthOf(l) });
   }
   return rows;

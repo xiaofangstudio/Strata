@@ -36,6 +36,7 @@ import {
 import { DEFAULT_DPI, PRESETS } from "../core/presets";
 import {
   addAdjustLayer,
+  addLocalGradeLayer,
   selectLayer,
   applyGradeWindow,
   addFillLayer,
@@ -146,6 +147,7 @@ import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
 import CompareView, { type CompareLayout } from "./components/CompareView";
 import GradePanel from "./components/GradePanel";
 import GradeWindowOverlay from "./components/GradeWindowOverlay";
+import { DEFAULT_FEATHER } from "../core/gradeWindow";
 import BrowseDialog from "./components/BrowseDialog";
 import ExrDialog from "./components/ExrDialog";
 import { CreateDropletDialog, ScriptEventsDialog } from "./components/AutomationDialogs";
@@ -884,6 +886,50 @@ export default function EditorShell({
     const cur = doc.layers.find((l) => l.id === doc.activeLayerId);
     return cur && cur.kind === "adjust" && cur.adjust?.id === "grade" ? cur : null;
   }, [doc.layers, doc.activeLayerId]);
+
+  /**
+   * 钢笔逐点绘制中的临时状态（还没闭合，所以不进文档）。
+   * 点回起点 / 双击 / 回车 = 闭合；Esc = 放弃。
+   */
+  const [penDraw, setPenDraw] = useState<{
+    layerId: string;
+    points: { x: number; y: number }[];
+    cursor: { x: number; y: number } | null;
+  } | null>(null);
+  const penCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const penRafRef = useRef(0);
+
+  /** 光标跟随用 rAF 合并 —— 否则每动一下鼠标就整壳重渲染一遍。 */
+  const movePenCursor = useCallback((p: { x: number; y: number } | null) => {
+    penCursorRef.current = p;
+    if (penRafRef.current) return;
+    penRafRef.current = requestAnimationFrame(() => {
+      penRafRef.current = 0;
+      setPenDraw((st) => (st ? { ...st, cursor: penCursorRef.current } : st));
+    });
+  }, []);
+
+  /** 点「钢笔」：建一个空点集的调色层，进入绘制状态。 */
+  const startPen = useCallback(() => {
+    const next = addLocalGradeLayer(doc, "poly");
+    onCommit(next, "新建钢笔范围");
+    setPenDraw({ layerId: next.activeLayerId, points: [], cursor: null });
+  }, [doc, onCommit]);
+
+  /** 闭合：点够 3 个就把折线变成范围（最后一段自动连回起点 = 最短闭合）。 */
+  const closePen = useCallback(() => {
+    const st = penDraw;
+    setPenDraw(null);
+    if (!st || st.points.length < 3) return;
+    onCommit(
+      applyGradeWindow(doc, st.layerId, {
+        kind: "poly",
+        points: st.points,
+        feather: DEFAULT_FEATHER,
+      }),
+      "钢笔范围",
+    );
+  }, [penDraw, doc, onCommit]);
 
   /** 文档里全部调色层（没选中任何一层时，面板把它们列出来供点选）。 */
   const gradeAll = useMemo(
@@ -2122,7 +2168,8 @@ export default function EditorShell({
         return;
       }
       if (act.kind === "adjust") {
-        setError(zh.hint.layerAdjustDenied);
+        // 只是"这层没有像素可画"，不是错误 —— 用灰色提示，红色错误太吓人
+        setToast(zh.hint.layerAdjustDenied);
         return;
       }
       setError("");
@@ -8185,6 +8232,11 @@ export default function EditorShell({
       return;
     }
     if (e.key === "Escape") {
+      // 钢笔范围画到一半：Esc 放弃（点的点全丢掉）
+      if (penDraw) {
+        setPenDraw(null);
+        return;
+      }
       // 多边形套索画到一半：Esc 先撤掉整段折线（PS 的老规矩）
       if (polyPts) {
         setPolyPts(null);
@@ -8226,8 +8278,13 @@ export default function EditorShell({
 
     if (typing) return;
 
-    // Enter：多边形套索先闭合（PS 的老规矩），其次才轮到自由变换落库
+    // Enter：钢笔范围先闭合，其次多边形套索，最后才轮到自由变换落库
     if (e.key === "Enter") {
+      if (penDraw) {
+        e.preventDefault();
+        closePen();
+        return;
+      }
       if (polyPts && polyPts.length >= 3) {
         e.preventDefault();
         commitPoly(polyPts);
@@ -8811,6 +8868,18 @@ export default function EditorShell({
                     if (commit) onCommit(next, "调整调色范围");
                     else onPreview(next);
                   }}
+                  pen={
+                    penDraw && penDraw.layerId === gradeLayer.id
+                      ? {
+                          points: penDraw.points,
+                          cursor: penDraw.cursor,
+                          onAdd: (p) =>
+                            setPenDraw((st) => (st ? { ...st, points: [...st.points, p] } : st)),
+                          onCursor: movePenCursor,
+                          onClose: closePen,
+                        }
+                      : null
+                  }
                 />
               )}
               {/* 校样层：把合成结果按校样条件重算后盖在上面（纯显示） */}
@@ -9112,6 +9181,13 @@ export default function EditorShell({
               <GradePanel
                 doc={doc}
                 layer={gradeLayer}
+                onStartPen={startPen}
+                layers={gradeAll}
+                onSelectLayer={(id) => onCommit(selectLayer(doc, id), "切换到调色层")}
+                onToggleVisible={(id, nextVisible) =>
+                  onCommit(updateLayer(doc, id, { visible: nextVisible }), "调色层显示")
+                }
+                onDeleteLayer={(id) => onCommit(removeLayers(doc, [id]), "删除调色层")}
                 onChange={onCommit}
                 onPreview={onPreview}
               />

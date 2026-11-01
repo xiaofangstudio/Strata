@@ -110,7 +110,8 @@ export function buildWindowMask(w, h, win) {
     const mx = (x1 + x2) / 2;
     const my = (y1 + y2) / 2;
     const band = Math.max(0.5, feather);
-    const g = ctx.createLinearGradient(mx - nx * band, my - ny * band, mx + nx * band, my + ny * band);
+    // 单向渐变：线本身是 100%，只朝 +n 侧衰减（与应用内核一致）
+    const g = ctx.createLinearGradient(mx, my, mx + nx * band, my + ny * band);
     g.addColorStop(0, "rgba(255,255,255,1)");
     g.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = g;

@@ -93,16 +93,17 @@ export function defaultLine(docW: number, docH: number, feather = DEFAULT_FEATHE
   return { kind: "line", x1: docW * 0.1, y1: y, x2: docW * 0.9, y2: y, feather };
 }
 
-/** 钢笔：默认给一个五边形，落手就能拖顶点。 */
+/**
+ * 钢笔：**从空开始**，等用户自己点。
+ *
+ * 以前这里给一个预置五边形，看着像"已经画好了"，但那是猜的形状 ——
+ * 钢笔该是「点一下 → 橡皮筋跟着走 → 再点一点 → …」直到闭合。
+ * 点集为空时蒙版全透明（等于没有范围），所以建完不会有副作用。
+ */
 export function defaultPoly(docW: number, docH: number, feather = DEFAULT_FEATHER): GradeWindow {
-  const cx = docW / 2;
-  const cy = docH / 2;
-  const r = Math.min(docW, docH) * 0.32;
-  const points = Array.from({ length: 5 }, (_, i) => {
-    const a = -Math.PI / 2 + (i * Math.PI * 2) / 5;
-    return { x: Math.round(cx + Math.cos(a) * r), y: Math.round(cy + Math.sin(a) * r) };
-  });
-  return { kind: "poly", points, feather };
+  void docW;
+  void docH;
+  return { kind: "poly", points: [], feather };
 }
 
 /** 由选区的包围盒造一个四边形范围。 */
@@ -268,7 +269,11 @@ function outwardNormal(a: Pt, b: Pt, center: Pt): Pt {
  * @param scale 当前缩放（手柄半径按 7/scale 给，屏幕上大小恒定）
  */
 export function windowHandles(w: GradeWindow, scale: number): Handle[] {
-  const r = 7 / Math.max(0.05, scale);
+  /**
+   * 手柄半径：屏幕上恒定 12px（以前 7px）。
+   * 太小的话手滑落在手柄旁边就会被当成"点了画布"，在调整层上落笔直接报错。
+   */
+  const r = 12 / Math.max(0.05, scale);
   const f = Math.max(0, w.feather);
   const rotOff = (ox: number, oy: number, cx: number, cy: number, rot = 0) => {
     if (!rot) return { x: cx + ox, y: cy + oy };
@@ -331,6 +336,8 @@ export function windowHandles(w: GradeWindow, scale: number): Handle[] {
     ];
   }
 
+  // 空点集（钢笔刚建、还没点）没有任何手柄
+  if (w.points.length === 0) return [];
   return [
     ...w.points.map((p, i) => ({ id: `v${i}` as HandleId, x: p.x, y: p.y, r })),
     {
@@ -370,6 +377,8 @@ export function dragWindow(
   from: GradeWindow,
   dx: number,
   dy: number,
+  /** 按下时的文档坐标（可选）。旋转与羽化要靠它算角度/投影，否则斜着拖会偏。 */
+  origin?: { x: number; y: number },
 ): GradeWindow {
   if (id === "move") {
     if (from.kind === "ellipse") return { ...from, cx: from.cx + dx, cy: from.cy + dy };
@@ -379,16 +388,20 @@ export function dragWindow(
     return { ...from, points: from.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
   }
 
-  // 旋转：把"手柄原来的方向"和"拖过去的方向"的夹角加到角度上
+  /**
+   * 旋转：算「按下点」和「当前点」相对中心的**夹角差**。
+   *
+   * 早先是拿手柄位置反推方向，但手柄位置依赖缩放（半径 r 随 scale 变），
+   * 于是拖起来会有一小段"先跳一下"的偏差。用按下点算就没有这个问题。
+   */
   if (id === "rotate") {
     if (from.kind !== "ellipse") return from;
     const c = windowCenter(from);
-    const hs = windowHandles(from, 1).find((h) => h.id === "rotate");
-    if (!hs) return from;
-    const v0 = { x: hs.x - c.x, y: hs.y - c.y };
-    const v1 = { x: v0.x + dx, y: v0.y + dy };
-    const delta = Math.atan2(v1.y, v1.x) - Math.atan2(v0.y, v0.x);
-    return { ...from, rot: norm((from.rot ?? 0) + delta) };
+    const o = origin ?? { x: c.x, y: c.y - 1 };
+    const at = { x: o.x + dx, y: o.y + dy };
+    const a0 = Math.atan2(o.y - c.y, o.x - c.x);
+    const a1 = Math.atan2(at.y - c.y, at.x - c.x);
+    return { ...from, rot: norm((from.rot ?? 0) + (a1 - a0)) };
   }
 
   // 四边形：某一条边的羽化（四条边各调各的）
@@ -407,9 +420,23 @@ export function dragWindow(
   }
 
   if (id === "feather") {
-    const mag =
-      from.kind === "line" ? Math.abs(dy) * 2 : Math.hypot(dx, dy) * (dx + dy < 0 ? -1 : 1);
-    const next = Math.max(0, Math.min(400, from.feather + mag));
+    let delta: number;
+    if (from.kind === "line") {
+      // 线段：沿法线投影（往淡出一侧拖 = 变宽）
+      const vx = from.x2 - from.x1;
+      const vy = from.y2 - from.y1;
+      const len = Math.hypot(vx, vy) || 1;
+      delta = (dx * (-vy / len) + dy * (vx / len)) * -1;
+    } else {
+      // 其它形状：按"到中心的距离变化"算 —— 往外拖变宽、往里拖变窄，
+      // 不再是 (dx+dy) 的符号猜测（那个斜着拖会朝反方向跑）
+      const c = windowCenter(from);
+      const o = origin ?? { x: c.x, y: c.y };
+      const d0 = Math.hypot(o.x - c.x, o.y - c.y);
+      const d1 = Math.hypot(o.x + dx - c.x, o.y + dy - c.y);
+      delta = d1 - d0;
+    }
+    const next = Math.max(0, Math.min(400, from.feather + delta));
     return { ...from, feather: Math.round(next) };
   }
 
@@ -491,12 +518,12 @@ export function windowToMask(docW: number, docH: number, w: GradeWindow): HTMLCa
     const mx = (w.x1 + w.x2) / 2;
     const my = (w.y1 + w.y2) / 2;
     const band = Math.max(0.5, w.feather);
-    const g = ctx.createLinearGradient(
-      mx - nx * band,
-      my - ny * band,
-      mx + nx * band,
-      my + ny * band,
-    );
+    /**
+     * **单向**渐变：线本身就是 100% 处，只朝 +n 一侧衰减到 0。
+     * 早先写成 mid−band → mid+band 的对称渐变，等于把线两侧各淡出一半 ——
+     * 那不是"线性"，是"一条中间的软缝"，跟达芬奇的 linear 差得远。
+     */
+    const g = ctx.createLinearGradient(mx, my, mx + nx * band, my + ny * band);
     g.addColorStop(0, "rgba(255,255,255,1)");
     g.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = g;

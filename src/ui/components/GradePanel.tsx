@@ -42,6 +42,16 @@ import "./GradePanel.css";
 interface Props {
   doc: StrataDoc;
   layer: StrataLayer;
+  /** 点「钢笔」时：新建一个空范围的调色层并进入逐点绘制 */
+  onStartPen: () => void;
+  /** 文档里所有调色层（二级页的范围列表用） */
+  layers: StrataLayer[];
+  /** 点范围列表里的一项：切到那一层 */
+  onSelectLayer: (id: string) => void;
+  /** 显示 / 隐藏某个调色层 */
+  onToggleVisible: (id: string, nextVisible: boolean) => void;
+  /** 删除某个调色层 */
+  onDeleteLayer: (id: string) => void;
   /** 落一条历史（松手 / 输入完成时） */
   onChange: (next: StrataDoc, label: string) => void;
   /** 只改画面不入栈（拖动过程中） */
@@ -51,7 +61,7 @@ interface Props {
 type Tab = "primary" | "wheel" | "slicer" | "curve";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "primary", label: "一级", icon: "◐" },
+  { id: "primary", label: "基础", icon: "◐" },
   { id: "wheel", label: "色轮", icon: "◍" },
   { id: "slicer", label: "切片器", icon: "◈" },
   { id: "curve", label: "曲线", icon: "∿" },
@@ -101,8 +111,27 @@ const PRESETS: Preset[] = [
 
 /* ---------------------------------------------------------------- 主体 */
 
-export default function GradePanel({ doc, layer, onChange, onPreview }: Props) {
+export default function GradePanel({
+  doc,
+  layer,
+  onStartPen,
+  layers,
+  onSelectLayer,
+  onToggleVisible,
+  onDeleteLayer,
+  onChange,
+  onPreview,
+}: Props) {
   const [tab, setTab] = useState<Tab>("primary");
+  /**
+   * 一级 = 全画面调色；二级 = 局部（范围）调色。
+   *
+   * 范围的「新建」与「范围列表」只在二级出现 —— 一级就是整张画面，
+   * 放一堆画范围的按钮在那儿反而让人以为一级也要先圈范围。
+   */
+  const [level, setLevel] = useState<"primary" | "secondary">(
+    layer.window ? "secondary" : "primary",
+  );
   const st = layer.adjust;
   const params = useMemo(
     () => ({ ...neutralGrade(), ...(st?.params ?? {}) }),
@@ -234,7 +263,41 @@ export default function GradePanel({ doc, layer, onChange, onPreview }: Props) {
         ))}
       </div>
 
-      <RangeBar doc={doc} layer={layer} onChange={onChange} />
+      <div className="grade-levels" role="tablist" aria-label="调色级别">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={level === "primary"}
+          className={`grade-level${level === "primary" ? " is-on" : ""}`}
+          onClick={() => setLevel("primary")}
+          title="整张画面一起调"
+        >
+          一级
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={level === "secondary"}
+          className={`grade-level${level === "secondary" ? " is-on" : ""}`}
+          onClick={() => setLevel("secondary")}
+          title="只调圈出来的范围"
+        >
+          二级
+        </button>
+      </div>
+
+      {level === "secondary" && (
+        <>
+          <RangeBar doc={doc} layer={layer} onStartPen={onStartPen} onChange={onChange} />
+          <RangeList
+            layers={layers}
+            activeId={layer.id}
+            onSelect={onSelectLayer}
+            onToggleVisible={onToggleVisible}
+            onDelete={onDeleteLayer}
+          />
+        </>
+      )}
 
       <div className="grade-body">
         {tab === "primary" && <PrimaryPage params={params} patch={patch} />}
@@ -268,10 +331,12 @@ const SHAPES: { kind: LocalGradeKind; label: string; icon: string; hint: string 
 function RangeBar({
   doc,
   layer,
+  onStartPen,
   onChange,
 }: {
   doc: StrataDoc;
   layer: StrataLayer;
+  onStartPen: () => void;
   onChange: (next: StrataDoc, label: string) => void;
 }) {
   const win = layer.window;
@@ -292,7 +357,12 @@ function RangeBar({
             type="button"
             className="gr-shape"
             title={`${s2.hint}（会新建一个调色层）`}
-            onClick={() => onChange(addLocalGradeLayer(doc, s2.kind), `新建${s2.label}范围`)}
+            onClick={() =>
+              // 钢笔要"点一下再点一下"地画，不能直接给个预置形状
+              s2.kind === "poly"
+                ? onStartPen()
+                : onChange(addLocalGradeLayer(doc, s2.kind), `新建${s2.label}范围`)
+            }
           >
             <span className="gr-shape-icon" aria-hidden="true">
               {s2.icon}
@@ -373,6 +443,21 @@ function RangeBar({
             />
           </div>
           <div className="gr-actions">
+            {win.kind === "line" && (
+              <button
+                type="button"
+                className="gr-btn"
+                title="交换两端：渐变方向反过来（哪一边被调色）"
+                onClick={() =>
+                  setWin(
+                    { ...win, x1: win.x2, y1: win.y2, x2: win.x1, y2: win.y1 },
+                    "反向渐变",
+                  )
+                }
+              >
+                反向
+              </button>
+            )}
             <button
               type="button"
               className="gr-btn"
@@ -407,6 +492,75 @@ function RangeBar({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------- 范围列表 */
+
+/**
+ * 二级调色里的范围列表 —— **调色层的唯一入口**。
+ *
+ * 图层面板已经不再显示调色层（它们不能画、不能拖像素，堆在列表里只会碍事），
+ * 所以「切换 / 显示隐藏 / 删除」都在这里：点行切换，右边两个小按钮管开关和删除。
+ * 每建一个范围就多一行，常驻不隐藏。
+ */
+function RangeList({
+  layers,
+  activeId,
+  onSelect,
+  onToggleVisible,
+  onDelete,
+}: {
+  layers: StrataLayer[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onToggleVisible: (id: string, visible: boolean) => void;
+  onDelete: (id: string) => void;
+}) {
+  if (layers.length === 0) return null;
+  return (
+    <div className="gr-list" role="list">
+      {layers.map((l) => {
+        const kind = l.window?.kind;
+        const icon =
+          kind === "line" ? "╱" : kind === "ellipse" ? "◯" : kind === "quad" ? "▱" : kind ? "✎" : "全";
+        return (
+          <div
+            key={l.id}
+            className={`gr-item${l.id === activeId ? " is-on" : ""}${l.visible === false ? " is-hidden" : ""}`}
+          >
+            <button
+              type="button"
+              className="gr-item-main"
+              onClick={() => onSelect(l.id)}
+              title={l.name}
+            >
+              <span className="gr-item-icon" aria-hidden="true">
+                {icon}
+              </span>
+              <span className="gr-item-name">{l.name}</span>
+            </button>
+            <button
+              type="button"
+              className="gr-item-btn"
+              title={l.visible === false ? "显示这一层" : "隐藏这一层"}
+              aria-pressed={l.visible !== false}
+              onClick={() => onToggleVisible(l.id, l.visible === false)}
+            >
+              {l.visible === false ? "◌" : "◉"}
+            </button>
+            <button
+              type="button"
+              className="gr-item-btn"
+              title="删除这一层"
+              onClick={() => onDelete(l.id)}
+            >
+              ✕
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

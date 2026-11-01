@@ -283,20 +283,46 @@ describe("四种形状都能建", () => {
     expect(defaultLine(800, 600).kind).toBe("line");
     expect(defaultEllipse(800, 600).kind).toBe("ellipse");
     expect(defaultQuad(800, 600).kind).toBe("quad");
+    // 钢笔不再给预置五边形：从空点集开始，等用户自己点
     const poly = defaultPoly(800, 600);
     expect(poly.kind).toBe("poly");
-    expect((poly as { points: unknown[] }).points).toHaveLength(5);
-    expect(windowCenter(poly)).toMatchObject({ x: 400 });
+    expect((poly as { points: unknown[] }).points).toHaveLength(0);
+    // 空点集没有任何手柄（否则会算出 Infinity 坐标）
+    expect(windowHandles(poly, 1)).toHaveLength(0);
   });
 
-  it("每种形状都至少 4 个可拖手柄", () => {
-    for (const w of [
-      defaultLine(800, 600),
-      defaultEllipse(800, 600),
-      defaultQuad(800, 600),
-      defaultPoly(800, 600),
-    ]) {
+  it("除钢笔外每种形状都至少 4 个可拖手柄", () => {
+    for (const w of [defaultLine(800, 600), defaultEllipse(800, 600), defaultQuad(800, 600)]) {
       expect(windowHandles(w, 1).length).toBeGreaterThanOrEqual(4);
     }
+  });
+
+  it("钢笔点了 3 个点后：3 个顶点 + 1 个羽化把手", () => {
+    const poly: GradeWindow = {
+      kind: "poly",
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 50, y: 80 },
+      ],
+      feather: 20,
+    };
+    expect(windowHandles(poly, 1).map((h) => h.id)).toEqual(["v0", "v1", "v2", "feather"]);
+    expect(windowCenter(poly)).toMatchObject({ x: 50 });
+  });
+
+  it("未闭合的钢笔：点回起点即闭合（几何上就是连最靠近的那条边）", () => {
+    // 闭合 = 最后一点连回第一点，命中测试按闭合多边形算
+    const poly: GradeWindow = {
+      kind: "poly",
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+      ],
+      feather: 0,
+    };
+    expect(windowHit(poly, 50, 40)).toBe(true);
+    expect(windowHit(poly, 20, 80)).toBe(false);
   });
 });

@@ -681,3 +681,133 @@
   color: var(--text);
   border-color: var(--accent);
 }
+
+/* ---------- 一级 / 二级 主标签 ---------- */
+
+.grade-levels {
+  display: flex;
+  gap: 3px;
+  flex: none;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.grade-level {
+  flex: 1 1 0;
+  height: 24px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.grade-level:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.grade-level.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* ---------- 范围列表（常驻，不隐藏） ---------- */
+
+.gr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  max-height: 132px;
+  overflow-y: auto;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  scrollbar-width: thin;
+}
+
+.gr-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 3px 0 2px;
+  font-size: 11px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+}
+
+/* 行主体（图标 + 名字）：点它切换层 */
+.gr-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 4px;
+  color: inherit;
+  text-align: left;
+  border-radius: var(--r-xs);
+}
+
+/* 行尾的小按钮：显示/隐藏、删除 */
+.gr-item-btn {
+  flex: none;
+  width: 18px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: 3px;
+}
+
+.gr-item-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.gr-item:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.gr-item.is-on {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+/* 在图层面板里被隐藏的范围：整行压暗，一眼看出"它现在不生效" */
+.gr-item.is-hidden {
+  opacity: 0.5;
+}
+
+.gr-item-icon {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.gr-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gr-item-off {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-3);
+}

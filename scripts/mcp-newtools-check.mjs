@@ -614,6 +614,39 @@ try {
     if (quadRes.parsed.window.edges[1] !== 24) throw new Error("edges 没被保留");
   });
 
+  // 线性：单向 —— 线的一侧全调，另一侧在 feather 之外必须完全不动
+  const lnOpen = await client.call("strata_open_image", { path: imgPath });
+  const lnSid = lnOpen.parsed.sessionId;
+  const lnBefore = join(dir, "ln-before.png");
+  const lnAfter = join(dir, "ln-after.png");
+  await client.call("strata_export_image", { sessionId: lnSid, path: lnBefore });
+  await client.call("strata_local_grade", {
+    sessionId: lnSid,
+    window: { kind: "line", x1: 0, y1: Math.round(lgH * 0.5), x2: lgW, y2: Math.round(lgH * 0.5), feather: 10 },
+    params: { temp: 90 },
+  });
+  await client.call("strata_export_image", { sessionId: lnSid, path: lnAfter });
+  const lnA = await readPng(lnBefore);
+  const lnB = await readPng(lnAfter);
+
+  check("strata_local_grade · 线性是单向的", () => {
+    const px = (img, x, y) => {
+      const i = (y * img.width + x) * 4;
+      return [img.data[i], img.data[i + 1], img.data[i + 2]];
+    };
+    const midX = Math.round(lgW * 0.5);
+    const aboveY = Math.max(0, Math.round(lgH * 0.5) - 20);
+    const belowY = Math.min(lgH - 1, Math.round(lgH * 0.5) + 30);
+    const a1 = px(lnA, midX, aboveY);
+    const b1 = px(lnB, midX, aboveY);
+    if (a1[0] === b1[0] && a1[2] === b1[2]) throw new Error("全调侧没有变化");
+    const a2 = px(lnA, midX, belowY);
+    const b2 = px(lnB, midX, belowY);
+    if (a2[0] !== b2[0] || a2[1] !== b2[1] || a2[2] !== b2[2]) {
+      throw new Error(`淡出侧超出 feather 之后还在变：${a2} → ${b2}`);
+    }
+  });
+
   // 非法范围必须报错，不能静默什么都不做
   const badWin = await client.call("strata_local_grade", {
     sessionId: lgSid,
