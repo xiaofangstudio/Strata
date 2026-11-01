@@ -71,5 +71,11 @@ export { CUBE_SIZE, identityCube, identityLut, lutToCube } from "../src/core/lut
 /* 文字检查：可确证的排版/错拼问题（纯函数） */
 export { applyFixes, checkText, ISSUE_LABEL } from "../src/core/proofread";
 
+/* Alpha 轮廓描迹 → SVG 路径（「路径到 Illustrator」的内核） */
+export { loopsToSvg, loopsToSvgPath, traceAlphaLoops } from "../src/core/tracePath";
+
+/* GIF89a 编码（「渲染视频」的内核） */
+export { encodeGif, encodeGifFromBuffers, gifHeaderInfo, lzwEncode } from "../src/engine/gif";
+
 /* 极简 PDF 写出器（Node 里有 TextEncoder，可直接用） */
 export { buildPdf, countPdfPages, pdfHead } from "../src/core/pdf";

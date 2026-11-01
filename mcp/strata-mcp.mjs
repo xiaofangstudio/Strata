@@ -487,7 +487,11 @@ import {
   lutToCube,
   checkText,
   applyFixes,
+  encodeGif,
+  loopsToSvg,
+  traceAlphaLoops,
 } from "./lib/engines.gen.mjs";
+import { exrDecode, exrInfo } from "./lib/exr.mjs";
 
 /** 滤镜 id → 定义（含参数表与内核）。索引一次，供工具与能力清单共用。 */
 const FILTER_BY_ID = new Map(FILTER_DEFS.map((d) => [d.id, d]));
@@ -551,8 +555,8 @@ import {
   renderRect,
   renderText,
 } from "./lib/draw.mjs";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
-import { resolve as resolvePath, dirname, isAbsolute, join as joinPath } from "node:path";
+import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { resolve as resolvePath, dirname, extname, isAbsolute, join as joinPath } from "node:path";
 
 const sessions = new Map();
 let sessionSeq = 0;
@@ -2270,6 +2274,268 @@ server.registerTool(
   }),
 );
 
+/* ==================================================================
+ * 今日七项能力的 MCP 侧
+ *
+ * 应用里这七项分别落在 Rust / UI 上，MCP 是独立 Node 进程，不能直接调它们；
+ * 能搬过来的内核（描迹、GIF 编码）与应用共用同一份实现，搬不过来的
+ * （WIA 扫描走 Windows COM）就明确告诉调用方，不假装能用。
+ * ================================================================== */
+
+/** 可识别的位图扩展名（浏览 / GIF 用）。 */
+const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".exr"]);
+
+server.registerTool(
+  "strata_exr_parts",
+  {
+    title: "列出 EXR 部件",
+    description:
+      "读 OpenEXR 文件的头，列出全部部件（名字 / 尺寸 / 通道 / 压缩方式 / 是否可解）。" +
+      "多部件 EXR（一张文件里放多层渲染结果）靠这个先看有哪些层。",
+    inputSchema: {
+      path: z.string().describe("EXR 文件绝对路径"),
+    },
+  },
+  guard(async ({ path }) => {
+    const abs = resolveImagePath(path, true);
+    const info = exrInfo(readFileSync(abs));
+    return ok({
+      ok: true,
+      path: abs,
+      multipart: info.multipart,
+      count: info.count,
+      parts: info.parts,
+      hint: "用 strata_exr_read 选一个部件解码成会话。",
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_exr_read",
+  {
+    title: "读取 EXR 部件到会话",
+    description:
+      "把 EXR 的某个部件解码进内存会话（8 位 sRGB RGBA），返回 sessionId；" +
+      "之后可以像普通图一样调色、滤镜、导出。支持 NONE / RLE / ZIPS / ZIP 压缩，" +
+      "PIZ 等压缩会明确报错并建议改用应用内打开。",
+    inputSchema: {
+      path: z.string().describe("EXR 文件绝对路径"),
+      part: z.number().int().min(0).optional().describe("部件序号（默认 0）"),
+      maxSide: z.number().int().min(16).max(16384).optional().describe("可选：等比缩放最长边"),
+    },
+  },
+  guard(async ({ path, part, maxSide }) => {
+    const abs = resolveImagePath(path, true);
+    let img = exrDecode(readFileSync(abs), part ?? 0);
+    if (maxSide) img = resize(img, maxSide);
+    sessionSeq += 1;
+    const id = `img-${sessionSeq}-${Date.now().toString(36)}`;
+    sessions.set(id, { img, base: img, source: abs });
+    return ok({
+      ok: true,
+      sessionId: id,
+      source: abs,
+      part: img.part,
+      compression: img.compression,
+      width: img.width,
+      height: img.height,
+      encoding: "8 位 sRGB（已从线性光转换）",
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_list_dir",
+  {
+    title: "浏览文件夹",
+    description:
+      "列出文件夹内容（应用里「文件 > 浏览」的 MCP 等价物）：子目录 + 图片文件与字节数。" +
+      "批量处理前先用它摸清目录结构。",
+    inputSchema: {
+      dir: z.string().describe("文件夹绝对路径"),
+      imagesOnly: z.boolean().optional().describe("只看图片（默认 true）"),
+      limit: z.number().int().min(1).max(5000).optional().describe("最多返回多少条（默认 500）"),
+    },
+  },
+  guard(async ({ dir, imagesOnly, limit }) => {
+    const abs = resolvePath(dir);
+    if (!existsSync(abs)) throw new ToolError(`路径不存在：${abs}`);
+    if (!statSync(abs).isDirectory()) throw new ToolError(`不是文件夹：${abs}`);
+    const max = limit ?? 500;
+    const entries = [];
+    let truncated = false;
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const ext = extname(e.name).toLowerCase();
+      if (imagesOnly !== false && e.isFile() && !IMAGE_EXT.has(ext)) continue;
+      let size = 0;
+      if (e.isFile()) {
+        try {
+          size = statSync(joinPath(abs, e.name)).size;
+        } catch {
+          continue;
+        }
+      }
+      entries.push({
+        name: e.name,
+        dir: e.isDirectory(),
+        ext: ext.replace(".", ""),
+        size,
+      });
+      if (entries.length >= max) {
+        truncated = true;
+        break;
+      }
+    }
+    entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
+    return ok({ ok: true, dir: abs, count: entries.length, truncated, entries });
+  }),
+);
+
+server.registerTool(
+  "strata_trace_paths",
+  {
+    title: "轮廓描迹成 SVG 路径",
+    description:
+      "把会话图的不透明区域描成矢量轮廓 —— 应用里「文件 > 导出 > 路径到 Illustrator」的同一套内核" +
+      "（marching squares + 共线合并），输出可直接拖进 Illustrator 的 SVG（evenodd 自动挖洞）。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      threshold: z.number().int().min(1).max(254).optional().describe("Alpha 阈值（默认 128）"),
+      fill: z.string().optional().describe("填充色（默认 #000000）"),
+      outPath: z.string().optional().describe("可选：把 SVG 存到磁盘"),
+      inline: z.boolean().optional().describe("是否把 SVG 文本一起返回（默认 true，>400KB 时只落盘）"),
+    },
+  },
+  guard(async ({ sessionId, threshold, fill, outPath, inline }) => {
+    const s = sessionImage(sessionId);
+    const loops = traceAlphaLoops(s.img.data, s.img.width, s.img.height, threshold ?? 128);
+    const svg = loopsToSvg(loops, s.img.width, s.img.height, fill ?? "#000000");
+    let saved = null;
+    if (outPath) {
+      saved = resolvePath(outPath);
+      writeFileSync(saved, svg, "utf8");
+    }
+    const big = svg.length > 400_000;
+    const payload = {
+      ok: true,
+      loops: loops.length,
+      width: s.img.width,
+      height: s.img.height,
+      svgBytes: Buffer.byteLength(svg, "utf8"),
+      path: saved,
+    };
+    if (big && !saved && inline !== false) {
+      payload.note = "SVG 太大（>400KB），请传 outPath 落盘";
+    } else if (inline !== false) {
+      payload.svg = svg;
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_make_gif",
+  {
+    title: "多帧合成 GIF",
+    description:
+      "把一批图片按顺序编成循环动画 GIF（应用里「文件 > 渲染视频」的同一套编码器：GIF89a + LZW，" +
+      "中位切分量化）。各帧尺寸不一致时按第一帧缩放。",
+    inputSchema: {
+      paths: z.array(z.string()).min(1).describe("帧图片路径（按播放顺序）"),
+      outPath: z.string().describe("输出 .gif 绝对路径"),
+      maxSide: z.number().int().min(16).max(4096).optional().describe("可选：统一缩放到最长边"),
+      delayMs: z.number().int().min(20).max(10000).optional().describe("每帧停留毫秒（默认 120）"),
+      loop: z.number().int().min(0).max(65535).optional().describe("循环次数，0=无限（默认 0）"),
+    },
+  },
+  guard(async ({ paths, outPath, maxSide, delayMs, loop }) => {
+    const frames = [];
+    let fw = 0;
+    let fh = 0;
+    for (const p of paths) {
+      const abs = resolveImagePath(p, true);
+      let img = decodeImage(readFileSync(abs));
+      if (maxSide) img = resize(img, maxSide);
+      if (!fw) {
+        fw = img.width;
+        fh = img.height;
+      } else if (img.width !== fw || img.height !== fh) {
+        img = bilinearResize(img, fw, fh);
+      }
+      frames.push({
+        data: img.data,
+        width: img.width,
+        height: img.height,
+        delay: (delayMs ?? 120) / 1000,
+      });
+    }
+    const bytes = encodeGif(frames, loop ?? 0);
+    const abs = resolvePath(outPath);
+    writeFileSync(abs, Buffer.from(bytes));
+    return ok({
+      ok: true,
+      path: abs,
+      frames: frames.length,
+      width: fw,
+      height: fh,
+      bytes: bytes.length,
+      delayMs: delayMs ?? 120,
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_make_droplet",
+  {
+    title: "生成 Droplet 配方文件",
+    description:
+      "写一份 .strata-droplet 配方（双击即可在 Strata 里装载成批处理）。" +
+      "操作只有五种：autoContrast / grayscale / fit{maxSide} / exportPng / exportJpg{quality}；" +
+      "参数会严格校验，不认识的直接报错，不会写出一份带病配方。",
+    inputSchema: {
+      name: z.string().describe("配方名字（显示在 Droplet 窗口标题上）"),
+      ops: z
+        .array(z.record(z.string(), z.any()))
+        .min(1)
+        .describe('操作数组，例如 [{op:"autoContrast"},{op:"fit",maxSide:2000},{op:"exportJpg",quality:92}]'),
+      outPath: z.string().optional().describe("输出路径；省略则写到当前目录 <名字>.strata-droplet"),
+    },
+  },
+  guard(async ({ name, ops, outPath }) => {
+    const cleaned = [];
+    for (const raw of ops) {
+      const op = raw && typeof raw === "object" ? raw.op : undefined;
+      if (op === "autoContrast" || op === "grayscale") {
+        cleaned.push({ op });
+      } else if (op === "fit") {
+        const n = Math.round(Number(raw.maxSide));
+        if (!(n >= 16 && n <= 16384)) throw new ToolError("fit 的 maxSide 需要在 16–16384 之间");
+        cleaned.push({ op: "fit", maxSide: n });
+      } else if (op === "exportPng") {
+        cleaned.push({ op: "exportPng" });
+      } else if (op === "exportJpg") {
+        const q = Math.round(Number(raw.quality ?? 92));
+        if (!(q >= 1 && q <= 100)) throw new ToolError("exportJpg 的 quality 需要在 1–100 之间");
+        cleaned.push({ op: "exportJpg", quality: q });
+      } else {
+        throw new ToolError(
+          `未知配方操作：${op}。支持 autoContrast / grayscale / fit / exportPng / exportJpg`,
+        );
+      }
+    }
+    if (!cleaned.some((o) => o.op === "exportPng" || o.op === "exportJpg")) {
+      throw new ToolError("配方里至少要有一条导出操作，否则处理完不会落盘");
+    }
+    const safe = String(name || "未命名配方").replace(/[\\/:*?"<>|]/g, "_");
+    const abs = outPath
+      ? resolvePath(outPath)
+      : joinPath(process.cwd(), `${safe}.strata-droplet`);
+    const recipe = { kind: "strata-droplet", version: 1, name: String(name || "未命名配方"), ops: cleaned };
+    writeFileSync(abs, JSON.stringify(recipe, null, 2), "utf8");
+    return ok({ ok: true, path: abs, recipe, hint: "双击这个文件即可在 Strata 里装载配方。" });
+  }),
+);
+
 /* ------------------------------------------------------------------ 启动 */
 
 /** 自检：确认能力清单里声明的每个工具都真的注册上了，且常量没跑偏。 */
@@ -2300,7 +2566,8 @@ async function main() {
     );
     process.exit(0);
   }
-  const transport = new StdioServerTransport();
+  
+const transport = new StdioServerTransport();
   await server.connect(transport);
   // stdio 传输下 stdout 属于协议通道，日志一律走 stderr
   process.stderr.write(`${SERVER_NAME} MCP 服务器已就绪（协议 ${PROTOCOL_VERSION}）\n`);

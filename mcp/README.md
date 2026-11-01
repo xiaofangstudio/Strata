@@ -103,6 +103,30 @@ overlay / softLight / darken / lighten / add。文字与形状由 `@napi-rs/canv
 旋转 `rotateImage`、胶封 `glossLayer`、矢量路径 `renderPath`、光晕 `renderRadialGlow`、玻璃 `renderGlass`。
 `scripts/mcp-album-demo.mjs` 用这套工具端到端拼出「悬挂的猫」相册（1080×1350，约 39 层）。
 
+### 与应用同一批能力（EXR / 描迹 / GIF / Droplet / 浏览）
+
+这一组对应应用「文件」菜单里的那七项，**能搬过来的内核与应用共用同一份实现**
+（`scripts/mcp-engines-entry.ts` 打包），搬不过来的明确不假装：
+
+| 工具 | 作用 | 对应应用内功能 |
+| --- | --- | --- |
+| `strata_exr_parts` | 读 OpenEXR 头，列部件（名字/尺寸/通道/压缩方式/是否可解） | 打开 EXR 部件 |
+| `strata_exr_read` | 把某个部件解码进会话（HALF/FLOAT/UINT → 8 位 sRGB RGBA） | 打开 EXR 部件 |
+| `strata_list_dir` | 列文件夹（子目录 + 图片 + 字节数），批量处理前摸底 | 浏览 |
+| `strata_trace_paths` | alpha 轮廓描迹成 SVG（marching squares + evenodd 挖洞） | 路径到 Illustrator |
+| `strata_make_gif` | 多帧合成循环 GIF（与应用同一个 GIF89a + LZW 编码器） | 渲染视频 |
+| `strata_make_droplet` | 写 `.strata-droplet` 配方（严格校验，未知操作直接拒） | 创建 Droplet |
+
+**EXR 压缩支持范围**：NONE / RLE / ZIPS / ZIP（OpenEXR 默认就是 ZIP）。
+PIZ / PXR24 / B44 / DWAA / DWAB 会**明确报错**并建议改用应用内打开，不会解出花屏。
+
+**做不到的两项，说清楚**：
+
+- **WIA 扫描** —— 走的是 Windows COM（`IWiaDevMgr2`），只有应用进程里能用。
+  MCP 是独立 Node 进程，没法调系统扫描仪；需要扫描就先在应用里扫成文件，再让 MCP 处理。
+- **脚本事件管理器** —— 它是应用内的「事件 → 配方」绑定，属于界面行为，没有跨进程形态。
+  配方本身可以用 `strata_make_droplet` 生成，双击即装载。
+
 抠图不用 AI，走「边界洪水填充（多种子、Sobel 边缘闸门）+ 最大连通域 + 羽化」；
 背景与主体颜色接近时优先调 `edgeGate` 与 `sides`，仍不干净就换一张对比更强的图 —— 
 纯色/虚化背景效果最好，这一步的上限由素材决定。

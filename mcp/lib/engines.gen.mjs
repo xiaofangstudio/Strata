@@ -4694,6 +4694,247 @@ var ISSUE_LABEL = {
   typo: "\u62FC\u5199"
 };
 
+// src/core/tracePath.ts
+function traceAlphaLoops(data, width, height, threshold = 128) {
+  const solid = (x, y) => x >= 0 && y >= 0 && x < width && y < height && data[(y * width + x) * 4 + 3] >= threshold;
+  const edges = /* @__PURE__ */ new Map();
+  const key = (x, y) => y * (width + 1) + x;
+  const addEdge = (ax, ay, bx, by) => {
+    const k = key(ax, ay);
+    const list = edges.get(k);
+    if (list) list.push(key(bx, by));
+    else edges.set(k, [key(bx, by)]);
+  };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (!solid(x, y)) continue;
+      if (!solid(x, y - 1)) addEdge(x, y, x + 1, y);
+      if (!solid(x + 1, y)) addEdge(x + 1, y, x + 1, y + 1);
+      if (!solid(x, y + 1)) addEdge(x + 1, y + 1, x, y + 1);
+      if (!solid(x - 1, y)) addEdge(x, y + 1, x, y);
+    }
+  }
+  const loops = [];
+  const toPt = (k) => ({ x: k % (width + 1), y: Math.floor(k / (width + 1)) });
+  while (edges.size > 0) {
+    const startK = edges.keys().next().value;
+    const loop = [];
+    let cur = startK;
+    let guard = 0;
+    const limit = width * height * 4 + 8;
+    for (; ; ) {
+      const outs = edges.get(cur);
+      if (!outs || outs.length === 0) break;
+      const nextK = outs.pop();
+      if (outs.length === 0) edges.delete(cur);
+      loop.push(toPt(cur));
+      cur = nextK;
+      guard += 1;
+      if (guard > limit) break;
+      if (cur === startK) break;
+    }
+    if (loop.length >= 4) loops.push(mergeCollinear(loop));
+  }
+  return loops;
+}
+function mergeCollinear(loop) {
+  if (loop.length < 3) return loop;
+  const out = [];
+  for (let i = 0; i < loop.length; i += 1) {
+    const a = out[out.length - 1] ?? loop[loop.length - 1];
+    const b = loop[i];
+    const c = loop[(i + 1) % loop.length];
+    const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (cross !== 0) out.push(b);
+  }
+  return out;
+}
+function loopsToSvgPath(loops) {
+  return loops.map((lp) => {
+    const head = lp[0];
+    const rest = lp.slice(1).map((p) => `L${p.x} ${p.y}`).join("");
+    return `M${head.x} ${head.y}${rest}Z`;
+  }).join("");
+}
+function loopsToSvg(loops, width, height, fill = "#000000") {
+  const d = loopsToSvgPath(loops);
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<path d="${d}" fill="${fill}" fill-rule="evenodd"/>`,
+    "</svg>",
+    ""
+  ].join("\n");
+}
+
+// src/engine/gif.ts
+function lzwEncode(indices, minCodeSize) {
+  const clearCode = 1 << minCodeSize;
+  const eoiCode = clearCode + 1;
+  let codeSize = minCodeSize + 1;
+  let nextCode = eoiCode + 1;
+  const dict = /* @__PURE__ */ new Map();
+  const bytes = [];
+  let bitBuf = 0;
+  let bitCnt = 0;
+  const emit = (code) => {
+    bitBuf |= code << bitCnt;
+    bitCnt += codeSize;
+    while (bitCnt >= 8) {
+      bytes.push(bitBuf & 255);
+      bitBuf >>= 8;
+      bitCnt -= 8;
+    }
+  };
+  if (indices.length === 0) {
+    emit(clearCode);
+    emit(eoiCode);
+    if (bitCnt > 0) bytes.push(bitBuf & 255);
+    return bytes;
+  }
+  emit(clearCode);
+  let prefix = indices[0];
+  for (let i = 1; i < indices.length; i += 1) {
+    const k = indices[i];
+    const key = prefix << 8 | k;
+    const hit = dict.get(key);
+    if (hit !== void 0) {
+      prefix = hit;
+      continue;
+    }
+    emit(prefix);
+    dict.set(key, nextCode);
+    if (nextCode === 1 << codeSize && codeSize < 12) codeSize += 1;
+    nextCode += 1;
+    if (nextCode === 4096) {
+      emit(clearCode);
+      dict.clear();
+      nextCode = eoiCode + 1;
+      codeSize = minCodeSize + 1;
+    }
+    prefix = k;
+  }
+  emit(prefix);
+  emit(eoiCode);
+  if (bitCnt > 0) bytes.push(bitBuf & 255);
+  return bytes;
+}
+function toSubBlocks(bytes) {
+  const out = [];
+  for (let i = 0; i < bytes.length; i += 255) {
+    const chunk = bytes.slice(i, i + 255);
+    out.push(chunk.length, ...chunk);
+  }
+  out.push(0);
+  return out;
+}
+var NearestPalette = class {
+  constructor(palette) {
+    this.palette = palette;
+  }
+  palette;
+  cache = /* @__PURE__ */ new Map();
+  indexOf(r, g, b) {
+    const key = r >> 3 << 10 | g >> 3 << 5 | b >> 3;
+    const hit = this.cache.get(key);
+    if (hit !== void 0) return hit;
+    let best = 0;
+    let bestD = Infinity;
+    const pal = this.palette;
+    for (let i = 0; i < pal.length; i += 1) {
+      const dr = r - pal[i][0];
+      const dg = g - pal[i][1];
+      const db = b - pal[i][2];
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    this.cache.set(key, best);
+    return best;
+  }
+};
+function quantizeFrame(frame) {
+  const buf = {
+    data: frame.data instanceof Uint8ClampedArray ? frame.data : new Uint8ClampedArray(frame.data),
+    width: frame.width,
+    height: frame.height
+  };
+  const palette = medianCutPalette(buf, 256);
+  const nearest2 = new NearestPalette(palette);
+  const n = frame.width * frame.height;
+  const indices = new Uint8Array(n);
+  const d = buf.data;
+  for (let p = 0; p < n; p += 1) {
+    const i = p * 4;
+    indices[p] = d[i + 3] < 8 ? 0 : nearest2.indexOf(d[i], d[i + 1], d[i + 2]);
+  }
+  while (palette.length < 256) palette.push([0, 0, 0]);
+  return { indices, palette };
+}
+var U16 = (v) => [v & 255, v >> 8 & 255];
+function encodeGif(frames, loop = 0) {
+  if (frames.length === 0) throw new Error("\u6CA1\u6709\u53EF\u5BFC\u51FA\u7684\u5E27");
+  const w = frames[0].width;
+  const h = frames[0].height;
+  for (const f2 of frames) {
+    if (f2.width !== w || f2.height !== h) {
+      throw new Error("\u5404\u5E27\u5C3A\u5BF8\u4E0D\u4E00\u81F4\uFF0C\u65E0\u6CD5\u5408\u6210 GIF");
+    }
+  }
+  const out = [];
+  out.push(71, 73, 70, 56, 57, 97);
+  out.push(...U16(w), ...U16(h), 112, 0, 0);
+  out.push(33, 255, 11);
+  for (const c of "NETSCAPE2.0") out.push(c.charCodeAt(0));
+  out.push(3, 1, ...U16(loop), 0);
+  for (const frame of frames) {
+    const { indices, palette } = quantizeFrame(frame);
+    const delay = Math.max(2, Math.round(frame.delay * 100));
+    out.push(33, 249, 4, 4, ...U16(delay), 0, 0);
+    out.push(44, ...U16(0), ...U16(0), ...U16(w), ...U16(h), 135);
+    for (const c of palette) out.push(c[0] & 255, c[1] & 255, c[2] & 255);
+    out.push(8);
+    out.push(...toSubBlocks(lzwEncode(indices, 8)));
+  }
+  out.push(59);
+  return new Uint8Array(out);
+}
+function encodeGifFromBuffers(bufs, fps, loop = 0) {
+  return encodeGif(
+    bufs.map((b) => ({ data: b.data, width: b.width, height: b.height, delay: 1 / fps })),
+    loop
+  );
+}
+function gifHeaderInfo(bytes) {
+  const dv = (i) => bytes[i] | bytes[i + 1] << 8;
+  let p = 13;
+  let frames = 0;
+  while (p < bytes.length) {
+    const b = bytes[p];
+    if (b === 59) break;
+    if (b === 33) {
+      p += 2;
+      while (bytes[p] !== 0) p += bytes[p] + 1;
+      p += 1;
+      continue;
+    }
+    if (b === 44) {
+      frames += 1;
+      p += 9;
+      const packed = bytes[p - 1];
+      if (packed & 128) p += 3 * (2 << (packed & 7));
+      p += 1;
+      while (bytes[p] !== 0) p += bytes[p] + 1;
+      p += 1;
+      continue;
+    }
+    p += 1;
+  }
+  return { w: dv(6), h: dv(8), frames };
+}
+
 // src/core/pdf.ts
 function ascii(bytes) {
   let s = "";
@@ -4819,6 +5060,8 @@ export {
   convertProfile,
   countPdfPages,
   curveToTable,
+  encodeGif,
+  encodeGifFromBuffers,
   energyMap,
   estimateShift,
   filterDef,
@@ -4827,13 +5070,17 @@ export {
   findPhotoRegions,
   findVerticalSeam,
   focusHit,
+  gifHeaderInfo,
   gradeIsNeutral,
   growHit,
   identityCube,
   identityLut,
   insertHorizontalSeam,
   insertVerticalSeam,
+  loopsToSvg,
+  loopsToSvgPath,
   lutToCube,
+  lzwEncode,
   medianCutPalette,
   mlsWarp,
   neutralGrade,
@@ -4849,5 +5096,6 @@ export {
   toCmyk,
   toDuotone,
   toIndexed,
-  toLab
+  toLab,
+  traceAlphaLoops
 };

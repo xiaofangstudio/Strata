@@ -10,7 +10,8 @@
  * 它会自己在系统临时目录造一张测试图，跑完删掉，不碰用户文件。
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -144,6 +145,90 @@ const sheetPath = join(dir, "sheet.png");
   ctx.fillRect(160, 50, 110, 90);
   writeFileSync(sheetPath, c.toBuffer("image/png"));
 }
+}
+
+
+/**
+ * 造一个最小的未压缩扫描线 EXR（三通道 HALF）。
+ * 只在检查脚本里用：验证 MCP 侧读取链路，不追求覆盖所有压缩方式。
+ */
+function makeExr(w, h, rgb) {
+  const half = (v) => {
+    const f = new Float32Array(1);
+    const i = new Int32Array(f.buffer);
+    f[0] = v;
+    const x = i[0];
+    const sign = (x >> 16) & 0x8000;
+    const exp = ((x >> 23) & 0xff) - 127 + 15;
+    const mant = (x & 0x7fffff) >> 13;
+    return sign | (exp << 10) | mant;
+  };
+  const attr = (name, type, value) => {
+    const n = Buffer.from(name + "\0", "utf8");
+    const t = Buffer.from(type + "\0", "utf8");
+    const size = Buffer.alloc(4);
+    size.writeInt32LE(value.length, 0);
+    return Buffer.concat([n, t, size, value]);
+  };
+  const box = (a, b) => {
+    const x = Buffer.alloc(16);
+    x.writeInt32LE(0, 0);
+    x.writeInt32LE(0, 4);
+    x.writeInt32LE(a - 1, 8);
+    x.writeInt32LE(b - 1, 12);
+    return x;
+  };
+  // chlist（字典序 B/G/R）
+  const ch = [];
+  for (const name of ["B", "G", "R"]) {
+    ch.push(Buffer.from(name + "\0", "utf8"));
+    const meta = Buffer.alloc(16);
+    meta.writeInt32LE(1, 0);
+    meta.writeInt32LE(1, 8);
+    meta.writeInt32LE(1, 12);
+    ch.push(meta);
+  }
+  ch.push(Buffer.from([0]));
+  const one = Buffer.from([0]);
+  const f4 = (v) => {
+    const b = Buffer.alloc(4);
+    b.writeFloatLE(v, 0);
+    return b;
+  };
+  const v2 = Buffer.alloc(8);
+  const header = Buffer.concat([
+    attr("channels", "chlist", Buffer.concat(ch)),
+    attr("compression", "compression", one),
+    attr("dataWindow", "box2i", box(w, h)),
+    attr("displayWindow", "box2i", box(w, h)),
+    attr("lineOrder", "lineOrder", one),
+    attr("pixelAspectRatio", "float", f4(1)),
+    attr("screenWindowCenter", "v2f", v2),
+    attr("screenWindowWidth", "float", f4(1)),
+    Buffer.from([0]),
+  ]);
+  const row = w * 2;
+  const raw = Buffer.alloc(row * 3 * h);
+  let o = 0;
+  for (const idx of [2, 1, 0]) {
+    // B/G/R 顺序写入
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        raw.writeUInt16LE(half(rgb[idx]), o);
+        o += 2;
+      }
+    }
+  }
+  const chunk = Buffer.alloc(8);
+  chunk.writeInt32LE(0, 0);
+  chunk.writeInt32LE(raw.length, 4);
+  const table = Buffer.alloc(8);
+  table.writeBigUInt64LE(BigInt(8 + header.length + 8), 0);
+  const magic = Buffer.alloc(4);
+  magic.writeUInt32LE(0x01312f76, 0);
+  const ver = Buffer.alloc(4);
+  ver.writeUInt32LE(2, 0);
+  return Buffer.concat([magic, ver, header, table, chunk, raw]);
 }
 
 const client = new McpClient();
@@ -368,6 +453,82 @@ try {
     if (gCurve.parsed.previewBase64 === gBase.parsed.previewBase64) {
       throw new Error("曲线没被应用");
     }
+  });
+
+  /* ---------------- 今日七项能力：EXR / 浏览 / 描迹 / GIF / Droplet ---------------- */
+
+  // 造一个未压缩 EXR（3×2，纯中灰 0.5 线性）
+  const exrPath = join(dir, "check.exr");
+  writeFileSync(exrPath, makeExr(3, 2, [0.5, 0.5, 0.5]));
+
+  const exrParts = await client.call("strata_exr_parts", { path: exrPath });
+  check("strata_exr_parts", () => {
+    if (exrParts.isError) throw new Error(exrParts.parsed.error);
+    if (exrParts.parsed.count !== 1) throw new Error(`应 1 个部件，实际 ${exrParts.parsed.count}`);
+    if (exrParts.parsed.parts[0].compression !== "NONE") {
+      throw new Error(`压缩方式读错：${exrParts.parsed.parts[0].compression}`);
+    }
+  });
+
+  const exrRead = await client.call("strata_exr_read", { path: exrPath });
+  check("strata_exr_read", () => {
+    if (exrRead.isError) throw new Error(exrRead.parsed.error);
+    if (exrRead.parsed.width !== 3 || exrRead.parsed.height !== 2) {
+      throw new Error(`尺寸不对：${exrRead.parsed.width}×${exrRead.parsed.height}`);
+    }
+  });
+
+  const listed = await client.call("strata_list_dir", { dir });
+  check("strata_list_dir", () => {
+    if (listed.isError) throw new Error(listed.parsed.error);
+    const names = listed.parsed.entries.map((e) => e.name);
+    if (!names.includes("sample.png")) throw new Error("没列出 sample.png");
+    if (!names.some((n) => n.endsWith(".exr"))) throw new Error("没列出 exr");
+  });
+
+  const traced = await client.call("strata_trace_paths", { sessionId: sid, outPath: join(dir, "trace.svg") });
+  check("strata_trace_paths", () => {
+    if (traced.isError) throw new Error(traced.parsed.error);
+    if (!(traced.parsed.loops >= 1)) throw new Error("没描出任何环");
+    const svg = readFileSync(join(dir, "trace.svg"), "utf8");
+    if (!svg.includes("<path") || !svg.includes("evenodd")) throw new Error("SVG 结构不对");
+  });
+
+  const gifPath = join(dir, "anim.gif");
+  const gif = await client.call("strata_make_gif", {
+    paths: [imgPath, sheetPath],
+    outPath: gifPath,
+    maxSide: 64,
+    delayMs: 80,
+  });
+  check("strata_make_gif", () => {
+    if (gif.isError) throw new Error(gif.parsed.error);
+    const bytes = readFileSync(gifPath);
+    if (bytes.subarray(0, 6).toString("latin1") !== "GIF89a") throw new Error("文件头不是 GIF89a");
+    if (!(gif.parsed.frames === 2)) throw new Error("帧数不对");
+  });
+
+  const dropPath = join(dir, "batch.strata-droplet");
+  const drop = await client.call("strata_make_droplet", {
+    name: "缩图批处理",
+    ops: [{ op: "autoContrast" }, { op: "fit", maxSide: 1600 }, { op: "exportJpg", quality: 88 }],
+    outPath: dropPath,
+  });
+  check("strata_make_droplet", () => {
+    if (drop.isError) throw new Error(drop.parsed.error);
+    const recipe = JSON.parse(readFileSync(dropPath, "utf8"));
+    if (recipe.kind !== "strata-droplet") throw new Error("kind 不对");
+    if (recipe.ops.length !== 3) throw new Error("操作数不对");
+  });
+
+  // 带病配方必须被拒（不能悄悄写出去）
+  const badDrop = await client.call("strata_make_droplet", {
+    name: "坏配方",
+    ops: [{ op: "explode" }],
+    outPath: join(dir, "bad.strata-droplet"),
+  });
+  check("strata_make_droplet 拒绝未知操作", () => {
+    if (!badDrop.isError) throw new Error("未知操作竟然通过了");
   });
 
   // 能力清单应能列出全部滤镜与颜色模式
