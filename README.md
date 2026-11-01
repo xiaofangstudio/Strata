@@ -41,6 +41,11 @@
 
 ## 🆕 这个版本更新了什么
 
+### 📅 本轮更新（11-01）：调色窗口
+
+- 🪟 **调色窗口（Grade Window）**：新模块 `core/gradeWindow.ts` + 独立覆盖层组件 `GradeWindowOverlay`——调色结果以独立窗口浮在画布上实时预览，`GradePanel` 同步扩展
+- 🧩 合成器 / 图层核心（`compositor.ts` / `layer.ts` / `layerOps.ts` / `project.ts`）配合改造，配单测 `tests/unit/gradeWindow.test.ts`
+
 ### 📅 本轮更新（10-31 第四波）：LUT、照片裁剪与对比视图
 
 - 🎨 **LUT 色彩查找表**：新模块 `core/lut.ts`——加载 / 应用 LUT 调色底座，配单测

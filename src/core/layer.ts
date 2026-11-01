@@ -1413,6 +1413,11 @@ export interface StrataLayer {
   /** kind === "adjust" 时的参数 */
   adjust?: AdjustState;
   /**
+   * 调色范围（Power Window）：参数化的几何，蒙版由它现算。
+   * 有它就能在画布上拖手柄改范围；缺省表示"全画面调色"。
+   */
+  window?: import("./gradeWindow").GradeWindow;
+  /**
    * 可编辑文本层的状态（Type 组 45 项的基础）。
    *
    * 有 `text` 的像素图层 = 文本层：surface 只是它的渲染缓存，改字号/字距/对齐/
@@ -1581,10 +1586,16 @@ export function layerFromBitmap(bitmap: ImageBitmap, name: string): StrataLayer 
   return layer;
 }
 
+/** 复制范围几何（多边形有点数组，必须深一层，否则两张图层会共用顶点）。 */
+export function cloneWindow(w: import("./gradeWindow").GradeWindow): import("./gradeWindow").GradeWindow {
+  return w.kind === "poly" ? { ...w, points: w.points.map((p) => ({ ...p })) } : { ...w };
+}
+
 /** 深拷贝一个图层，用于「复制图层」与历史栈快照。 */
 export function cloneLayer(layer: StrataLayer): StrataLayer {
   return {
     ...layer,
+    window: layer.window ? cloneWindow(layer.window) : undefined,
     id: nextLayerId(),
     surface: cloneSurface(layer.surface),
     mask: layer.mask ? cloneSurface(layer.mask) : null,
@@ -1597,6 +1608,7 @@ export function cloneLayer(layer: StrataLayer): StrataLayer {
 export function dupLayer(layer: StrataLayer): StrataLayer {
   return {
     ...layer,
+    window: layer.window ? cloneWindow(layer.window) : undefined,
     surface: cloneSurface(layer.surface),
     mask: layer.mask ? cloneSurface(layer.mask) : null,
     adjust: layer.adjust ? cloneAdjust(layer.adjust) : undefined,

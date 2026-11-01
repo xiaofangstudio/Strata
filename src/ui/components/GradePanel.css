@@ -537,3 +537,78 @@
 .grade-create-lead {
   color: var(--text-2);
 }
+
+/* ---------- 调色范围（局部调色） ---------- */
+
+.gr-range {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  min-width: 0;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.gr-range.is-on {
+  border-color: var(--accent);
+}
+
+.gr-tag {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--surface);
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.gr-tag.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.gr-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gr-feather {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gr-actions {
+  display: flex;
+  gap: 3px;
+  flex: none;
+}
+
+.gr-btn {
+  flex: none;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+.gr-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.gr-btn:disabled {
+  opacity: 0.4;
+}

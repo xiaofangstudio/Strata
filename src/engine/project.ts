@@ -60,6 +60,12 @@ interface FileLayer {
   mask?: string;
   /** 智能对象原始像素的 data URL；普通图层省略 */
   smart?: string;
+  /**
+   * 调色范围几何（v6 起）：椭圆/矩形/多边形的参数 + 羽化半径。
+   * 蒙版本身也存了，几何只是为了让"手柄还能拖"这件事跨存档保留；
+   * 老工程没有这个字段，打开后照样按蒙版渲染，只是不能拖手柄。
+   */
+  window?: unknown;
 }
 
 /** 落盘的整个工程。 */
@@ -77,6 +83,39 @@ interface ProjectFile {
   selection?: string;
   /** Alpha 通道（v5 起）：名字 + base64 PNG 遮罩；没有时省略 */
   alphaChannels?: { name: string; mask: string }[];
+}
+
+/**
+ * 校验并清洗存盘的范围几何。
+ *
+ * 工程文件是可以被手改的，这里只接受认识的结构；任何不对劲就当没有范围
+ * （退回"全画面调色"），而不是让一个半截对象把渲染搞崩。
+ */
+function sanitizeWindow(raw: unknown): StrataLayer["window"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const w = raw as Record<string, unknown>;
+  const feather = Math.max(0, Math.min(400, Number(w.feather) || 0));
+  const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  if (w.kind === "ellipse") {
+    const rx = num(w.rx);
+    const ry = num(w.ry);
+    if (rx <= 0 || ry <= 0) return undefined;
+    return { kind: "ellipse", cx: num(w.cx), cy: num(w.cy), rx, ry, feather };
+  }
+  if (w.kind === "rect") {
+    const width = num(w.w);
+    const height = num(w.h);
+    if (width <= 0 || height <= 0) return undefined;
+    return { kind: "rect", x: num(w.x), y: num(w.y), w: width, h: height, feather };
+  }
+  if (w.kind === "poly" && Array.isArray(w.points)) {
+    const points = w.points
+      .filter((p) => p && typeof p === "object")
+      .map((p) => ({ x: num((p as Record<string, unknown>).x), y: num((p as Record<string, unknown>).y) }));
+    if (points.length < 3) return undefined;
+    return { kind: "poly", points, feather };
+  }
+  return undefined;
 }
 
 /** 画布 → base64 PNG（剥掉 data URL 前缀）。 */
@@ -136,6 +175,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     // 调整图层与组都不占像素，不写 surface，省下整幅空白（或 1×1 占位）PNG
     if (l.kind === "pixel") fl.surface = canvasToB64(l.surface);
     if (l.mask) fl.mask = canvasToB64(l.mask);
+    if (l.window) fl.window = l.window;
     if (l.smart) fl.smart = l.smart;
     layers.push(fl);
   });
@@ -201,6 +241,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
       clip: !!fl.clip,
       styles: fl.styles ? fl.styles.map(cloneStyle) : [],
       smart: fl.smart,
+      window: sanitizeWindow(fl.window),
     };
     if (fl.kind === "adjust" && fl.adjust) {
       layers.push({ ...createAdjustLayer(fl.name, fl.adjust), ...common });

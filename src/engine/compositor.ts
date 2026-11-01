@@ -27,12 +27,25 @@ export { maskedSurface };
  * 蒙版与图层样式的暂存画布由 styles.ts 统一管理。
  */
 let adjustBuf: HTMLCanvasElement | null = null;
+/** 调整层「乘蒙版」用的第二张暂存画布（只在有蒙版时才用）。 */
+let adjustMaskBuf: HTMLCanvasElement | null = null;
 
 function adjustBuffer(w: number, h: number): HTMLCanvasElement {
   let c = adjustBuf;
   if (!c) {
     c = document.createElement("canvas");
     adjustBuf = c;
+  }
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  return resetBuffer(c);
+}
+
+function maskBuffer(w: number, h: number): HTMLCanvasElement {
+  let c = adjustMaskBuf;
+  if (!c) {
+    c = document.createElement("canvas");
+    adjustMaskBuf = c;
   }
   if (c.width !== w) c.width = w;
   if (c.height !== h) c.height = h;
@@ -132,19 +145,38 @@ function applyAdjust(
     bc.globalCompositeOperation = "source-over";
   }
 
+  /**
+   * 蒙版：调色层也吃蒙版 —— 这就是「局部调色」（达芬奇的 Power Window）。
+   *
+   * 做法是把调整结果先乘上蒙版 alpha（destination-in），只有蒙版覆盖的地方
+   * 才保留调整后的像素；再按图层不透明度整体叠回去。羽化过的蒙版边缘是
+   * 渐变 alpha，于是过渡是平滑的，不会出现硬边。
+   */
+  let src = buf;
+  const mask = layer.mask;
+  if (mask && layer.maskActive !== false) {
+    const mb = maskBuffer(w, h);
+    const mc = mustCtx(mb);
+    mc.setTransform(1, 0, 0, 1, 0, 0);
+    mc.globalCompositeOperation = "source-over";
+    mc.clearRect(0, 0, w, h);
+    mc.drawImage(buf, 0, 0);
+    mc.globalCompositeOperation = "destination-in";
+    mc.drawImage(mask, 0, 0);
+    mc.globalCompositeOperation = "source-over";
+    src = mb;
+  }
+
   ctx.save();
   ctx.globalCompositeOperation = blendOp(layer.blend);
-  ctx.clearRect(0, 0, w, h);
   ctx.filter = "none";
-  ctx.globalAlpha = 1;
-  ctx.drawImage(buf, 0, 0);
-
-  const back = 1 - layer.opacity / 100;
-  if (back > 0) {
-    ctx.filter = "none";
-    ctx.globalAlpha = back;
-    ctx.drawImage(buf, 0, 0);
-  }
+  /**
+   * 不透明度 = 「效果强度」：按 alpha 叠，等于在调整结果与原始画面之间插值。
+   * 老写法是把同一张调整结果画两遍（一遍 1.0、一遍 1-opacity），
+   * 同色叠同色等于没叠，滑杆其实不生效。
+   */
+  ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity / 100));
+  ctx.drawImage(src, 0, 0);
   ctx.restore();
 }
 

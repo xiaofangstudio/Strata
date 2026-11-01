@@ -36,6 +36,7 @@ import {
 import { DEFAULT_DPI, PRESETS } from "../core/presets";
 import {
   addAdjustLayer,
+  applyGradeWindow,
   addFillLayer,
   addLayer,
   addLayerStyle,
@@ -143,6 +144,7 @@ import TextPanel, { type TextPanelTab } from "./components/TextPanel";
 import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
 import CompareView, { type CompareLayout } from "./components/CompareView";
 import GradePanel from "./components/GradePanel";
+import GradeWindowOverlay from "./components/GradeWindowOverlay";
 import BrowseDialog from "./components/BrowseDialog";
 import ExrDialog from "./components/ExrDialog";
 import { CreateDropletDialog, ScriptEventsDialog } from "./components/AutomationDialogs";
@@ -4797,6 +4799,18 @@ export default function EditorShell({
       return { run: () => onCommit(addLayerStyle(doc, style), zh.menu.styleAdded) };
     };
 
+    /**
+     * 菜单解析器。
+     *
+     * ⚠️ **这里是渲染期，不是点击期。** 它会在每次文档变化时被调用 656 次
+     * （menuGroups 是个依赖 doc 的 useMemo）。因此这里只允许做两件事：
+     *   ① 返回 `{ run }`（动作放到点击时执行）；
+     *   ② 判断"能不能用"（便宜的字段检查，不能时返回 `{ hint }` 说明原因）。
+     *
+     * **绝对不要**在这里 setToast / setError / onCommit，也不要跑 readPixels
+     * 这类整图扫描 —— 否则用户随便动一下，提示就自己往外冒，菜单还会变卡。
+     * 「没有缺失字体」「没找到天空区域」两句话曾经就是从这里冒出来的。
+     */
     const resolve: MenuResolver = (id) => {
       switch (id) {
         /* ---------------------------------------------------------- 文件 */
@@ -6762,10 +6776,12 @@ export default function EditorShell({
         case "type.resolveMissingFonts": {
           const known = new Set(TEXT_FAMILIES.map((f) => f.id));
           const broken = doc.layers.filter((l) => hasText(l) && !known.has(l.text.settings.family));
-          if (broken.length === 0) {
-            setToast("没有缺失字体：所有文本层用的都是内置字体族");
-            return undefined;
-          }
+          /**
+           * 注意：这里是**菜单解析期**，会在每次文档变化时被调用 656 次。
+           * 绝不能在这里弹提示 —— 否则任何操作都会冒一句"没有缺失字体"。
+           * 用 hint 让菜单项自己变成灰的并说明原因即可。
+           */
+          if (broken.length === 0) return { hint: "没有缺失字体（都是内置字体族）" };
           return {
             run: () => {
               let next = doc;
@@ -7163,31 +7179,31 @@ export default function EditorShell({
             : undefined;
         case "layer.layerMask.addReveal":
         case "layer.layerMask.add":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask
             ? { run: () => onCommit(addMask(doc, "reveal"), zh.menu.addMask) }
             : undefined;
         case "layer.layerMask.revealAll":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask
             ? { run: () => onCommit(addMask(doc, "reveal"), zh.menu.addMask) }
             : undefined;
         case "layer.layerMask.hideAll":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask
             ? { run: () => onCommit(addMask(doc, "hide"), zh.menu.maskHideAll) }
             : undefined;
         case "layer.layerMask.addSelection":
         case "layer.layerMask.revealSelection":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask && hasSelection
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask && hasSelection
             ? { run: () => onCommit(addMaskFromSelection(doc), zh.menu.addMask) }
             : undefined;
         case "layer.layerMask.hideSelection":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask && hasSelection
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask && hasSelection
             ? {
                 run: () =>
                   onCommit(invertMask(addMaskFromSelection(doc)), zh.menu.maskHideSelection),
               }
             : undefined;
         case "layer.layerMask.fromTransparency":
-          return doc.layers[at]?.kind === "pixel" && !doc.layers[at]?.mask
+          return (doc.layers[at]?.kind === "pixel" || doc.layers[at]?.kind === "adjust") && !doc.layers[at]?.mask
             ? { run: () => onCommit(addMaskFromTransparency(doc), zh.menu.addMask) }
             : undefined;
         case "layer.layerMask.toggle":
@@ -7402,53 +7418,60 @@ export default function EditorShell({
         case "select.colorRange": {
           const crLayer = activeLayer(doc);
           if (!crLayer) return undefined;
-          const rgb = hexToRgb(fg);
-          const next = colorRangeMask(crLayer.surface, [rgb.r, rgb.g, rgb.b], tolerance);
-          if (!next || isSelectionEmpty(next)) {
-            setError(zh.selection.similarEmpty);
-            return undefined;
-          }
           return {
-            run: () => onCommit(setSelection(doc, next), zh.selection.colorRange),
+            // 扫全图是重活，放到点了以后再做（解析期只判断有没有像素层）
+            run: () => {
+              const rgb = hexToRgb(fg);
+              const next = colorRangeMask(crLayer.surface, [rgb.r, rgb.g, rgb.b], tolerance);
+              if (!next || isSelectionEmpty(next)) {
+                setError(zh.selection.similarEmpty);
+                return;
+              }
+              onCommit(setSelection(doc, next), zh.selection.colorRange);
+            },
           };
         }
         case "select.subject": {
           const subLayer = activeLayer(doc);
           if (!subLayer || subLayer.kind !== "pixel") return undefined;
-          const next = subjectMask(subLayer.surface);
-          if (!next || isSelectionEmpty(next)) {
-            setError(zh.selection.subjectEmpty);
-            return undefined;
-          }
           return {
-            run: () =>
-              onCommit(setSelection(doc, smoothSelection(next, 2)), zh.selection.subject),
+            run: () => {
+              const next = subjectMask(subLayer.surface);
+              if (!next || isSelectionEmpty(next)) {
+                setError(zh.selection.subjectEmpty);
+                return;
+              }
+              onCommit(setSelection(doc, smoothSelection(next, 2)), zh.selection.subject);
+            },
           };
         }
         case "select.sky": {
           const skyLayer = activeLayer(doc);
           if (!skyLayer || skyLayer.kind !== "pixel") return undefined;
-          const next = skyMask(skyLayer.surface);
-          if (!next || isSelectionEmpty(next)) {
-            setError(zh.selection.skyEmpty);
-            return undefined;
-          }
           return {
-            run: () =>
-              onCommit(setSelection(doc, featherSelection(next, 2)), zh.selection.sky),
+            run: () => {
+              const next = skyMask(skyLayer.surface);
+              if (!next || isSelectionEmpty(next)) {
+                setError(zh.selection.skyEmpty);
+                return;
+              }
+              onCommit(setSelection(doc, featherSelection(next, 2)), zh.selection.sky);
+            },
           };
         }
         case "select.focusArea": {
           const foLayer = activeLayer(doc);
           if (!foLayer || foLayer.kind !== "pixel") return undefined;
-          const next = focusMask(foLayer.surface, 24);
-          if (!next || isSelectionEmpty(next)) {
-            setError(zh.selection.focusEmpty);
-            return undefined;
-          }
+          // focusMask 要 readPixels 整层（24MP 上是几十 MB 的读取），解析期绝不能跑
           return {
-            run: () =>
-              onCommit(setSelection(doc, smoothSelection(next, 2)), zh.selection.focus),
+            run: () => {
+              const next = focusMask(foLayer.surface, 24);
+              if (!next || isSelectionEmpty(next)) {
+                setError(zh.selection.focusEmpty);
+                return;
+              }
+              onCommit(setSelection(doc, next), zh.selection.focus);
+            },
           };
         }
         case "select.transformSelection":
@@ -8763,6 +8786,24 @@ export default function EditorShell({
               />
               {/* 蚂蚁线 / 裁剪遮罩浮层：只负责画，不接事件 */}
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
+
+              {/**
+               * 调色范围手柄：只在「调色台开着 + 当前调色层带范围」时出现。
+               * 拖动中按 100ms 节流重算蒙版（整幅 blur 是重活），松手才落一条历史。
+               */}
+              {gradeLayer?.window && dockOpen.grade && (
+                <GradeWindowOverlay
+                  docW={docW}
+                  docH={docH}
+                  scale={scale}
+                  win={gradeLayer.window}
+                  onChange={(w, commit) => {
+                    const next = applyGradeWindow(doc, gradeLayer.id, w);
+                    if (commit) onCommit(next, "调整调色范围");
+                    else onPreview(next);
+                  }}
+                />
+              )}
               {/* 校样层：把合成结果按校样条件重算后盖在上面（纯显示） */}
               <canvas
                 ref={proofCanvasRef}

@@ -27,6 +27,7 @@ import {
   type StyleId,
 } from "./layer";
 import { activeLayer, type StrataDoc } from "./document";
+import { windowToMask } from "./gradeWindow";
 import {
   decontaminateData,
   defringeData,
@@ -65,6 +66,7 @@ export type LayerPatch = Partial<
     | "linkId"
     | "text"
     | "smartPath"
+    | "window"
   >
 >;
 
@@ -1181,6 +1183,67 @@ export function addMaskFromSelection(doc: StrataDoc): StrataDoc {
   ctx.globalCompositeOperation = "destination-in";
   ctx.drawImage(doc.selection, 0, 0);
   ctx.globalCompositeOperation = "source-over";
+  return updateLayer(doc, cur.id, { mask, maskActive: true });
+}
+
+/**
+ * 应用一个「调色范围」：存下几何 + 由它现算蒙版。
+ *
+ * 局部调色的正规入口。与"由选区生成蒙版"的区别是**几何留下了**：
+ * 之后在画布上拖手柄、在面板上拖羽化，都是改这份几何再重算蒙版，
+ * 不需要用户重新画一遍选区。
+ */
+export function applyGradeWindow(
+  doc: StrataDoc,
+  layerId: string,
+  win: import("./gradeWindow").GradeWindow,
+): StrataDoc {
+  const target = doc.layers.find((l) => l.id === layerId);
+  if (!target) return doc;
+  const mask = windowToMask(doc.width, doc.height, win);
+  return updateLayer(doc, layerId, { window: win, mask, maskActive: true });
+}
+
+/**
+ * 由当前选区生成【可羽化】的蒙版 —— 局部调色（达芬奇的 Power Window）的核心。
+ *
+ * 与 addMaskFromSelection 的差别：这里每调一次羽化就**从选区重建一次**，
+ * 所以羽化滑杆可以反复拖、不累积模糊；对调整层（调色层）同样适用 ——
+ * 合成器会把调整结果乘上这张蒙版，于是只有圈住的区域被调色。
+ *
+ * @param feather 羽化半径（px，0 表示硬边）
+ * @param invert  反转（圈内不动、圈外调色）
+ */
+export function maskFromSelection(
+  doc: StrataDoc,
+  feather = 0,
+  invert = false,
+  layerId?: string,
+): StrataDoc {
+  // 指定图层时优先用它：调色台面板绑定的不一定是「当前选中」的那一层
+  const cur = layerId ? doc.layers.find((l) => l.id === layerId) : activeLayer(doc);
+  const sel = doc.selection;
+  if (!cur || !sel || isSelectionEmpty(sel)) return doc;
+  const mask = createMask(doc.width, doc.height);
+  const ctx = mustCtx(mask);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, mask.width, mask.height);
+  // 先画选区、把选区外清掉；羽化靠 blur 让边缘的 alpha 平滑过渡
+  ctx.globalCompositeOperation = "destination-in";
+  if (feather > 0) ctx.filter = `blur(${feather}px)`;
+  ctx.drawImage(sel, 0, 0);
+  ctx.filter = "none";
+  ctx.globalCompositeOperation = "source-over";
+  if (invert) {
+    // 就地反相 alpha（不要依赖「当前选中层」，这里的蒙版可能挂在别的层上）
+    const ic = mustCtx(mask);
+    const img = ic.getImageData(0, 0, mask.width, mask.height);
+    const d = img.data;
+    for (let i = 3; i < d.length; i += 4) d[i] = 255 - d[i];
+    ic.putImageData(img, 0, 0);
+  }
   return updateLayer(doc, cur.id, { mask, maskActive: true });
 }
 

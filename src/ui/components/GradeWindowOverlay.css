@@ -1,0 +1,47 @@
+/**
+ * 调色范围手柄覆盖层。
+ *
+ * 整层不吃鼠标（`pointer-events: none`），只有手柄自己吃 ——
+ * 否则画布上的画笔、选框就全被这一层挡住了。
+ */
+
+.gwf {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* 范围本体：白线 + 黑描边的"双色线"，深浅底色上都看得见 */
+.gwf-edge {
+  stroke: rgba(255, 255, 255, 0.95);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+  stroke-dasharray: 6 4;
+}
+
+/* 羽化参考线：淡化到底，只是"淡出到这儿"的提示 */
+.gwf-feather-edge {
+  stroke: rgba(120, 190, 255, 0.75);
+  stroke-dasharray: 3 5;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
+}
+
+.gwf-knob {
+  fill: var(--accent, #6fc0ff);
+  stroke: #ffffff;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.gwf-knob:active {
+  cursor: grabbing;
+}
+
+/* 羽化手柄画成空心环：和「拉大小」的实心点区分开 */
+.gwf-knob.is-feather {
+  fill: rgba(18, 18, 24, 0.55);
+  stroke: rgba(120, 190, 255, 0.95);
+  cursor: ew-resize;
+}

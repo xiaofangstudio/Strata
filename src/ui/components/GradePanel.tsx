@@ -21,7 +21,15 @@ import {
   type CurveChannel,
   type StrataLayer,
 } from "../../core/layer";
-import { setAdjust, updateLayer } from "../../core/layerOps";
+import { applyGradeWindow, setAdjust, toggleMaskActive, updateLayer } from "../../core/layerOps";
+import { isSelectionEmpty, selectionBounds } from "../../core/selection";
+import {
+  DEFAULT_FEATHER,
+  defaultEllipse,
+  defaultRect,
+  rectFromBox,
+  type GradeWindow,
+} from "../../core/gradeWindow";
 import type { StrataDoc } from "../../core/document";
 import {
   GRADE_PARAMS,
@@ -226,6 +234,8 @@ export default function GradePanel({ doc, layer, onChange, onPreview }: Props) {
         ))}
       </div>
 
+      <RangeBar doc={doc} layer={layer} onChange={onChange} />
+
       <div className="grade-body">
         {tab === "primary" && <PrimaryPage params={params} patch={patch} />}
         {tab === "wheel" && <WheelPage params={params} patch={patch} />}
@@ -233,6 +243,134 @@ export default function GradePanel({ doc, layer, onChange, onPreview }: Props) {
         {tab === "curve" && (
           <CurvePage doc={doc} layer={layer} st={st} onChange={onChange} onPreview={onPreview} />
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------- 调色范围 */
+
+/**
+ * 调色范围（达芬奇的 Power Window）。
+ *
+ * 范围是**参数化几何**（椭圆 / 矩形 / 多边形 + 羽化半径），蒙版由它现算，
+ * 所以在画布上拖手柄、在这儿拖羽化，都是改同一份几何 —— 不用重画选区。
+ * 多个范围 = 多个调色层。
+ */
+function RangeBar({
+  doc,
+  layer,
+  onChange,
+}: {
+  doc: StrataDoc;
+  layer: StrataLayer;
+  onChange: (next: StrataDoc, label: string) => void;
+}) {
+  const win = layer.window;
+  const maskOn = layer.maskActive !== false;
+  const hasSel = Boolean(doc.selection) && !isSelectionEmpty(doc.selection);
+  const [feather, setFeather] = useState(win?.feather ?? DEFAULT_FEATHER);
+
+  // 外部变化（撤销 / 拖手柄改羽化）时同步滑杆位置
+  const shownFeather = win?.feather ?? feather;
+
+  const setWin = (w: GradeWindow, label: string) =>
+    onChange(applyGradeWindow(doc, layer.id, w), label);
+
+  if (!win) {
+    return (
+      <div className="gr-range">
+        <span className="gr-tag">全画面</span>
+        <button
+          type="button"
+          className="gr-btn"
+          title="在画面中心加一个椭圆范围（之后可在画布上拖手柄）"
+          onClick={() => setWin(defaultEllipse(doc.width, doc.height), "加椭圆范围")}
+        >
+          ＋椭圆
+        </button>
+        <button
+          type="button"
+          className="gr-btn"
+          title="在画面中心加一个矩形范围"
+          onClick={() => setWin(defaultRect(doc.width, doc.height), "加矩形范围")}
+        >
+          ＋矩形
+        </button>
+        <button
+          type="button"
+          className="gr-btn"
+          disabled={!hasSel}
+          title={hasSel ? "把当前选区的外框变成可拖的矩形范围" : "先在画布上圈一个选区"}
+          onClick={() => {
+            const box = selectionBounds(doc.selection);
+            // 选区的包围盒字段是 width/height，范围几何用 w/h
+            if (box) setWin(rectFromBox({ x: box.x, y: box.y, w: box.width, h: box.height }), "由选区建范围");
+          }}
+        >
+          用选区
+        </button>
+      </div>
+    );
+  }
+
+  const kindLabel = win.kind === "ellipse" ? "椭圆" : win.kind === "rect" ? "矩形" : "多边形";
+
+  return (
+    <div className="gr-range is-on">
+      <span className={maskOn ? "gr-tag is-on" : "gr-tag"}>
+        {kindLabel}
+        {win.invert ? " · 反转" : ""}
+        {maskOn ? "" : " · 停用"}
+      </span>
+      <div className="gr-feather">
+        <GradeSlider
+          label="羽化"
+          value={shownFeather}
+          min={0}
+          max={400}
+          onInput={(v) => setFeather(v)}
+          // 重算整幅蒙版是重活：拖动中只改数字，松手才落库
+          onCommit={(v) => {
+            setFeather(v);
+            setWin({ ...win, feather: Math.round(v) }, `范围羽化 ${Math.round(v)} px`);
+          }}
+          onReset={() => {
+            setFeather(0);
+            setWin({ ...win, feather: 0 }, "范围羽化 0");
+          }}
+        />
+      </div>
+      <div className="gr-actions">
+        <button
+          type="button"
+          className="gr-btn"
+          title="圈内不调、圈外调"
+          onClick={() => setWin({ ...win, invert: !win.invert }, win.invert ? "取消反转" : "反转范围")}
+        >
+          反转
+        </button>
+        <button
+          type="button"
+          className="gr-btn"
+          title="临时关掉范围看全局效果"
+          onClick={() => onChange(toggleMaskActive(doc), maskOn ? "停用范围" : "启用范围")}
+        >
+          {maskOn ? "停用" : "启用"}
+        </button>
+        <button
+          type="button"
+          className="gr-btn"
+          title="清掉范围与蒙版，回到全画面调色"
+          onClick={() =>
+            onChange(
+              updateLayer(doc, layer.id, { mask: null, maskActive: false, window: undefined }),
+              "清除调色范围",
+            )
+          }
+        >
+          全画面
+        </button>
       </div>
     </div>
   );
