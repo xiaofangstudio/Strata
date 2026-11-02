@@ -45,6 +45,12 @@ export default function StatusBar({ doc, scale, tool }: Props) {
         <span className="st-val">{doc.layers.length}</span>
       </span>
 
+      {/*
+        慢帧读数：只在单帧超过 30ms 时由渲染循环直接写进来。
+        走 DOM 而不走 props —— 否则"显示卡不卡"这件事本身就会触发重渲染。
+      */}
+      <span className="st-perf" id="st-perf" hidden />
+
       <span className="st-gap" />
 
       <span className="st-item">

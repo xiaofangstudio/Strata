@@ -811,3 +811,131 @@
   font-size: 10px;
   color: var(--text-3);
 }
+
+/* ---------- 范围列表：可收起的下拉 ---------- */
+
+.gr-drop {
+  flex: none;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.gr-drop-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  height: 26px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.gr-drop-head:hover {
+  color: var(--text);
+}
+
+/* 箭头跟着开合转 —— 不说也知道能点 */
+.gr-drop-caret {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  transition: transform 180ms var(--ease);
+}
+
+.gr-drop.is-open .gr-drop-caret {
+  transform: rotate(90deg);
+}
+
+.gr-drop-title {
+  flex: none;
+  font-weight: 600;
+}
+
+.gr-drop-count {
+  flex: none;
+  min-width: 15px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: var(--text-3);
+  background: var(--surface);
+  border-radius: 7px;
+}
+
+/* 当前正在编辑的那一层，收起时也能看见 */
+.gr-drop-now {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-3);
+}
+
+/* 0fr → 1fr 是能真正做插值的高度过渡（max-height 需要猜一个具体值） */
+.gr-drop-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms var(--ease);
+}
+
+.gr-drop.is-open .gr-drop-body {
+  grid-template-rows: 1fr;
+}
+
+.gr-drop-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 展开后列表自己不再有外框（已经在下拉里了） */
+.gr-drop .gr-list {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  max-height: 148px;
+  padding: 0 3px 4px;
+}
+
+/* ---------- 曲线页：示波器背景与黑白场竖线 ---------- */
+
+/* 亮度分布：浅色面积，不抢曲线本身的视觉重量 */
+.gp-curve-scope {
+  fill: var(--accent);
+  opacity: 0.16;
+  pointer-events: none;
+}
+
+/* 黑场 / 白场竖线：虚线 + 顶端小把手，明确"这是可以拖的控件" */
+.gp-bw line {
+  stroke: var(--text-3);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.gp-bw rect {
+  fill: var(--text-2);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.gp-bw:hover rect,
+.gp-bw:hover line {
+  fill: var(--accent);
+  stroke: var(--accent);
+  opacity: 1;
+}
+
+/* 被拖开之后加一点强调色，一眼看出输入范围已经收过 */
+.gp-bw.is-black rect,
+.gp-bw.is-white rect {
+  opacity: 0.85;
+}

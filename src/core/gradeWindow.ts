@@ -270,10 +270,13 @@ function outwardNormal(a: Pt, b: Pt, center: Pt): Pt {
  */
 export function windowHandles(w: GradeWindow, scale: number): Handle[] {
   /**
-   * 手柄半径：屏幕上恒定 12px（以前 7px）。
-   * 太小的话手滑落在手柄旁边就会被当成"点了画布"，在调整层上落笔直接报错。
+   * 手柄命中半径：屏幕上恒定 15px（一路从 7 → 12 → 15 调上来的）。
+   *
+   * 判定区比画出来的圆点大一圈是常规做法 —— 人不是瞄准镜，
+   * 按住的点总会偏几个像素；偏出去的那一下如果判成"点了别处"，
+   * 手感就是"抓不住"。
    */
-  const r = 12 / Math.max(0.05, scale);
+  const r = 15 / Math.max(0.05, scale);
   const f = Math.max(0, w.feather);
   const rotOff = (ox: number, oy: number, cx: number, cy: number, rot = 0) => {
     if (!rot) return { x: cx + ox, y: cy + oy };
@@ -357,11 +360,24 @@ export function hitHandle(
   scale: number,
 ): HandleId | null {
   const hs = windowHandles(w, scale);
-  // 反向遍历：后画的手柄优先（feather / rotate 在最后，避免被角点抢）
+  /**
+   * 取**距离最近**的那个手柄，而不是"第一个落进半径的"。
+   *
+   * 形状小或者放大之后，几个手柄的判定圈会互相重叠 —— 先到先得会让用户
+   * 按住自己想要的点、动的却是旁边那个，手感像"抓错东西"。
+   * 按距离取最接近的，重叠时就等于"判定范围各自收缩"，谁也不抢谁的。
+   *
+   * 反向遍历 + 严格小于：距离完全相等时保留后画的那个
+   * （feather / rotate 排在数组末尾，避免被角点抢走）。
+   */
+  let best: { id: HandleId; d: number } | null = null;
   for (let i = hs.length - 1; i >= 0; i -= 1) {
     const h = hs[i];
-    if (Math.hypot(px - h.x, py - h.y) <= h.r) return h.id;
+    const d = Math.hypot(px - h.x, py - h.y);
+    if (d > h.r) continue;
+    if (!best || d < best.d) best = { id: h.id, d };
   }
+  if (best) return best.id;
   return windowHit(w, px, py) ? "move" : null;
 }
 

@@ -14,6 +14,8 @@
  * 再窄也不会把数字框顶出可视区。
  */
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { composeForDisplay } from "../../engine/displayCompose";
+import { createSurface, mustCtx } from "../../engine/surface";
 import {
   curveOf,
   setCurveOf,
@@ -132,6 +134,14 @@ export default function GradePanel({
   const [level, setLevel] = useState<"primary" | "secondary">(
     layer.window ? "secondary" : "primary",
   );
+  /**
+   * 范围列表默认**收起**。
+   *
+   * 范围一多，这一列会越堆越长，把下面的调色参数（基础/色轮/切片器/曲线）
+   * 一直往下顶 —— 那才是常用的地方。收成一行标题后，列表只在需要时展开，
+   * 展开用 0fr→1fr 的高度过渡，不会"啪"地跳一下。
+   */
+  const [listOpen, setListOpen] = useState(false);
   const st = layer.adjust;
   const params = useMemo(
     () => ({ ...neutralGrade(), ...(st?.params ?? {}) }),
@@ -289,13 +299,36 @@ export default function GradePanel({
       {level === "secondary" && (
         <>
           <RangeBar doc={doc} layer={layer} onStartPen={onStartPen} onChange={onChange} />
-          <RangeList
-            layers={layers}
-            activeId={layer.id}
-            onSelect={onSelectLayer}
-            onToggleVisible={onToggleVisible}
-            onDelete={onDeleteLayer}
-          />
+
+          {layers.length > 0 && (
+            <div className={`gr-drop${listOpen ? " is-open" : ""}`}>
+              <button
+                type="button"
+                className="gr-drop-head"
+                aria-expanded={listOpen}
+                onClick={() => setListOpen((v) => !v)}
+                title={listOpen ? "收起范围列表" : "展开范围列表"}
+              >
+                <span className="gr-drop-caret" aria-hidden="true">
+                  ▸
+                </span>
+                <span className="gr-drop-title">范围</span>
+                <span className="gr-drop-count">{layers.length}</span>
+                <span className="gr-drop-now">{layer.name}</span>
+              </button>
+              <div className="gr-drop-body">
+                <div className="gr-drop-inner">
+                  <RangeList
+                    layers={layers}
+                    activeId={layer.id}
+                    onSelect={onSelectLayer}
+                    onToggleVisible={onToggleVisible}
+                    onDelete={onDeleteLayer}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -958,6 +991,36 @@ const CURVE_W = 240;
 const CURVE_H = 190;
 const PAD = 10;
 
+/**
+ * 曲线背后的示波器：当前画面的亮度分布。
+ *
+ * 曲线要解决的是「黑场压在哪、白场卡在哪」，所以背景得能看见分布 ——
+ * 空着一片网格去调曲线，等于闭着眼睛调。
+ *
+ * 统计用的是**缩到 192px 的合成结果**：分布形状在这个尺寸下已经稳定，
+ * 代价却只有全分辨率的千分之一，拖滑杆时不会因为它再卡一下。
+ */
+function useScope(doc: StrataDoc): Float32Array {
+  return useMemo(() => {
+    const hist = new Float32Array(256);
+    const w = 192;
+    const h = Math.max(1, Math.round((doc.height / Math.max(1, doc.width)) * w));
+    try {
+      const c = createSurface(w, h);
+      composeForDisplay(doc, c, w / Math.max(1, doc.width));
+      const d = mustCtx(c).getImageData(0, 0, c.width, c.height).data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 8) continue; // 透明区不计入
+        const lum = d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722;
+        hist[Math.min(255, Math.max(0, Math.round(lum)))] += 1;
+      }
+    } catch {
+      /* 合成失败就画一条平的，不至于把面板搞崩 */
+    }
+    return hist;
+  }, [doc]);
+}
+
 function CurvePage({
   doc,
   layer,
@@ -974,7 +1037,16 @@ function CurvePage({
   const [channel, setChannel] = useState<CurveChannel>("rgb");
   const pts = useMemo(() => curveOf(st, channel), [st, channel]);
   const dragIdx = useRef<number | null>(null);
+  /**
+   * 正在拖「黑场 / 白场」竖线。
+   *
+   * 这两条线不引入新数据结构：**它们就是曲线首尾两个控制点的 x 位置**。
+   * 黑场线右移 = 把输入 0…x 全压成 0（更黑）；白场线左移 = 把 x…1 全提到 1。
+   * 语义与达芬奇的输入黑点 / 白点一致，导出、存盘、撤销都不用另写一套。
+   */
+  const dragBW = useRef<"black" | "white" | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const scope = useScope(doc);
 
   const toSvg = (p: CurvePoint) => ({
     x: PAD + p.x * (CURVE_W - PAD * 2),
@@ -1010,6 +1082,19 @@ function CurvePage({
   ];
   const stroke = CH.find((c) => c.id === channel)?.stroke ?? "var(--text)";
 
+  /** 示波器：亮度分布的填充面积（开方压缩，尖峰不会一家独大）。 */
+  const scopePath = useMemo(() => {
+    let peak = 1;
+    for (let i = 0; i < scope.length; i += 1) if (scope[i] > peak) peak = scope[i];
+    const x = (i: number) => PAD + (i / 255) * (CURVE_W - PAD * 2);
+    const y = (i: number) =>
+      CURVE_H - PAD - Math.sqrt(scope[i] / peak) * (CURVE_H - PAD * 2);
+    let d = `M${x(0).toFixed(1)} ${CURVE_H - PAD}`;
+    for (let i = 0; i < 256; i += 1) d += ` L${x(i).toFixed(1)} ${y(i).toFixed(1)}`;
+    d += ` L${x(255).toFixed(1)} ${CURVE_H - PAD} Z`;
+    return d;
+  }, [scope]);
+
   const path = pts
     .map((p, i) => {
       const s = toSvg(p);
@@ -1038,6 +1123,25 @@ function CurvePage({
         preserveAspectRatio="none"
         onPointerDown={(e) => {
           const p = fromEvent(e);
+          /**
+           * 竖线只在**上半部**响应（y > 0.72）。
+           *
+           * 曲线首尾控制点本来就在 (0,0)/(1,1)，如果整条竖线都抢命中，
+           * 用户想拖端点改形状就永远拖不动。分上下两段各管一件事：
+           * 上半部定黑场白场，下半部拖端点改曲线形状。
+           */
+          if (p.y > 0.72 && pts.length >= 2) {
+            if (Math.abs(p.x - pts[0].x) < 0.05) {
+              dragBW.current = "black";
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+            if (Math.abs(p.x - pts[pts.length - 1].x) < 0.05) {
+              dragBW.current = "white";
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+          }
           const idx = pts.findIndex((q) => Math.hypot(q.x - p.x, q.y - p.y) < 0.06);
           if (idx >= 0) {
             dragIdx.current = idx;
@@ -1049,6 +1153,19 @@ function CurvePage({
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
+          const bw = dragBW.current;
+          if (bw) {
+            const p = fromEvent(e);
+            // 黑场只能停在白场左边、白场只能停在黑场右边 —— 夹住就不会反相
+            const next = pts.map((q) => ({ ...q }));
+            if (bw === "black") {
+              next[0].x = Math.min(Math.max(p.x, 0), next[next.length - 1].x - 0.02);
+            } else {
+              next[next.length - 1].x = Math.max(Math.min(p.x, 1), next[0].x + 0.02);
+            }
+            push(next, false, bw === "black" ? "黑场" : "白场");
+            return;
+          }
           const idx = dragIdx.current;
           if (idx === null) return;
           const p = fromEvent(e);
@@ -1058,6 +1175,11 @@ function CurvePage({
           push(next, false, "曲线");
         }}
         onPointerUp={() => {
+          if (dragBW.current) {
+            dragBW.current = null;
+            push(pts, true, "调黑白场");
+            return;
+          }
           if (dragIdx.current === null) return;
           dragIdx.current = null;
           push(pts, true, "调色曲线");
@@ -1074,6 +1196,7 @@ function CurvePage({
         }}
       >
         <rect x={0} y={0} width={CURVE_W} height={CURVE_H} className="gp-curve-bg" />
+        <path d={scopePath} className="gp-curve-scope" />
         {[0.25, 0.5, 0.75].map((t) => (
           <g key={t} className="gp-curve-grid">
             <line
@@ -1091,6 +1214,24 @@ function CurvePage({
           </g>
         ))}
         <line className="gp-curve-diag" x1={PAD} y1={CURVE_H - PAD} x2={CURVE_W - PAD} y2={PAD} />
+
+        {/*
+          黑场 / 白场竖线：位置就是曲线首尾控制点的 x。
+          顶端给一个小把手，提示"这条可以拖"；拖它就等于把输入范围往里收。
+        */}
+        {pts.length >= 2 &&
+          ([
+            { key: "black", at: pts[0].x },
+            { key: "white", at: pts[pts.length - 1].x },
+          ] as const).map((b) => {
+            const sx = PAD + b.at * (CURVE_W - PAD * 2);
+            return (
+              <g key={b.key} className={`gp-bw is-${b.key}`}>
+                <line x1={sx} y1={PAD - 4} x2={sx} y2={CURVE_H - PAD} />
+                <rect x={sx - 4.5} y={PAD - 9} width={9} height={9} rx={2} />
+              </g>
+            );
+          })}
         <path
           d={path}
           fill="none"
@@ -1104,7 +1245,8 @@ function CurvePage({
         })}
       </svg>
       <p className="gp-note">
-        单击加点 · 拖动改形 · 双击删点。曲线挂在这一层上，与一级 / 色轮 / 切片器叠加生效。
+        单击加点 · 拖动改形 · 双击删点。上方的两条竖线是黑场 / 白场，拖它把输入范围收进来。
+        背景那一片是当前画面的亮度分布 —— 峰在哪儿，就该在哪儿定黑白。
       </p>
     </div>
   );

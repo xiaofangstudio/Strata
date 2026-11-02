@@ -64,7 +64,19 @@ export class History {
   private entries: HistoryEntry[] = [];
   private cursor = -1;
 
-  constructor(private readonly limit = 40) {}
+  /**
+   * @param limit       最多保留多少步（用户偏好）
+   * @param budgetBytes 这些快照合计最多占多少内存
+   *
+   * 为什么要有内存预算：快照是整份文件的全量像素拷贝，一张 24MP 的文档
+   * 光一层就 96MB，几十步轻松吃掉几个 GB —— 浏览器一旦开始换页，
+   * 表现出来不是"慢"，而是"整台机器像卡死了"，连拖动都不跟手。
+   * 所以按体量把老快照挤掉，宁可少几步撤销，也不能把内存撑爆。
+   */
+  constructor(
+    private readonly limit = 40,
+    private readonly budgetBytes = 900 * 1024 * 1024,
+  ) {}
 
   /** 用文档的初始状态开栈。 */
   reset(entry: HistoryEntry): void {
@@ -76,8 +88,37 @@ export class History {
   commit(entry: HistoryEntry): void {
     this.entries.splice(this.cursor + 1);
     this.entries.push(entry);
-    if (this.entries.length > this.limit) this.entries.shift();
     this.cursor = this.entries.length - 1;
+    this.trim();
+  }
+
+  /** 一步快照大约占多少字节（画布像素 + 蒙版 + 选区）。 */
+  private entryBytes(e: HistoryEntry): number {
+    let n = 0;
+    for (const l of e.layers) {
+      if (l.surface) n += l.surface.width * l.surface.height * 4;
+      if (l.mask) n += l.mask.width * l.mask.height * 4;
+    }
+    if (e.selection) n += e.selection.width * e.selection.height * 4;
+    return n;
+  }
+
+  /** 超步数或超内存都从最老的一步开始丢。 */
+  private trim(): void {
+    while (this.entries.length > this.limit) {
+      this.entries.shift();
+      this.cursor -= 1;
+    }
+    let total = 0;
+    for (const e of this.entries) total += this.entryBytes(e);
+    // 至少留两步（当前 + 上一步），否则等于没有撤销
+    while (total > this.budgetBytes && this.entries.length > 2) {
+      const gone = this.entries.shift();
+      if (!gone) break;
+      total -= this.entryBytes(gone);
+      this.cursor -= 1;
+    }
+    if (this.cursor < 0) this.cursor = 0;
   }
 
   undo(): HistoryEntry | null {

@@ -253,7 +253,8 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
         (() => {
           const b = windowBounds(cur);
           if (b.w < 2 || b.h < 2) return null;
-          const m = 18 / Math.max(0.05, scale);
+          // 余量也是一圈"抓取缓冲"：落在形状外一点点，也算抓住这块范围
+          const m = 26 / Math.max(0.05, scale);
           return (
             <rect
               x={b.x - m}

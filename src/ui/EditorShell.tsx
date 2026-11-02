@@ -255,6 +255,7 @@ import {
 } from "../core/channels";
 import { autoOn } from "../engine/auto";
 import { composeDoc } from "../engine/compositor";
+import { composeForDisplay } from "../engine/displayCompose";
 import { inpaint } from "../engine/inpaint";
 import { asRaster, createRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
@@ -1004,6 +1005,58 @@ export default function EditorShell({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   /** 1:1 的合成结果（文档原生分辨率）。屏幕呈递与取色都读它，不读显示画布。 */
   const compRef = useRef<HTMLCanvasElement | null>(null);
+
+  /**
+   * 拖动中的「预览文档」——**不进 React 状态**。
+   *
+   * 以前拖滑杆每移动一次就 setDocs 一次，等于每一帧都把整个编辑壳（近万行）
+   * 连同图层面板、调色台、直方图全部重渲染一遍 —— 这才是"所有滑块都卡"的元凶。
+   * 预览只挂在 ref 上，画布每帧现读，React 一次都不用动。
+   * 松手 / 撤销 / 打开文件这类**真的落库**的动作才更新 doc。
+   */
+  const previewDocRef = useRef<StrataDoc | null>(null);
+
+  /**
+   * 平移的「实时值」与舞台元素。
+   *
+   * 平移时每帧 setPan 会让整个编辑壳重渲染一次 —— 拖起来就是一格一格的。
+   * 现在拖动过程只改 CSS 变量（--pan-x / --pan-y），DOM 直接重合成，
+   * React 完全不知道这回事；松手才 setPan 让状态对齐。
+   */
+  const panLiveRef = useRef({ x: 0, y: 0 });
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const panRafRef = useRef(0);
+
+  /**
+   * 显示合成的缩放比例（与 render 里同一套算法）。
+   *
+   * 屏幕上的合成结果现在按视图分辨率缩过了 —— 所以凡是**按文档坐标去读它像素**
+   * 的地方（吸管取色）都得先乘这个系数，否则会取到偏左上的一块。
+   */
+  const viewDispScale = useMemo(
+    () => Math.min(1, Math.max(0.06, scale * (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1))),
+    [scale],
+  );
+
+  /**
+   * 全分辨率的合成结果（按需生成）。
+   *
+   * 魔棒 / 魔棒橡皮要拿合成结果去 **生成选区蒙版**，尺寸必须等于文档尺寸 ——
+   * 拿缩小版去算会得到一张缩小的选区，贴到文档上直接错位。
+   * 这类操作是"点一下"级别的频率，现合成一次完全来得及。
+   */
+  const fullCompRef = useRef<HTMLCanvasElement | null>(null);
+  const fullComposite = useCallback((): HTMLCanvasElement | null => {
+    const w = doc.width;
+    const h = doc.height;
+    if (!w || !h) return null;
+    let c = fullCompRef.current;
+    if (!c || c.width !== w || c.height !== h) {
+      c = createSurface(w, h);
+      fullCompRef.current = c;
+    }
+    return composeDoc(doc, c);
+  }, [doc]);
   const scratchRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /** 正在拖动的参考线：axis 是线的方向（"x" 竖线 / "y" 横线），from 是被拖那条的下标 */
@@ -1163,21 +1216,51 @@ export default function EditorShell({
 
   /* -------------------------------------------------------------- 画面渲染 */
 
+  /** 这一帧开始的时刻：状态栏的慢帧读数要用。 */
+  const frameStartRef = useRef(0);
+
   const render = useCallback(() => {
+    frameStartRef.current = performance.now();
+    /**
+     * 这一帧要画的文档。
+     *
+     * 拖动滑杆时的"预览"不再写进 React 状态（那会让带近万行的编辑壳每帧重渲染
+     * 一次，滑杆直接从"跟手"变成"卡死"）。预览挂在这个 ref 上，画布每帧现读 ——
+     * 松手、撤销、任何真正落库的动作才会更新 doc。
+     */
+    const pv = previewDocRef.current;
+    const docNow =
+      pv && pv.id === doc.id && pv.width === doc.width && pv.height === doc.height ? pv : doc;
     const c = canvasRef.current;
     if (!c) return;
 
-    const act = activeLayer(doc);
+    const act = activeLayer(docNow);
     const stroke = strokeRef.current;
     const rt = retouchRef.current;
     const moving = moveRef.current;
     const offset = moving.dx !== 0 || moving.dy !== 0;
 
-    // 合成一律先落在「文档原生分辨率」的离屏画布上：图层样式、蒙版、调整
-    // 滤镜都在同一套 1:1 像素语义下结算，屏幕与导出因此逐像素同源。
+    /**
+     * 显示合成的缩放比例 = 视图缩放 × 设备像素比，上限 1。
+     *
+     * 缩小时按这个比例合成（像素数按 scale² 下降），放大时夹到 1 走全分辨率。
+     * 屏幕上本来也只显示这么多像素 —— 降采样不损画质，却省掉绝大部分计算。
+     * 导出仍然走 composeDoc 全分辨率，与本路径互不影响。
+     */
+    /**
+     * 交互中额外把合成比例压到 55%。
+     *
+     * 「按视图比例合成」解决了缩小视图下的浪费，但 100% 视图下比例本来就是 1 ——
+     * 而大图上 100% 依然要算整幅。拖动期间稍微降一档，停手 300ms 补齐全质量。
+     */
+    const cap = interactingRef.current ? 0.55 : 1;
+    const dispScale = Math.min(cap, Math.max(0.06, scale * (window.devicePixelRatio || 1)));
+    const compW = Math.max(1, Math.round(docW * dispScale));
+    const compH = Math.max(1, Math.round(docH * dispScale));
+
     let slot = compRef.current;
-    if (!slot || slot.width !== docW || slot.height !== docH) {
-      slot = createSurface(docW, docH);
+    if (!slot || slot.width !== compW || slot.height !== compH) {
+      slot = createSurface(compW, compH);
       compRef.current = slot;
     }
     const comp = slot;
@@ -1206,18 +1289,42 @@ export default function EditorShell({
       cx.globalCompositeOperation = "source-over";
       cx.filter = "none";
       cx.imageSmoothingEnabled = true;
-      cx.imageSmoothingQuality = "high";
+      // 源（comp）已经按视图比例缩过，这里接近 1:1；high 在这个尺寸下
+      // 只是徒增开销（浏览器会走高质量分箱），medium 肉眼无差
+      cx.imageSmoothingQuality = "medium";
       cx.clearRect(0, 0, w, h);
-      cx.drawImage(comp, 0, 0, docW, docH, 0, 0, w, h);
+      /**
+       * 源尺寸用 comp 自己的：合成结果已经按视图比例缩过了，
+       * 这里若写 docW/docH 会把缩小图当成缩略图拉伸，反而糊。
+       */
+      cx.drawImage(comp, 0, 0, comp.width, comp.height, 0, 0, w, h);
       applyChannelView(c, channelVis, activeChannel);
       // Alpha 通道灰度查看：在合成与颜色通道视图之上再叠一道显示滤镜
       if (viewAlpha) {
-        const ch = alphaChannelsOf(doc).find((x) => x.id === viewAlpha);
+        const ch = alphaChannelsOf(docNow).find((x) => x.id === viewAlpha);
         if (ch) applyAlphaChannelView(c, ch.mask);
       }
       // 直方图 / 导航器读的就是这张 comp：节流 250ms 推一帧，画笔连扫时不拖后腿
+      /**
+       * 慢帧读数：超过 30ms 才显示。
+       *
+       * 直接写 DOM，不走 state —— 不然"显示性能"这件事会自己制造一次重渲染。
+       * 有这个数字，卡的时候能一眼看出是"合成慢"还是"别的地方慢"。
+       */
+      const dt = performance.now() - frameStartRef.current;
+      const perf = document.getElementById("st-perf");
+      if (perf) {
+        if (dt > 30) {
+          perf.textContent = `合成 ${Math.round(dt)}ms${interactingRef.current ? " · 交互中" : ""}`;
+          perf.hidden = false;
+        } else if (!perf.hidden) {
+          perf.hidden = true;
+        }
+      }
+
       const now = performance.now();
-      if (now - lastPanelRef.current > 250) {
+      // 4 次/秒已经够看，多了只是让整棵面板树白重渲染
+      if (now - lastPanelRef.current > 500) {
         lastPanelRef.current = now;
         setPanelTick((t) => t + 1);
       }
@@ -1227,12 +1334,12 @@ export default function EditorShell({
     // 浮层只画手柄框，屏幕上的画面就是按下 Enter 之后会得到的结果。
     const ft = freeTRef.current;
     if (ft) {
-      const fi = doc.layers.findIndex((l) => l.id === ft.layerId);
+      const fi = docNow.layers.findIndex((l) => l.id === ft.layerId);
       if (fi >= 0) {
-        const base = doc.layers[fi];
-        composeDoc(doc, comp, {
+        const base = docNow.layers[fi];
+        composeForDisplay(docNow, comp, dispScale, {
           index: fi,
-          layer: { ...base, surface: freeTransformSurface(doc, ft) },
+          layer: { ...base, surface: freeTransformSurface(docNow, ft) },
         });
         present();
         return;
@@ -1241,12 +1348,12 @@ export default function EditorShell({
 
     // 没有进行中的编辑：直接走与导出完全相同的合成路径（含蒙版与调整图层）。
     if (!act || (!stroke && !rt && !offset)) {
-      composeDoc(doc, comp);
+      composeForDisplay(docNow, comp, dispScale);
       present();
       return;
     }
 
-    const at = doc.layers.findIndex((l) => l.id === act.id);
+    const at = docNow.layers.findIndex((l) => l.id === act.id);
 
     // 快速蒙版：合成照旧，画笔这一笔直接叠进临时蒙版；屏幕上再蒙一层红色
     // 宝石膜（涂到的地方 = 退出时会取消选中的地方），与 PS 的行为一致。
@@ -1263,7 +1370,7 @@ export default function EditorShell({
         mctx.drawImage(stroke.buffer, 0, 0);
         mctx.restore();
       }
-      composeDoc(doc, comp);
+      composeForDisplay(docNow, comp, dispScale);
       present();
       // 宝石膜：蒙版 alpha 染红、半透明盖上（Tint 缓存画布，尺寸不符再重建）
       let tint = qmTintRef.current;
@@ -1293,7 +1400,10 @@ export default function EditorShell({
     // 修饰回显：结果画布本身就是「原图 + 已扫过的效果」的整层像素，
     // 覆盖率与选区都已在笔画面内结算完毕，直接换掉本层表面即可，无需再叠 globalAlpha。
     if (rt) {
-      composeDoc(doc, comp, { index: at, layer: { ...act, surface: rt.result } });
+      composeForDisplay(docNow, comp, dispScale, {
+        index: at,
+        layer: { ...act, surface: rt.result },
+      });
       present();
       return;
     }
@@ -1311,7 +1421,7 @@ export default function EditorShell({
         mctx.drawImage(stroke.buffer, 0, 0);
         mctx.restore();
       }
-      composeDoc(doc, comp, { index: at, layer: { ...act, mask } });
+      composeForDisplay(docNow, comp, dispScale, { index: at, layer: { ...act, mask } });
       present();
       return;
     }
@@ -1338,7 +1448,10 @@ export default function EditorShell({
       sctx.drawImage(stroke.buffer, 0, 0);
       sctx.restore();
     }
-    composeDoc(doc, comp, { index: at, layer: { ...act, surface: scratch } });
+    composeForDisplay(docNow, comp, dispScale, {
+      index: at,
+      layer: { ...act, surface: scratch },
+    });
     present();
   }, [doc, docW, docH, brush.opacity, tool, maskEdit, quickMask, channelVis, activeChannel, viewAlpha, scale]);
 
@@ -1379,9 +1492,71 @@ export default function EditorShell({
     if (renderRafRef.current) return;
     renderRafRef.current = requestAnimationFrame(() => {
       renderRafRef.current = 0;
-      render();
+      renderRef.current();
     });
-  }, [render]);
+    // 依赖留空：内部一律走 renderRef，否则 doc 一变这里就重建，
+    // 连带 previewDoc / 各面板的 onPreview 一起换引用，白白多一轮重渲染
+  }, []);
+
+  /**
+   * 拖动预览：只排一次重绘，**不碰 React 状态**。
+   *
+   * 这是"滑杆卡死"的正解 —— 预览本质是"给屏幕看一眼"，没必要让整棵组件树
+   * 跟着重渲染。落库（松手）才走 onCommit。
+   */
+  /**
+   * 是否正在"连续操作"（拖画笔、拖滑杆、拖手柄）。
+   *
+   * 这期间合成比例额外压低到 55%：屏幕上是一块正在动的东西，人眼分辨不出
+   * 那点清晰度差别，但一帧的像素量少了一半多 —— 手感差别是"卡"和"跟手"。
+   * 停手 300ms 后自动恢复全质量重绘一次，所以静态画面始终是清的。
+   */
+  const interactingRef = useRef(false);
+  const idleTimerRef = useRef(0);
+  const markInteracting = useCallback(() => {
+    interactingRef.current = true;
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = window.setTimeout(() => {
+      idleTimerRef.current = 0;
+      interactingRef.current = false;
+      renderRef.current(); // 出一次全质量
+    }, 300);
+  }, []);
+
+  const previewDoc = useCallback(
+    (next: StrataDoc) => {
+      previewDocRef.current = next;
+      markInteracting();
+      scheduleRender();
+    },
+    [markInteracting, scheduleRender],
+  );
+
+  /** 文档真正更新后，预览作废（否则会一直画着已经落库之前的那一帧）。 */
+  useEffect(() => {
+    previewDocRef.current = null;
+  }, [doc]);
+
+  /** pan 状态 → DOM 变量（滚轮缩放、居中、松手对齐都靠这一条）。 */
+  useEffect(() => {
+    panLiveRef.current = pan;
+    const el = stageRef.current;
+    if (!el) return;
+    el.style.setProperty("--pan-x", `${pan.x}px`);
+    el.style.setProperty("--pan-y", `${pan.y}px`);
+  }, [pan]);
+
+  /** 只改 DOM 的平移（拖动过程中每帧调）。 */
+  const applyPanDom = useCallback(() => {
+    if (panRafRef.current) return;
+    panRafRef.current = requestAnimationFrame(() => {
+      panRafRef.current = 0;
+      const el = stageRef.current;
+      if (!el) return;
+      el.style.setProperty("--pan-x", `${panLiveRef.current.x}px`);
+      el.style.setProperty("--pan-y", `${panLiveRef.current.y}px`);
+    });
+  }, []);
 
   useEffect(
     () => () => {
@@ -1504,7 +1679,9 @@ export default function EditorShell({
       const src = act && act.kind === "pixel" ? act.surface : compRef.current;
       if (!src) return;
       const p = docXY(clientX, clientY);
-      const hex = pickColor(src, p.x, p.y);
+      // 合成画布是按视图比例缩过的：当作取样源时坐标要换算，图层像素则不用
+      const k = src === compRef.current ? viewDispScale : 1;
+      const hex = pickColor(src, p.x * k, p.y * k);
       if (!hex) return;
       if (cursorHexRef.current) cursorHexRef.current.textContent = hex.toUpperCase();
       if (cursorSwatchRef.current) cursorSwatchRef.current.style.background = hex;
@@ -2059,10 +2236,9 @@ export default function EditorShell({
         setError("");
         if (tool === "wand") {
           // 「对所有图层取样」时按合成结果取色；否则只看当前像素层
+          // 要生成选区蒙版，必须与文档同尺寸 —— 不能用缩小版合成
           const src =
-            sampleAllLayers || !act || act.kind !== "pixel"
-              ? compRef.current
-              : act.surface;
+            sampleAllLayers || !act || act.kind !== "pixel" ? fullComposite() : act.surface;
           const shape = src ? wandMask(src, p, tolerance, contiguous) : null;
           if (shape) {
             commitSelection(
@@ -2177,7 +2353,7 @@ export default function EditorShell({
 
       if (tool === "magicEraser") {
         // 与魔棒同一套容差判定，只是「选中」变成「擦成透明」；一笔一步可撤销
-        const src = sampleAllLayers ? compRef.current : act.surface;
+        const src = sampleAllLayers ? fullComposite() : act.surface;
         const shape = src ? wandMask(src, p, tolerance, contiguous) : null;
         if (!shape) return;
         const next = cloneSurface(act.surface);
@@ -2309,15 +2485,18 @@ export default function EditorShell({
   const onMove = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
       syncCursor(e.clientX, e.clientY);
+      // 正在连续画：续一下"交互中"的计时，避免画到一半就退回全质量
+      if (strokeRef.current || retouchRef.current) markInteracting();
       // 套索进行中：记下光标位置，覆盖层的 RAF 循环会读它画橡皮筋
       if (polyPts) polyHoverRef.current = docXY(e.clientX, e.clientY);
       const from = panRef.current;
       if (from) {
-        setPan((p) => ({
-          x: p.x + (e.clientX - from.x),
-          y: p.y + (e.clientY - from.y),
-        }));
+        const dx = e.clientX - from.x;
+        const dy = e.clientY - from.y;
         panRef.current = { x: e.clientX, y: e.clientY };
+        // 平移中只改变量：一帧一次 DOM 写入，零 React 重渲染
+        panLiveRef.current = { x: panLiveRef.current.x + dx, y: panLiveRef.current.y + dy };
+        applyPanDom();
         return;
       }
       // 信息面板打开时才跟踪指针坐标（避免每帧重渲染）
@@ -2406,7 +2585,8 @@ export default function EditorShell({
         const act = activeLayer(doc);
         const src = act && act.kind === "pixel" ? act.surface : compRef.current;
         const q = docXY(e.clientX, e.clientY);
-        const hex = src ? pickColor(src, q.x, q.y) : null;
+        const k = src && src === compRef.current ? viewDispScale : 1;
+        const hex = src ? pickColor(src, q.x * k, q.y * k) : null;
         if (hex && hex.toLowerCase() !== fg.toLowerCase()) setFg(hex);
         return;
       }
@@ -2487,6 +2667,8 @@ export default function EditorShell({
     measureStartRef.current = null;
     if (panRef.current) {
       panRef.current = null;
+      // 松手才把实时值写回 state（导航器、后续缩放都读它）
+      setPan(panLiveRef.current);
       return;
     }
     // 自由变换：松手只是结束这一次拖拽，变换本身还挂在浮层上，等 Enter 才落库
@@ -8809,12 +8991,16 @@ export default function EditorShell({
             }}
           >
             <div
+              ref={stageRef}
               className="editor-stage"
               style={{
                 // 像素长宽比校正：横向拉伸显示（像素本身不变）
                 width: docW * scale * (aspectCorrection ? pixelAspect : 1),
                 height: docH * scale,
-                transform: `translate(${pan.x}px, ${pan.y}px)${viewFlipped ? " scaleX(-1)" : ""}`,
+                // 平移走 CSS 变量：拖动时只改变量、不重渲染；松手才同步回 state
+                transform: `translate(var(--pan-x, 0px), var(--pan-y, 0px))${
+                  viewFlipped ? " scaleX(-1)" : ""
+                }`,
               }}
             >
               <canvas
@@ -8866,7 +9052,7 @@ export default function EditorShell({
                   onChange={(w, commit) => {
                     const next = applyGradeWindow(doc, gradeLayer.id, w);
                     if (commit) onCommit(next, "调整调色范围");
-                    else onPreview(next);
+                    else previewDoc(next);
                   }}
                   pen={
                     penDraw && penDraw.layerId === gradeLayer.id
@@ -9189,7 +9375,7 @@ export default function EditorShell({
                 }
                 onDeleteLayer={(id) => onCommit(removeLayers(doc, [id]), "删除调色层")}
                 onChange={onCommit}
-                onPreview={onPreview}
+                onPreview={previewDoc}
               />
             ) : (
               <div className="grade-create">
@@ -9238,7 +9424,7 @@ export default function EditorShell({
             <PropertiesPanel
               doc={doc}
               onChange={onCommit}
-              onPreview={onPreview}
+              onPreview={previewDoc}
               compSource={compRef.current}
               compVersion={panelTick}
             />
@@ -9247,7 +9433,7 @@ export default function EditorShell({
             <LayersPanel
               doc={doc}
               onChange={onCommit}
-              onPreview={onPreview}
+              onPreview={previewDoc}
               maskEdit={maskEdit}
               onMaskEdit={setMaskEdit}
               channelVis={channelVis}
@@ -10961,7 +11147,7 @@ export default function EditorShell({
       {loadSelOpen && (
         <LoadSelectionDialog
           doc={doc}
-          onPreview={onPreview}
+          onPreview={previewDoc}
           onApply={(next) => {
             setLoadSelOpen(false);
             onCommit(next, zh.dialog.channelLoadTitle);
@@ -10982,7 +11168,7 @@ export default function EditorShell({
       {refineOpen && (
         <RefineEdgeDialog
           doc={doc}
-          onPreview={onPreview}
+          onPreview={previewDoc}
           onApply={(next) => {
             setRefineOpen(false);
             onCommit(next, zh.dialog.refineEdgeTitle);
@@ -10993,7 +11179,7 @@ export default function EditorShell({
       {gallery && (
         <FilterGallery
           doc={doc}
-          onPreview={onPreview}
+          onPreview={previewDoc}
           onApply={(next) => {
             setGallery(false);
             onCommit(next, zh.dialog.filterTitle);
@@ -11005,7 +11191,7 @@ export default function EditorShell({
         <FilterFxDialog
           doc={doc}
           filterId={filterFx}
-          onPreview={onPreview}
+          onPreview={previewDoc}
           onApply={(next) => {
             lastFilterRef.current = filterFx;
             setFilterFx(null);
