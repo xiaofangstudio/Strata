@@ -232,7 +232,7 @@
 
 .pref-val {
   min-width: 46px;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-family: var(--font-num);
   font-size: var(--fs-xs);
   text-align: right;
   color: var(--text-2);

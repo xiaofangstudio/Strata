@@ -1,0 +1,130 @@
+/* 导出对话框 */
+
+.ex {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+
+.ex-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* 格式选择：三格等宽，选中只填一层淡蓝 —— 与全局分段控件同一套语言 */
+.ex-formats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.ex-format {
+  height: 30px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  border-radius: 6px;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ex-format:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ex-format.is-on {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+/* 格式说明：紧贴选择器下方，跟着换 */
+.ex-note {
+  margin: -6px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+
+.ex-quality {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ex-quality-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ex-quality-head b {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ex-range {
+  width: 100%;
+  height: 20px;
+}
+
+.ex-quality-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* 摘要：两行键值，键淡值实 */
+.ex-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+
+.ex-kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.ex-kv > span {
+  flex: none;
+  color: var(--text-3);
+  letter-spacing: 0.03em;
+}
+
+.ex-kv > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.ex-warn {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 8px;
+}

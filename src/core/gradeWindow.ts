@@ -444,13 +444,21 @@ export function dragWindow(
       const len = Math.hypot(vx, vy) || 1;
       delta = (dx * (-vy / len) + dy * (vx / len)) * -1;
     } else {
-      // 其它形状：按"到中心的距离变化"算 —— 往外拖变宽、往里拖变窄，
-      // 不再是 (dx+dy) 的符号猜测（那个斜着拖会朝反方向跑）
+      /**
+       * 其它形状：把位移**投影到「中心 → 羽化把手」这条射线上**。
+       *
+       * 早先用的是"到中心的距离差"。问题是：垂直方向拖时距离几乎不变，
+       * 手感就是"怎么拖都不动"；椭圆一旦旋转，把手跑到斜上方，
+       * 横着拖更是几乎没反应 —— 这就是"反常识"的来源。
+       * 投影法只认"顺着这根射线往外还是往里"，朝哪个方向拖都跟手，
+       * 旋转后同样成立（把手位置本来就跟着转）。
+       */
       const c = windowCenter(from);
-      const o = origin ?? { x: c.x, y: c.y };
-      const d0 = Math.hypot(o.x - c.x, o.y - c.y);
-      const d1 = Math.hypot(o.x + dx - c.x, o.y + dy - c.y);
-      delta = d1 - d0;
+      const h = windowHandles(from, 1).find((x) => x.id === "feather");
+      const ux = h ? h.x - c.x : 1;
+      const uy = h ? h.y - c.y : 0;
+      const len = Math.hypot(ux, uy) || 1;
+      delta = (dx * ux + dy * uy) / len;
     }
     const next = Math.max(0, Math.min(400, from.feather + delta));
     return { ...from, feather: Math.round(next) };

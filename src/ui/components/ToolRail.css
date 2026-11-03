@@ -209,3 +209,13 @@
   white-space: nowrap;
   color: inherit;
 }
+
+/* 工具按钮：圆角略大、分隔线更淡 —— 让竖排图标看着成组而不是排成一条 */
+.tool-btn {
+  border-radius: var(--r-sm);
+}
+
+.toolrail-sep {
+  background: var(--border);
+  opacity: 0.9;
+}

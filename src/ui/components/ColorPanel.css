@@ -53,7 +53,7 @@
   flex: none;
   width: 10px;
   color: var(--text-3);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-num);
   font-size: 10px;
 }
 

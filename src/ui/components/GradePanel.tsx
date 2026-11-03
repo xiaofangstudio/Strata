@@ -13,7 +13,7 @@
  * 排版上吃过窄面板的亏：卡片分组、宽面板自动两列、所有网格列都可压缩，
  * 再窄也不会把数字框顶出可视区。
  */
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { composeForDisplay } from "../../engine/displayCompose";
 import { createSurface, mustCtx } from "../../engine/surface";
 import {
@@ -620,6 +620,19 @@ function GradeSlider({
   onReset?: () => void;
 }) {
   const read = (el: HTMLInputElement) => Number(el.value);
+
+  /**
+   * 拖动期间的显示值。
+   *
+   * 预览现在走 ref、不更新 doc（那正是"不卡"的原因），于是 props 里的 value
+   * 在拖动过程中是不动的 —— 滑块能拖但数字纹丝不动，看着就像"没反应"。
+   * 这里自己存一份实时值专门用来显示，松手 / 外部变化后交还给 props。
+   */
+  const [live, setLive] = useState<number | null>(null);
+  useEffect(() => {
+    setLive(null);
+  }, [value]);
+  const shown = live ?? value;
   /**
    * 只在「值真的变了」时落库：History.commit 不去重，
    * 松手就提交会让撤销栈里塞满无变化的假步骤。
@@ -640,24 +653,51 @@ function GradeSlider({
         min={min}
         max={max}
         step={step}
-        value={value}
-        onChange={(e) => onInput(read(e.currentTarget))}
-        onPointerUp={(e) => commitIfChanged(read(e.currentTarget))}
-        onKeyUp={(e) => commitIfChanged(read(e.currentTarget))}
+        value={shown}
+        onChange={(e) => {
+          const v = read(e.currentTarget);
+          setLive(v);
+          onInput(v);
+        }}
+        onPointerUp={(e) => {
+          commitIfChanged(read(e.currentTarget));
+          setLive(null);
+        }}
+        onKeyUp={(e) => {
+          commitIfChanged(read(e.currentTarget));
+          setLive(null);
+        }}
         onDoubleClick={() => {
           lastCommitted.current = Number.NaN;
           onReset?.();
         }}
         title={onReset ? "双击复位" : undefined}
       />
+      {/**
+       * 数字框：**边打边预览，离开才落库**。
+       *
+       * 以前是 onChange 直接 commit —— 输入 "120" 会落三次历史，每落一次
+       * 都要把全部图层像素拷一遍，于是"打个数字就卡"。现在打字只更新画面预览，
+       * blur / 回车才真正进撤销栈。
+       */}
       <input
         className="gs-num"
         type="number"
         min={min}
         max={max}
         step={step}
-        value={Number.isFinite(value) ? Math.round(value * 10) / 10 : 0}
-        onChange={(e) => commitIfChanged(Number(e.currentTarget.value) || 0)}
+        value={Number.isFinite(shown) ? Math.round(shown * 10) / 10 : 0}
+        onChange={(e) => {
+          const v = Number(e.currentTarget.value) || 0;
+          setLive(v);
+          onInput(v);
+        }}
+        onBlur={(e) => commitIfChanged(Number(e.currentTarget.value) || 0)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.currentTarget.blur();
+          }
+        }}
       />
     </label>
   );
@@ -777,6 +817,19 @@ function ColorWheel({
   const dragging = useRef(false);
   const last = useRef({ x, y });
 
+  /**
+   * 拖动期间的实时位置 / 读数。
+   *
+   * 与 GradeSlider 同理：预览不更新 doc，所以 props 里的 x/y 在拖动时是静止的。
+   * 没有这一份本地值，光标和下面的读数就会"拖而不动"。
+   */
+  const [live, setLive] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    setLive(null);
+  }, [x, y]);
+  const vx = live?.x ?? x;
+  const vy = live?.y ?? y;
+
   const point = (e: React.PointerEvent) => {
     const el = ref.current;
     if (!el) return { x: 0, y: 0 };
@@ -791,11 +844,26 @@ function ColorWheel({
     return { x: Math.round(dx), y: Math.round(dy) };
   };
 
-  const px = 50 + (x / 100) * 46;
-  const py = 50 + (y / 100) * 46;
+  // 44 而不是 46：外圈让出了色相环的位置，光标最大才不会被环压住
+  const px = 50 + (vx / 100) * 44;
+  const py = 50 + (vy / 100) * 44;
+  const signed = (v: number) => (v > 0 ? `+${v}` : String(v));
 
   return (
     <div className="gw">
+      <div className="gw-head">
+        <span className="gw-label">{label}</span>
+        {(x !== 0 || y !== 0) && (
+          <button
+            type="button"
+            className="gw-reset"
+            title={`${label}归零`}
+            onClick={() => onMove(0, 0, true)}
+          >
+            ↺
+          </button>
+        )}
+      </div>
       <div
         ref={ref}
         className="gw-wheel"
@@ -804,35 +872,53 @@ function ColorWheel({
           e.currentTarget.setPointerCapture(e.pointerId);
           const p = point(e);
           last.current = p;
+          setLive(p);
           onMove(p.x, p.y, false);
         }}
         onPointerMove={(e) => {
           if (!dragging.current) return;
           const p = point(e);
           last.current = p;
+          setLive(p);
           onMove(p.x, p.y, false);
         }}
         onPointerUp={() => {
           if (!dragging.current) return;
           dragging.current = false;
-          if (last.current.x === x && last.current.y === y) return;
+          if (last.current.x === x && last.current.y === y) {
+            setLive(null);
+            return;
+          }
           onMove(last.current.x, last.current.y, true);
+          setLive(null);
         }}
         onDoubleClick={() => {
           if (x !== 0 || y !== 0) onMove(0, 0, true);
         }}
         title="拖动偏色 · 双击归零"
       >
-        <span className="gw-ring" />
+        <span className="gw-halo" aria-hidden="true" />
+        <span className="gw-field" aria-hidden="true" />
+        <span className="gw-axis" aria-hidden="true" />
         <span className="gw-puck" style={{ left: `${px}%`, top: `${py}%` }} />
       </div>
-      <span className="gw-label">{label}</span>
-      <div className="gw-meta">
-        <span>
-          E <b>{exp}</b>
+      {/* 读数沿用达芬奇那一套：三个等宽数字，各自一条细彩线表明是哪一维 */}
+      <div className="gw-readout">
+        <span className="gw-val" data-dim="x">
+          <b>{signed(vx)}</b>
+          <i>X</i>
         </span>
-        <span>
-          S <b>{sat}</b>
+        <span className="gw-val" data-dim="y">
+          <b>{signed(vy)}</b>
+          <i>Y</i>
+        </span>
+        <span className="gw-val" data-dim="e">
+          <b>{signed(exp)}</b>
+          <i>E</i>
+        </span>
+        <span className="gw-val" data-dim="s">
+          <b>{signed(sat)}</b>
+          <i>S</i>
         </span>
       </div>
     </div>

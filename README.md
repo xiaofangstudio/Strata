@@ -41,6 +41,15 @@
 
 ## 🆕 这个版本更新了什么
 
+### 📅 本轮更新（11-03）：导出三格式 + 图标 v2 + 控件细节统一
+
+- 🖼️ **应用图标 v2**：全套 icons 重制（`icon.ico` / `Square*Logo` / `StoreLogo` 全换），品牌资产进 `assets/brand/strata-icon-v2.png` 与界面内 `strata-mark`，`BrandMark` 同步换新；`scripts/make-app-icon.py` 一条命令从源图生成全套尺寸
+- 📤 **导出对话框**：新增 `engine/exportImage.ts` + `ExportDialog`——PNG / JPEG / WebP 三格式可选、质量滑杆、摘要里显示尺寸与建议文件名，确定后才弹系统保存框。JPEG 没有 alpha，自动先铺白底（透明区不再变黑，和 PS「拼合后存 JPG」一致）；WebP 保留透明。配单测 `tests/unit/exportImage.test.ts`
+- 🎛️ **控件细节统一层**（`global.css` +159）：只用元素/属性选择器兜底，不抢各面板类名的特异度——输入框统一圆角 + 等宽数字 + 聚焦「柔光环」（密集面板里不再整屏边框跳色）、滑杆统一细轨 + 圆点、scrub 拖数值时指针保持左右箭头并禁选文字、浮层菜单统一大圆角与分组小字距、`u-num` / `u-caption` / `u-micro` 工具类
+- 🧠 **合成自适应降级**：交互中一帧超过 ~34ms 自动降一档合成质量，回到 14ms 以内升回来；静止画面永远是全质量——低端机拖滑杆不再越拖越卡
+- 🧩 各面板（`ColorPicker` / `FilterFxDialog` / `GradePanel` / `controls` 等）接入统一控件层，`tokens.css` 补 ring 与时长变量
+- 📦 `Strata.exe` 重打包
+
 ### 📅 本轮更新（11-02）：性能大修与调色手感
 
 - ⚡ **显示合成改按视图分辨率跑**：新 `engine/displayCompose.ts`——以前每帧都在文档原生分辨率（6000×4000 = 24MP）整档合成再缩小，96% 的像素算完就丢；现在按 `视图缩放 × 设备像素比` 合成（缩小视图下计算量按 scale² 下降），放大到 100% 及以上夹回 1，导出仍走全分辨率 `composeDoc`，与屏幕逐像素同源

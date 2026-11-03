@@ -54,13 +54,48 @@ function grab(w: number, h: number): HTMLCanvasElement {
 }
 
 /** 把一张画布等比缩到 s 倍，返回池里的画布（下次合成会被覆盖，别长期持有）。 */
-function shrink(src: CanvasImageSource & { width: number; height: number }, s: number): HTMLCanvasElement {
+function shrinkToPool(
+  src: CanvasImageSource & { width: number; height: number },
+  s: number,
+): HTMLCanvasElement {
   const out = grab(src.width * s, src.height * s);
   const ctx = mustCtx(out);
   ctx.imageSmoothingEnabled = true;
   // 缩小用 medium：high 在几十兆像素上会慢到离谱，而这个尺寸下肉眼看不出差别
   ctx.imageSmoothingQuality = "medium";
   ctx.drawImage(src, 0, 0, out.width, out.height);
+  return out;
+}
+
+/**
+ * 缩小结果缓存。
+ *
+ * 为什么必须有：合成一次要先把每层从全分辨率缩到视图尺寸，图层一多，
+ * "缩"本身就比"合"还贵（20 层 × 24MP 的读取 ≈ 每帧几十毫秒）。
+ * 而绝大部分图层在一帧里根本不会变 —— 缓存住它们的缩小版，只重算变的那一层。
+ *
+ * 失效策略：用源画布的引用做 key（源换了就是新对象，自然重建）；
+ * **正在编辑的那一层永远不缓存**，因为画笔 / 渐变是就地改像素的，
+ * 画布引用不变但内容变了，缓存会留下上一笔的残影。
+ */
+const shrinkCache = new WeakMap<HTMLCanvasElement, { s: number; out: HTMLCanvasElement }>();
+
+function shrink(src: HTMLCanvasElement, s: number, cacheable: boolean): HTMLCanvasElement {
+  if (!cacheable) return shrinkToPool(src, s);
+
+  const tw = Math.max(1, Math.round(src.width * s));
+  const th = Math.max(1, Math.round(src.height * s));
+  const hit = shrinkCache.get(src);
+  if (hit && hit.out.width === tw && hit.out.height === th) return hit.out;
+
+  const out = document.createElement("canvas");
+  out.width = tw;
+  out.height = th;
+  const ctx = mustCtx(out);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "medium";
+  ctx.drawImage(src, 0, 0, tw, th);
+  shrinkCache.set(src, { s, out });
   return out;
 }
 
@@ -98,13 +133,13 @@ function shrinkWindow(w: GradeWindow, s: number): GradeWindow {
  * 混合模式、不透明度、样式、剪贴关系都原样保留 —— 它们本来就与分辨率无关，
  * 而样式里的像素偏移量跟着整体一起缩，视觉比例自然是对的。
  */
-function shrinkLayer(l: StrataLayer, s: number): StrataLayer {
+function shrinkLayer(l: StrataLayer, s: number, cacheable: boolean): StrataLayer {
   const out: StrataLayer = { ...l };
   // 调整层不画自己的像素（它读的是下方合成结果），没有可缩的东西
   if (l.kind !== "adjust" && l.surface) {
-    out.surface = shrink(l.surface, s);
+    out.surface = shrink(l.surface, s, cacheable);
   }
-  if (l.mask) out.mask = shrink(l.mask, s);
+  if (l.mask) out.mask = shrink(l.mask, s, cacheable);
   if (l.window) out.window = shrinkWindow(l.window, s);
   return out;
 }
@@ -131,11 +166,13 @@ export function composeForDisplay(
   }
 
   used = 0;
-  const layers = doc.layers.map((l) => shrinkLayer(l, s));
+  // 正在编辑的那一层不缓存：它的像素是就地改的，引用不变但内容在变
+  const activeId = doc.activeLayerId;
+  const layers = doc.layers.map((l) => shrinkLayer(l, s, l.id !== activeId));
   const dispOverride = override
     ? {
         index: override.index,
-        layer: shrinkLayer(override.layer, s),
+        layer: shrinkLayer(override.layer, s, false),
       }
     : null;
   const dispDoc: StrataDoc = {

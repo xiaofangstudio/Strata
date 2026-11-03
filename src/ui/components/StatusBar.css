@@ -41,8 +41,19 @@
 /* 慢帧读数：橙黄色小字，只在单帧超预算时出现 */
 .st-perf {
   flex: none;
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-num);
   font-size: 10px;
   color: var(--warn, #d08a2c);
   white-space: nowrap;
+}
+
+/* 状态栏：键名淡、数值用等宽数字 —— 一列数字读起来才稳 */
+.st-key {
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.st-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
 }

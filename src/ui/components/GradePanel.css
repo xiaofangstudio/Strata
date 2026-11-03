@@ -315,7 +315,7 @@
   min-width: 0;
   height: 20px;
   padding: 0 3px;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-family: var(--font-num);
   font-size: 10px;
   text-align: right;
   color: var(--text);
@@ -356,59 +356,31 @@
   border-radius: var(--r-sm);
 }
 
+/* ---------------- 色轮（对齐达芬奇调色台那一套观感） ---------------- */
+
 .gw {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 7px;
   min-width: 0;
   width: 100%;
 }
 
-.gw-wheel {
-  position: relative;
-  width: 68px;
-  height: 68px;
-  max-width: 100%;
-  border-radius: 50%;
-  cursor: crosshair;
-  touch-action: none;
-}
-
-.gw-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  /* 色相按角度、饱和按半径：中心偏灰，与内核「向量越远越浓」一致 */
-  background:
-    radial-gradient(closest-side, var(--surface) 0%, transparent 76%),
-    conic-gradient(
-      from 0deg,
-      hsl(0 85% 55%),
-      hsl(60 85% 55%),
-      hsl(120 85% 55%),
-      hsl(180 85% 55%),
-      hsl(240 85% 55%),
-      hsl(300 85% 55%),
-      hsl(360 85% 55%)
-    );
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.gw-puck {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  margin: -4.5px 0 0 -4.5px;
-  border: 1.5px solid #fff;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
-  pointer-events: none;
+/* 标题行：档位名 + 归零（只在偏色时才出现，平时不占视觉） */
+.gw-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
 }
 
 .gw-label {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -416,16 +388,213 @@
   max-width: 100%;
 }
 
-.gw-meta {
-  display: flex;
-  gap: 6px;
+.gw-reset {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
   font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: 50%;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.gw-reset:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+/* 色轮本体：正方形随面板宽度走，上限 148px */
+.gw-wheel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-width: 148px;
+  margin: 0 auto;
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+  isolation: isolate;
+}
+
+/*
+  外圈色相环：细、颜色够亮 —— 它是"这是个色轮"唯一的识别符，
+  所以宁可窄也要准。用 mask 挖掉内圈，不额外占位。
+*/
+.gw-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -90deg,
+    hsl(0 88% 60%),
+    hsl(40 92% 58%),
+    hsl(80 82% 55%),
+    hsl(140 72% 50%),
+    hsl(185 80% 52%),
+    hsl(225 88% 62%),
+    hsl(270 82% 62%),
+    hsl(315 85% 62%),
+    hsl(345 88% 60%),
+    hsl(360 88% 60%)
+  );
+  -webkit-mask: radial-gradient(
+    closest-side,
+    transparent calc(100% - 10px),
+    #000 calc(100% - 9px),
+    #000 calc(100% - 2px),
+    transparent calc(100% - 1px)
+  );
+  mask: radial-gradient(
+    closest-side,
+    transparent calc(100% - 10px),
+    #000 calc(100% - 9px),
+    #000 calc(100% - 2px),
+    transparent calc(100% - 1px)
+  );
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/*
+  内部色域：中心干净、越靠外越带色 —— 与内核「向量越远越浓」的语义一致。
+  透明度压得很低，是"氛围"而不是"颜色样本"，拖动时不会看花眼。
+*/
+.gw-field {
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -90deg,
+    hsl(0 80% 60%),
+    hsl(40 85% 60%),
+    hsl(80 75% 58%),
+    hsl(140 65% 55%),
+    hsl(185 72% 56%),
+    hsl(225 80% 64%),
+    hsl(270 75% 64%),
+    hsl(315 78% 64%),
+    hsl(345 80% 62%),
+    hsl(360 80% 60%)
+  );
+  opacity: 0.3;
+  -webkit-mask: radial-gradient(closest-side, transparent 6%, #000 76%, #000 100%);
+  mask: radial-gradient(closest-side, transparent 6%, #000 76%, #000 100%);
+  pointer-events: none;
+}
+
+/* 十字轴：只在正中间淡淡一横一竖，用 border 色而不是硬灰 */
+.gw-axis {
+  position: absolute;
+  inset: 11px;
+  border-radius: 50%;
+  background:
+    linear-gradient(
+        to right,
+        transparent calc(50% - 0.5px),
+        var(--border) calc(50% - 0.5px),
+        var(--border) calc(50% + 0.5px),
+        transparent calc(50% + 0.5px)
+      )
+      center / 100% 100% no-repeat,
+    linear-gradient(
+        to bottom,
+        transparent calc(50% - 0.5px),
+        var(--border) calc(50% - 0.5px),
+        var(--border) calc(50% + 0.5px),
+        transparent calc(50% + 0.5px)
+      )
+      center / 100% 100% no-repeat;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* 指示点：品牌蓝实心 + 白圈，落在哪个象限读得出来 */
+.gw-puck {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--accent);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  transition: transform 90ms var(--ease);
+}
+
+.gw-wheel:active .gw-puck {
+  transform: scale(1.15);
+}
+
+/* 读数：四个等宽数字，各自一条细彩线标明是哪一维 */
+.gw-readout {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.gw-val {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px 0 0;
+  border-radius: 5px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.gw-val b {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.gw-val i {
+  font-style: normal;
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.06em;
   color: var(--text-3);
 }
 
-.gw-meta b {
-  color: var(--text-2);
-  font-weight: 600;
+.gw-val::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 2px;
+  margin-top: 2px;
+  background: var(--border);
+}
+
+/* 颜色只用在"这根线是哪一维"上，不抢主体的中性灰 */
+.gw-val[data-dim="x"]::after {
+  background: #e0654e;
+}
+
+.gw-val[data-dim="y"]::after {
+  background: #4da368;
+}
+
+.gw-val[data-dim="e"]::after {
+  background: var(--accent);
+}
+
+.gw-val[data-dim="s"]::after {
+  background: #7b8ce0;
 }
 
 .gp-wheel-sliders {
@@ -938,4 +1107,70 @@
 .gp-bw.is-black rect,
 .gp-bw.is-white rect {
   opacity: 0.85;
+}
+
+/* ==========================================================================
+   细节精修：向「大留白 + 细线 + 等宽数字」那一套靠
+   只动间距、圆角、字色与线宽，不改布局结构，也不引入新的强调色。
+   ========================================================================== */
+
+/* 卡片：留白多一点，框线退到背景里，靠间距分组而不是靠框 */
+.gc {
+  gap: 5px;
+  padding: 8px 9px 9px;
+  border-radius: var(--r-md);
+}
+
+.gc-title {
+  letter-spacing: 0.05em;
+}
+
+/* 标签淡一档：数值是主角，标签只做索引 */
+.gs-label {
+  color: var(--text-3);
+}
+
+/* 数字框：贴合截图的圆角 + 略高的行高，聚焦时只亮描边不动背景 */
+.gs-num {
+  height: 22px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  border-radius: 6px;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+/* 滑轨再细一点，视觉重量让给数值 */
+.gs-range::-webkit-slider-runnable-track,
+.gs-range::-moz-range-track {
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.gs-range::-webkit-slider-thumb {
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+}
+
+.gs-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+}
+
+/* 色轮格：把内边距让给色轮本身，框线更淡 */
+.gp-wheel-cell {
+  gap: 8px;
+  padding: 9px 7px 8px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.gp-wheels {
+  gap: 8px;
+}
+
+/* 色轮下面的两个滑杆：行距紧一点，别把色轮挤出卡片 */
+.gp-wheel-sliders {
+  gap: 2px;
 }

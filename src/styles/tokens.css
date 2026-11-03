@@ -50,6 +50,17 @@
   --accent-ring: rgba(15, 118, 214, 0.35);
   --accent-ink: #ffffff;
 
+  /**
+   * 数字字体。
+   *
+   * **不用 monospace**：Windows 上 `ui-monospace` 会回落到 Courier New ——
+   * 那是衬线体，跟界面其它文字完全不是一套（截图里那些 1 带小脚的就是它）。
+   * 系统 UI 字体配 `tabular-nums` 已经能让一列数字等宽对齐，观感也统一。
+   */
+  --font-num: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+  /** 旧引用兼容：所有 `var(--font-mono)` 现在拿到的也是同一套无衬线字体 */
+  --font-mono: var(--font-num);
+
   /* 动效 */
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);

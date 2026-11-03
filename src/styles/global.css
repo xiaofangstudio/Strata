@@ -296,3 +296,162 @@ html.is-compact .panel-tabs {
 .popover .ly-menu-item:hover {
   background: var(--hover);
 }
+
+/* ==========================================================================
+   细节统一层
+   --------------------------------------------------------------------------
+   目标不是换皮肤，而是让「控件」这一层在全应用长得像同一个东西：
+   同一套圆角、同一套聚焦反馈、同一套数字排版、同一套滑杆手感。
+
+   做法上刻意只写**元素 / 属性选择器**（input、button 这类），不写类名：
+   类选择器的特异性更高，各面板自己写的尺寸、对齐照旧生效，不会被这里推翻；
+   而它们没写到的那些细节（圆角、过渡、聚焦环、等宽数字）由这一层兜住。
+
+   唯一需要各面板自己保留的：带渐变轨的滑杆（色相 / 透明度条）——
+   它们的轨选择器特异性更高，不会被打掉。
+   ========================================================================== */
+
+/* ---------- 1. 输入类：圆角 + 等宽数字 + 聚焦柔光环 ---------- */
+
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+textarea,
+select {
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+/*
+  聚焦用「一圈柔光」而不是把边框染蓝。
+  密集面板里十几个输入框，边框一变色整屏都在跳；外扩的柔光环只看当前那个。
+*/
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* ---------- 2. 滑杆：一套细轨 + 圆点 ---------- */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 1.5px;
+  background: var(--border-strong);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+  background: var(--accent);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 3px;
+  border-radius: 1.5px;
+  background: var(--border-strong);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+  background: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+
+/* ---------- 3. 按钮：过渡统一（不加位移，避免动到已有的 transform） ---------- */
+
+button {
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+/* ---------- 4. 细分隔线：只要一条淡淡的分界 ---------- */
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: var(--sp-3) 0;
+}
+
+/* ---------- 5. 细节工具类（各面板按需挂） ---------- */
+
+/* 极小号 "索引" 标签：字号压小、字距拉开 */
+.u-micro {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+/* 等宽数值：让一列数字的小数点对得上 */
+.u-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* 面板标题：统一的小号大字距，替代各写各的 */
+.u-caption {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+
+/* ---------- 浮层菜单（下拉 / 右键）细节 ---------- */
+
+/* 圆角比面板大一点：浮层是"浮"在上面的，圆角大才像另一层 */
+.popover {
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.popover .ly-menu-item {
+  border-radius: 6px;
+  padding: 6px 9px;
+  letter-spacing: 0.01em;
+}
+
+/* 分组名：极小号 + 大字距，做"索引"而不是"标题" */
+.popover .ly-menu-group {
+  padding: 6px 9px 3px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+/* 横向拖数值（scrub）时：指针保持左右箭头、禁止顺手选中文字 */
+body.is-scrubbing {
+  cursor: ew-resize;
+  user-select: none;
+}

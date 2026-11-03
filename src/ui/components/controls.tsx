@@ -21,6 +21,7 @@ import {
   type BrushPrefs,
 } from "../../stores/prefs";
 import ColorPicker from "./ColorPicker";
+import Popover from "./Popover";
 import RangeInput from "./RangeInput";
 import "./picker.css";
 
@@ -42,8 +43,53 @@ export interface SliderProps {
 
 export function Slider({ label, min, max, value, suffix, hint, onChange }: SliderProps) {
   const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v)));
+
+  /**
+   * 数字框的"草稿"。
+   *
+   * 以前 onChange 直接把值推上去 —— 输入 "120" 会连着推三次，选项栏每推一次
+   * 就要重绘一遍画面并落一次历史，于是"打个数字就卡"。
+   * 现在打字只存草稿，停手 220ms 或离开输入框才推一次。
+   */
+  const [draft, setDraft] = useState<string | null>(null);
+  const timerRef = useRef(0);
+  /** 双击滑块弹出的精细调节浮层，用滑块自己当锚点 */
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+
+  // 外部值变了（撤销、切工具、套预设）就把草稿作废，别让旧草稿盖住新值
+  useEffect(() => {
+    setDraft(null);
+  }, [value]);
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+  const pushLater = (raw: string) => {
+    setDraft(raw);
+    window.clearTimeout(timerRef.current);
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    timerRef.current = window.setTimeout(() => onChange(clamp(n)), 220);
+  };
+
+  const flush = () => {
+    window.clearTimeout(timerRef.current);
+    if (draft === null) return;
+    const n = Number(draft);
+    if (Number.isFinite(n)) onChange(clamp(n));
+    setDraft(null);
+  };
+
   return (
-    <label className="opt" title={hint}>
+    <label
+      className="opt"
+      title={hint ?? `${label}：双击滑块可放大调节`}
+      onDoubleClick={(e) => {
+        // 只有双击在滑块本体上才弹浮层，双击数字框不该弹
+        if ((e.target as HTMLElement).tagName !== "INPUT") return;
+        if ((e.target as HTMLInputElement).type !== "range") return;
+        setAnchor(e.currentTarget);
+      }}
+    >
       <span className="opt-label">{label}</span>
       <RangeInput
         className="opt-range"
@@ -59,10 +105,52 @@ export function Slider({ label, min, max, value, suffix, hint, onChange }: Slide
         min={min}
         max={max}
         step={1}
-        value={value}
-        onChange={(e) => onChange(clamp(Number(e.target.value)))}
+        value={draft ?? String(value)}
+        onChange={(e) => pushLater(e.currentTarget.value)}
+        onBlur={flush}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
       />
       {suffix && <span className="opt-suffix">{suffix}</span>}
+
+      {/*
+        精细调节浮层：选项栏里那根滑轨只有一百来像素，要精确到个位只能盲调。
+        双击把它放大成一个"能瞄准"的卡片 —— 同样的取值范围，长度翻倍。
+      */}
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} width={232}>
+          <div className="opt-fine">
+            <div className="opt-fine-head">
+              <span className="u-micro">{label}</span>
+              <b className="u-num">
+                {value}
+                {suffix ?? ""}
+              </b>
+            </div>
+            <RangeInput
+              className="opt-fine-range"
+              min={min}
+              max={max}
+              value={value}
+              aria-label={`${label}（精细）`}
+              onChange={(v) => onChange(clamp(v))}
+            />
+            <div className="opt-fine-scale">
+              <span>{min}</span>
+              <button
+                type="button"
+                className="opt-fine-reset"
+                onClick={() => onChange(clamp(0))}
+                title="归零"
+              >
+                归零
+              </button>
+              <span>{max}</span>
+            </div>
+          </div>
+        </Popover>
+      )}
     </label>
   );
 }

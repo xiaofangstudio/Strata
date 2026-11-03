@@ -392,6 +392,21 @@ export function NumBox({
     onChange(Math.min(max, Math.max(0, Math.round(n))));
   };
 
+  /**
+   * 横向拖动改值（达芬奇那套 scrub）。
+   *
+   * 判定逻辑有个死区：先按住不动、位移超过 4px 才进入拖动模式 ——
+   * 否则用户想点进去改数字，手指一抖就把值改了。
+   * 进入拖动模式才 capture 指针，单击仍然是「聚焦 + 直接打字」。
+   */
+  const scrub = useRef<{ x: number; base: number; moved: boolean } | null>(null);
+
+  const stopScrub = () => {
+    if (!scrub.current) return;
+    scrub.current = null;
+    document.body.classList.remove("is-scrubbing");
+  };
+
   return (
     <input
       type="number"
@@ -400,11 +415,40 @@ export function NumBox({
       max={max}
       value={draft}
       aria-label={aria}
+      title={`${aria}：左右拖动可调，按住 Shift 微调`}
       onChange={(e) => {
         setDraft(e.target.value);
         push(e.target.value);
       }}
-      onBlur={() => setDraft(String(value))}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        scrub.current = { x: e.clientX, base: value, moved: false };
+      }}
+      onPointerMove={(e) => {
+        const d = scrub.current;
+        if (!d) return;
+        const dx = e.clientX - d.x;
+        if (!d.moved) {
+          if (Math.abs(dx) < 4) return;
+          d.moved = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          document.body.classList.add("is-scrubbing");
+        }
+        // 200 屏幕像素走完整个区间；按住 Shift 缩到 1/5 步长便于精调
+        const span = Math.max(1, max);
+        const k = e.shiftKey ? 0.2 : 1;
+        const next = Math.max(0, Math.min(max, Math.round(d.base + (dx / 200) * span * k)));
+        if (next === Number(draft)) return;
+        setDraft(String(next));
+        onChange(next);
+      }}
+      onPointerUp={stopScrub}
+      onPointerCancel={stopScrub}
+      onLostPointerCapture={stopScrub}
+      onBlur={() => {
+        stopScrub();
+        setDraft(String(value));
+      }}
     />
   );
 }

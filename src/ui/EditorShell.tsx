@@ -344,6 +344,8 @@ import { filterDef } from "../engine/filters/defs";
 import { alphaChannelsOf } from "../core/channelOps";
 import InfoModals, { type InfoModalKind } from "./components/InfoModals";
 import ImageSizeDialog from "./components/ImageSizeDialog";
+import ExportDialog from "./components/ExportDialog";
+import { encodeCanvas, formatSpec, suggestFileName, type ExportFormat } from "../engine/exportImage";
 import Modal from "./components/Modal";
 import ColorChip from "./components/ColorChip";
 import { Check } from "./components/controls";
@@ -1253,7 +1255,7 @@ export default function EditorShell({
      * 「按视图比例合成」解决了缩小视图下的浪费，但 100% 视图下比例本来就是 1 ——
      * 而大图上 100% 依然要算整幅。拖动期间稍微降一档，停手 300ms 补齐全质量。
      */
-    const cap = interactingRef.current ? 0.55 : 1;
+    const cap = interactingRef.current ? CAP_STEPS[capIdxRef.current] : 1;
     const dispScale = Math.min(cap, Math.max(0.06, scale * (window.devicePixelRatio || 1)));
     const compW = Math.max(1, Math.round(docW * dispScale));
     const compH = Math.max(1, Math.round(docH * dispScale));
@@ -1312,10 +1314,23 @@ export default function EditorShell({
        * 有这个数字，卡的时候能一眼看出是"合成慢"还是"别的地方慢"。
        */
       const dt = performance.now() - frameStartRef.current;
+
+      /**
+       * 自适应降级：拖得越久越知道这机器吃不吃得消。
+       * 一帧超过 ~34ms（约 30fps 掉队）就降一档，回到 14ms 以内就升一档。
+       * 只在"交互中"调 —— 静止画面必须是全质量，那是用户停下来端详的那一帧。
+       */
+      if (interactingRef.current) {
+        if (dt > 34 && capIdxRef.current > 0) capIdxRef.current -= 1;
+        else if (dt < 14 && capIdxRef.current < CAP_STEPS.length - 1) capIdxRef.current += 1;
+      }
+
       const perf = document.getElementById("st-perf");
       if (perf) {
         if (dt > 30) {
-          perf.textContent = `合成 ${Math.round(dt)}ms${interactingRef.current ? " · 交互中" : ""}`;
+          perf.textContent = `合成 ${Math.round(dt)}ms${
+            interactingRef.current ? ` · 交互 ${Math.round(CAP_STEPS[capIdxRef.current] * 100)}%` : ""
+          }`;
           perf.hidden = false;
         } else if (!perf.hidden) {
           perf.hidden = true;
@@ -1323,8 +1338,13 @@ export default function EditorShell({
       }
 
       const now = performance.now();
-      // 4 次/秒已经够看，多了只是让整棵面板树白重渲染
-      if (now - lastPanelRef.current > 500) {
+      /**
+       * 2 次/秒已经够看；而且**拖动期间完全不推** ——
+       * 每次 tick 都会让整棵面板树（图层、调色台、直方图、导航器）重渲染一遍，
+       * 拖动画笔时每 500ms 掉一帧的感觉就是从这儿来的。
+       * 直方图落后半秒没人会在意，手跟不跟手人人都在意。
+       */
+      if (!interactingRef.current && now - lastPanelRef.current > 500) {
         lastPanelRef.current = now;
         setPanelTick((t) => t + 1);
       }
@@ -1513,12 +1533,24 @@ export default function EditorShell({
    */
   const interactingRef = useRef(false);
   const idleTimerRef = useRef(0);
+
+  /**
+   * 交互期间的合成比例档位。
+   *
+   * 为什么做成"档"而不是连续值：缩小后的图层是有缓存的，比例一变缓存全失效、
+   * 所有图层都要重量一遍 —— 那比不降还慢。固定几档，切换时才有一次重建。
+   * 档位按"每帧耗时"自动上下移动，所以大图小图都能落在跟手的档上。
+   */
+  const CAP_STEPS = [0.18, 0.26, 0.38, 0.55, 0.78];
+  const capIdxRef = useRef(3);
   const markInteracting = useCallback(() => {
     interactingRef.current = true;
     if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
     idleTimerRef.current = window.setTimeout(() => {
       idleTimerRef.current = 0;
       interactingRef.current = false;
+      // 停手后把档位收回中档：下次开始拖时不必从最低档慢慢爬
+      capIdxRef.current = 3;
       renderRef.current(); // 出一次全质量
     }, 300);
   }, []);
@@ -3032,29 +3064,74 @@ export default function EditorShell({
     setPrefs({ brushDefaults: toBrushPrefs(brush) });
   }, [brush]);
 
-  const exportPng = useCallback(async () => {
-    try {
-      const target = await save({
-        title: zh.dialog.saveTitle,
-        defaultPath: `${doc.name}.png`,
-        filters: [{ name: "PNG 图片", extensions: ["png"] }],
-      });
-      if (typeof target !== "string") return;
-      // 导出永远走「干净的合成」：屏幕上可能正开着通道视图（偏色 / 单通道灰度），
-      // 那是给眼睛看的，不能跟着文件一起存下去，所以这里另起一张画布重新合成。
-      const canvas = createSurface(docW, docH);
-      composeDoc(doc, canvas);
-      const bytes = await encodePng(canvas);
-      await writeFileBytes(target, bytes);
-      setToast(zh.editor.exported);
-    } catch (e) {
-      setError(`${zh.error.exportFailed}：${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, [doc, docW, docH]);
+  /** 导出对话框开关（选格式 + 质量，确定后才弹系统保存框）。 */
+  const [exportOpen, setExportOpen] = useState(false);
+  /**
+   * 导出重入锁。
+   *
+   * 导出要合成 + 编码 + 写盘，全是异步的；用户在这个空档里连点两下，
+   * 就会起两条并行的导出 —— 两条都去弹保存框、都去写同一个文件。
+   * 用一把同步的锁挡住：第二个请求直接忽略，不做、也不报错。
+   */
+  const exportingRef = useRef(false);
+
+  const exportPng = useCallback(() => setExportOpen(true), []);
+
+  /** 真正导出：合成 → 编码 → 写盘。format 已由对话框选定。 */
+  const doExport = useCallback(
+    async (format: ExportFormat, quality: number) => {
+      if (exportingRef.current) return;
+      exportingRef.current = true;
+      setExportOpen(false);
+      // 提到 try 外面：即使中途抛错也能在 finally 里把这块全分辨率画布放掉
+      let canvas: HTMLCanvasElement | null = null;
+      try {
+        const spec = formatSpec(format);
+        const target = await save({
+          title: zh.dialog.saveTitle,
+          defaultPath: suggestFileName(doc.name, format),
+          filters: [{ name: `${spec.label} 图片`, extensions: [spec.ext] }],
+        });
+        if (typeof target !== "string") return;
+        // 导出永远走「干净的合成」：屏幕上可能正开着通道视图（偏色 / 单通道灰度），
+        // 那是给眼睛看的，不能跟着文件一起存下去，所以这里另起一张画布重新合成。
+        canvas = createSurface(docW, docH);
+        composeDoc(doc, canvas);
+        const bytes = await encodeCanvas(canvas, format, quality);
+        await writeFileBytes(target, bytes);
+        setToast(`${zh.editor.exported} · ${spec.label}`);
+      } catch (e) {
+        setError(`${zh.error.exportFailed}：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        /**
+         * 主动把画布缩成 0：大图上这张是全分辨率（几十 MB），
+         * 虽然作用域结束会被 GC，但画布的 backing store 释放得比对象晚得多 ——
+         * 连导几张不同尺寸的图，内存会一路堆到峰值再掉下来。显式放掉更干净。
+         */
+        if (canvas) {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+        exportingRef.current = false;
+      }
+    },
+    [doc, docW, docH],
+  );
+
+  /**
+   * 打开文件的重入锁。
+   *
+   * 打开要走"解码 → 建文档 → 换文档"三步，全异步。用户连点两下同一个文件时，
+   * 两条链会各自解一份、各自 onOpenDoc 一次 —— 后到的那次会覆盖前一次，
+   * 而且前一次解出来的画布没人回收，白吃一份内存。
+   */
+  const openingRef = useRef(false);
 
   /** 打开指定路径：图片按位图解码，.strata 工程走工程解码。 */
   const openFileAt = useCallback(
     async (path: string) => {
+      if (openingRef.current) return;
+      openingRef.current = true;
       try {
         // 工程编解码器按需加载：只有真的开 / 存 .strata / .psd 时才拉进来。
         const { decodeProject, isStrataPath } = await import("../engine/project");
@@ -3080,6 +3157,8 @@ export default function EditorShell({
         pushRecent(path);
       } catch (e) {
         setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        openingRef.current = false;
       }
     },
     [onOpenDoc, pushRecent],
@@ -11117,6 +11196,15 @@ export default function EditorShell({
             </div>
           </div>
         </Modal>
+      )}
+      {exportOpen && (
+        <ExportDialog
+          docName={doc.name}
+          width={doc.width}
+          height={doc.height}
+          onCancel={() => setExportOpen(false)}
+          onExport={(format, quality) => void doExport(format, quality)}
+        />
       )}
       {sizeDialog !== null && (
         <ImageSizeDialog

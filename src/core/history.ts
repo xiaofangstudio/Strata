@@ -75,7 +75,7 @@ export class History {
    */
   constructor(
     private readonly limit = 40,
-    private readonly budgetBytes = 900 * 1024 * 1024,
+    private readonly budgetBytes = 640 * 1024 * 1024,
   ) {}
 
   /** 用文档的初始状态开栈。 */

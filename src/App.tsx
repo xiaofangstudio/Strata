@@ -230,6 +230,31 @@ export default function App() {
   }, []);
 
   /** 只改画面、不入栈（拖滑杆、切选中这类即时预览）。 */
+  /**
+   * "正在拖滑块"的全局标记。
+   *
+   * 弹窗里的参数滑块一按下，就把 body 标成 is-tuning ——
+   * CSS 那边据此撤掉模态遮罩的虚化与压暗，让用户能一边拖一边看画面在变。
+   * 用事件委托挂一次，不必给每个滑块加监听。
+   */
+  useEffect(() => {
+    const mark = (on: boolean) => document.body.classList.toggle("is-tuning", on);
+    const down = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.closest('input[type="range"]')) mark(true);
+    };
+    const up = () => mark(false);
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+      mark(false);
+    };
+  }, []);
+
   const preview = useCallback((next: StrataDoc) => {
     setDocs((prev) => prev.map((d) => (d.id === next.id ? next : d)));
   }, []);

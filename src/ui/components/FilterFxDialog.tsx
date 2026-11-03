@@ -63,6 +63,62 @@ const GROUP_ORDER: FilterGroup[] = [
   "video",
 ];
 
+/**
+ * 预览用的滤镜：**在小图上算，再放大回原尺寸**。
+ *
+ * 原来这里是 `applyFilterToLayer(base, ...)` 直接跑全分辨率 ——
+ * 高斯模糊这类卷积在 24MP 上要好几百毫秒，而拖动时每帧都要跑一次，
+ * 结果就是"拖一下、等半秒"。缩到 ~1100px 后成本降到几十分之一，
+ * 放大回原尺寸只是一次 GPU 拉伸，几乎免费。
+ *
+ * 确认（onApply）时仍走全分辨率，所以最终结果不受影响；
+ * 预览只是"形状对得上"，这正是调参数时需要的。
+ */
+function previewFilter(base: StrataDoc, def: FilterDef, params: Record<string, number>): StrataDoc {
+  const MAX_SIDE = 1100;
+  const s = Math.min(1, MAX_SIDE / Math.max(base.width, base.height));
+  const act = base.layers.find((l) => l.id === base.activeLayerId);
+  if (s >= 0.999 || !act || act.kind !== "pixel" || !act.surface) {
+    return applyFilterToLayer(base, def, params);
+  }
+
+  const sw = Math.max(1, Math.round(base.width * s));
+  const sh = Math.max(1, Math.round(base.height * s));
+  const small = document.createElement("canvas");
+  small.width = sw;
+  small.height = sh;
+  const sc = small.getContext("2d");
+  if (!sc) return applyFilterToLayer(base, def, params);
+  sc.imageSmoothingQuality = "medium";
+  sc.drawImage(act.surface, 0, 0, sw, sh);
+
+  const smallDoc: StrataDoc = {
+    ...base,
+    width: sw,
+    height: sh,
+    layers: base.layers.map((l) => (l.id === act.id ? { ...l, surface: small, mask: null } : l)),
+  };
+  const res = applyFilterToLayer(smallDoc, def, params);
+  if (res === smallDoc) return base;
+
+  const resLayer = res.layers.find((l) => l.id === act.id);
+  if (!resLayer || !resLayer.surface) return base;
+
+  // 放大回文档尺寸：doc 的宽高一致，后续合成 / 存盘都不会错位
+  const big = document.createElement("canvas");
+  big.width = base.width;
+  big.height = base.height;
+  const bc = big.getContext("2d");
+  if (!bc) return base;
+  bc.imageSmoothingQuality = "medium";
+  bc.drawImage(resLayer.surface, 0, 0, base.width, base.height);
+
+  return {
+    ...base,
+    layers: base.layers.map((l) => (l.id === act.id ? { ...l, surface: big } : l)),
+  };
+}
+
 export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onClose }: Props) {
   const base = useRef(doc).current;
   const [id, setId] = useState<string>(() => filterDef(filterId)?.id ?? FILTER_DEFS[0].id);
@@ -72,10 +128,7 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
 
   const def: FilterDef = filterDef(id) ?? FILTER_DEFS[0];
 
-  const preview = useMemo(
-    () => applyFilterToLayer(base, def, params),
-    [base, def, params],
-  );
+  const preview = useMemo(() => previewFilter(base, def, params), [base, def, params]);
   const usable = preview !== base;
 
   const previewRef = useRef(onPreview);
@@ -96,8 +149,10 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
   const apply = useCallback(() => {
     if (closedRef.current) return;
     closedRef.current = true;
-    onApply(preview);
-  }, [onApply, preview]);
+    // 确认时重算全分辨率：预览是缩放近似，落库必须是真东西
+    const full = applyFilterToLayer(base, def, params);
+    onApply(full === base ? base : full);
+  }, [base, def, onApply, params]);
 
   const pick = (next: FilterDef) => {
     setId(next.id);

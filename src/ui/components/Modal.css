@@ -121,7 +121,7 @@
   flex: none;
   min-width: 132px;
   padding: 3px var(--sp-3);
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-family: var(--font-num);
   font-size: var(--fs-xs);
   text-align: center;
   color: var(--text-2);
@@ -212,4 +212,41 @@
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-xs);
   color: var(--text-3);
+}
+
+/* ---------- 弹窗细节：标题降一档、留白收一档 ---------- */
+
+/*
+  标题从 16 收到 15：弹窗里真正要看的是内容，标题喊太响会把视线先拽过去。
+  字距 +0.01em 是给中文的一点呼吸，不改变观感重量。
+*/
+.modal-title {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+/* 头尾留白从 16/24 收到 14/20：同样的窗高能多放一行内容 */
+.modal-head {
+  padding: 14px 20px;
+}
+
+.modal-foot {
+  padding: 12px 20px;
+}
+
+/* 关闭按钮：无框、悬停才显形 —— 平时不该跟标题抢位置 */
+.modal-x {
+  border-radius: var(--r-xs);
+}
+
+/*
+  拖动滑块时，把遮罩的虚化与压暗撤掉。
+  ——调滤镜/调色参数本质是"看着画面调"，背景一糊一暗就只能盲调。
+  只在滑块按下那一刻生效（body.is-tuning 由 App 统一挂），
+  松开立刻恢复，所以平时的弹窗依然是"浮在暗背景上"的层感。
+*/
+body.is-tuning .modal-mask {
+  backdrop-filter: none;
+  background: rgba(0, 0, 0, 0.06);
+  transition: background var(--dur-fast) var(--ease);
 }

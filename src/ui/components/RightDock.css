@@ -311,3 +311,28 @@
 .dock-footer .ly-foot {
   border-top: none;
 }
+
+/* ---------- 面板头部细节：把"标题"降级成"分区名" ---------- */
+
+/* 页签：字号收一档、字距拉开，四个字不会挤成一坨 */
+.dock-panel .panel-tab {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* 单页标题条：更小的字号 + 更大的字距 —— 它是分区名，不是标题 */
+.dock-head {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+/* 计数做成小胶囊：一眼能扫到，又不跟标题抢 */
+.dock-head-count {
+  margin-left: 2px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-radius: var(--r-full);
+}
