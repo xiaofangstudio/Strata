@@ -21,6 +21,7 @@ import Modal from "./Modal";
 import ToolIcon from "./ToolIcon";
 import "./Preferences.css";
 import RangeInput from "./RangeInput";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export type PrefPage =
   | "general"
@@ -465,6 +466,39 @@ export default function Preferences({
                 <span className="pref-val">{prefs.exportQuality}</span>
               </div>
               <p className="pref-note">质量只对 JPG / WebP 有效，PNG 始终无损。</p>
+
+              <h3 className="pref-h">默认保存位置</h3>
+              <div className="pref-row">
+                <input
+                  type="text"
+                  className="pref-path"
+                  value={prefs.saveDir ?? ""}
+                  readOnly
+                  placeholder="未设置（由系统保存框决定）"
+                  aria-label="默认保存位置"
+                />
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={async () => {
+                    const d = await open({ directory: true, title: "选择默认保存位置" });
+                    if (typeof d === "string") setPrefs({ saveDir: d });
+                  }}
+                >
+                  浏览…
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  disabled={!prefs.saveDir}
+                  onClick={() => setPrefs({ saveDir: "" })}
+                >
+                  清除
+                </button>
+              </div>
+              <p className="pref-note">
+                导出 / 另存时会默认落到这里。留空则不做偏好，仍由系统保存框决定起始位置。
+              </p>
             </section>
           )}
 

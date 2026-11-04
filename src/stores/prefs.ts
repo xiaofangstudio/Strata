@@ -98,6 +98,9 @@ export interface Prefs {
   activeWorkspace?: string;
   /** 锁定工作区：锁住后不允许再拖动/开关面板 */
   workspaceLocked: boolean;
+  /* ---------------- 文件与存储 ---------------- */
+  /** 默认图片保存目录（空 = 不设偏好，由系统保存框决定） */
+  saveDir?: string;
   /* ---------------- 历史 / 性能 ---------------- */
   /** 历史记录步数上限 */
   historyLimit: number;
@@ -165,6 +168,7 @@ export const DEFAULT_PREFS: Prefs = {
   hiddenMenus: [],
   workspaces: [],
   workspaceLocked: false,
+  saveDir: "",
   historyLimit: 40,
   previewQuality: 1,
   checkerSize: 8,
@@ -257,6 +261,7 @@ function read(): Prefs {
           : [],
         activeWorkspace: typeof v.activeWorkspace === "string" ? v.activeWorkspace : undefined,
         workspaceLocked: bool(v.workspaceLocked, false),
+        saveDir: typeof v.saveDir === "string" ? v.saveDir : dp.saveDir,
         historyLimit: clampNum(v.historyLimit, 10, 500, dp.historyLimit),
         previewQuality: v.previewQuality === 0 || v.previewQuality === 2 ? v.previewQuality : dp.previewQuality,
         checkerSize: clampNum(v.checkerSize, 4, 64, dp.checkerSize),

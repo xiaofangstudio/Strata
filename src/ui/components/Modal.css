@@ -250,3 +250,103 @@ body.is-tuning .modal-mask {
   background: rgba(0, 0, 0, 0.06);
   transition: background var(--dur-fast) var(--ease);
 }
+
+/* ---------- 关于：联系我们 ---------- */
+
+.about-contact {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+
+.about-contact-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.about-crows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.about-crow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 左列索引：定宽对齐，一眼扫到类别 */
+.about-ck {
+  flex: none;
+  width: 52px;
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.about-cvs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+/* 链接：做成"安静的可点物"，悬停才亮，不用蓝色下划线 */
+.about-cl {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  word-break: break-all;
+  border-bottom: 1px dashed transparent;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.about-cl:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* QQ 号：等宽数字 + 复位按钮同行 */
+.about-cq {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+
+.about-copy {
+  margin-left: auto;
+  height: 22px;
+  padding: 0 9px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  white-space: nowrap;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.about-copy:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* 复制成功：短暂变强调色，让"已发生"这件事被看见 */
+.about-copy.is-done {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}

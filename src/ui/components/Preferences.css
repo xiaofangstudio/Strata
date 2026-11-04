@@ -247,3 +247,20 @@
   color: var(--text);
   cursor: pointer;
 }
+
+/* 默认保存位置的路径框：只读展示，挤了省略号 */
+.pref-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  font-family: var(--font-num);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -15,6 +15,7 @@ import {
 } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { zh } from "../i18n/zh-CN";
+import { currentPrefs } from "../stores/prefs";
 import {
   IMAGE_EXTENSIONS,
   encodePng,
@@ -546,7 +547,7 @@ function preset(id: AdjustId, params: Record<string, number> = {}): AdjustState 
 }
 
 /** 项目主页与问题反馈地址（帮助菜单用真实链接，不摆假入口）。 */
-const REPO_URL = "https://github.com/xiaofangstudio/Strata";
+const REPO_URL = "https://github.com/xiaofangstudio/starta";
 const ISSUES_URL = `${REPO_URL}/issues`;
 
 export default function EditorShell({
@@ -3087,9 +3088,15 @@ export default function EditorShell({
       let canvas: HTMLCanvasElement | null = null;
       try {
         const spec = formatSpec(format);
+        /**
+         * 默认保存目录来自偏好设置（偏好 > 文件与存储）。
+         * 路径分隔符按系统补一个反斜杠；没设置时保持原行为。
+         */
+        const dir = currentPrefs().saveDir?.trim();
+        const base = suggestFileName(doc.name, format);
         const target = await save({
           title: zh.dialog.saveTitle,
-          defaultPath: suggestFileName(doc.name, format),
+          defaultPath: dir ? `${dir.replace(/[\\/]+$/, "")}\\${base}` : base,
           filters: [{ name: `${spec.label} 图片`, extensions: [spec.ext] }],
         });
         if (typeof target !== "string") return;

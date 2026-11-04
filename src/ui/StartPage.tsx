@@ -407,7 +407,7 @@ export default function StartPage({
       {
         kind: "item",
         label: "Strata 项目主页",
-        onSelect: () => void openUrl("https://github.com/xiaofangstudio/Strata"),
+        onSelect: () => void openUrl("https://github.com/xiaofangstudio/starta"),
       },
       {
         kind: "item",
