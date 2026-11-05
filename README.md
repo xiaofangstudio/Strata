@@ -59,18 +59,20 @@ PhotoCraft 的动画其实很薄——没有统一动画框架、没有缓动库
 - 画布：Ctrl+滚轮 RAF 缓动缩放（快速连滚平滑接续）、抓手松手惯性滑行、双指 pinch 缩放 + 平移
 - 自由变换手柄出现淡入 / 抓取收缩 / 呼吸光环；操控变形图钉落点波纹；加载骨架屏、分段控件过渡、笔刷光标尺寸过渡
 
-#### 六项差距全部重修（此前 1 项真完成、4 项残缺且有假完成）
+#### 六项差距：这一轮先「建地基」，再「重修一遍」
 
-| 项 | 重修内容 |
-|---|---|
-| 数位板 | 本来就真完成，作为接线范本 |
-| HEIC/HEIF | 16bit→8bit 线性归一化 + 有序抖动，不再截高位；打开 rayon 并行 |
-| PSD 写侧 | 读侧补调整层与组展开逆映射；`writePsd` 失败不再把调整层**静默降级成透明层**，逐条进 warnings；补齐 8+ 丢失字段；新增往返测试 12 条 |
-| RAW | Clarity/Texture 从全零 stub 换成编译期生成的真实响应表；CR3「只取预览、不是真显影」现在明确提示；jxl 错误分类（不支持 vs 损坏） |
-| CMS | `iccSoftProof` 从零调用死代码接进实时校样管线；色域警告用真 ICC 超色域掩码；所有打开路径读嵌入 profile；BPC 目标侧补齐 |
-| GPU | WGSL 混合模式 11 种补到 27 种——以前缺的 16 种**静默给错结果**；新建 `adjust.wgsl` 8 算子；CPU/GPU 像素对拍（27 模式 × 15 样本 × 5 档不透明度，容差 ≤1/255） |
+这轮实际分两步：先把缺的子系统从无到有建起来（移植自 PhotoCraft，MIT/Apache-2.0，来源声明保留在代码头部），再照着计划逐项把残缺和假完成的重修掉。
 
-三条硬验收——PSD 往返、GPU 像素一致、CMS 往返误差——本轮全部落地（此前一条都没有）。
+| 项 | 新建的地基 | 在地基上重修了什么 |
+|---|---|---|
+| **PSD 写侧** | 组、文字层、灰度蒙版、可见性、混合模式全部写回 PSD；16 种调整层映射；导出返回 `{bytes, warnings}` | 之前 `writePsd` 失败会把调整层**静默降级成透明层**——现在逐条进 warnings；补读调整层与组展开状态；补齐 colorbalance / bw / photofilter / channelmixer / gradientmap / hs / curves 字段；新增 12 条往返测试 |
+| **数位板** | 新 `engine/pen.ts`：压感 / 倾斜（tilt 转椭圆笔尖 + 旋转）/ 翻笔（笔尾按钮）切橡皮，OptionsBar 可调，`Stroke.setPen()` 接进笔刷引擎 | 重修轮确认 tilt/rotation/橡皮/合并事件全接好，作为其余五项的接线范本 |
+| **HEIC/HEIF** | 新 `heif.rs`（heic-rs 纯 Rust，无 C++ 绑定），iPhone 照片直开；`image.ts` 统一走原生解码 | 16bit→8bit 从截高位改成线性归一化 + 有序抖动；打开 rayon 并行解码 |
+| **RAW** | `strata_raw/` 26 文件整体移植：cr2/cr3/dng/nef/arw/orf/raf/rw2/sony 显影管线（去马赛克、色调曲线、传感器数据） | Clarity/Texture 从全零 stub 换成编译期生成的真实响应表；CR3 只取内嵌预览但现在**明确提示「这不是 RAW 显影」**；jxl 错误分类（不支持 vs 损坏）；显影失败报中文错不再静默 |
+| **CMS** | `strata_cms/` 13 文件移植 + `engine/cms.ts`：真 ICC transform、软打样、色域警告、BPC 黑点补偿、LUT/CLUT 读写 | `iccSoftProof` 从零调用死代码接进实时校样管线（真 ICC 优先、失败明确回退并留痕）；色域警告用真 ICC 超色域掩码；所有打开路径读嵌入 profile；BPC 目标侧曲线拟合补齐 |
+| **GPU** | 新 `shaders/compose.wgsl` + `adjust.wgsl` + `gpuBridge.ts`：WebGPU 双路径，先接「拼合图像」，不可用静默回退 CPU | WGSL 混合模式 11 种补到 27 种——此前缺的 16 种会**静默给错结果**；新建 `adjust.wgsl` 8 个调色算子；CPU/GPU 像素对拍（27 模式 × 15 样本 × 5 档不透明度，容差 ≤1/255）+ 负向对照 |
+
+三条硬验收——PSD 往返、GPU 像素一致、CMS 往返误差——本轮全部落地（此前一条都没有）。全量构建通过：裸 exe 8.63MB、NSIS 安装包 2.84MiB，体积红线 ≤100MB 远未触及。
 
 #### 还剩什么（如实说）
 
