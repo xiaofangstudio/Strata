@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { platformLabel, type AppInfo } from "../../core/appInfo";
 import BrandMark from "./BrandMark";
 import Modal from "./Modal";

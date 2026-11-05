@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { SelectionMode } from "../../core/selection";
 import { DEFAULT_BRUSH, drawBrushTipSample, type BrushSettings } from "../../engine/paint";
 import {

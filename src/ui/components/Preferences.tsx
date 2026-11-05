@@ -12,7 +12,7 @@
  * 不做假的开关。
  */
 import { useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh, useLang, setLang, resolveLang, LANGUAGES, type ActiveLang } from "../../i18n";
 import { resetPrefs, setPrefs, usePrefs } from "../../stores/prefs";
 import type { ThemeMode } from "../../stores/theme";
 import { TOOLS, TOOL_GROUPS, type ToolId } from "../../tools/catalog";
@@ -42,7 +42,8 @@ export type PrefPage =
   | "plugIns"
   | "type"
   | "enhancedControls"
-  | "rawDefaults";
+  | "rawDefaults"
+  | "personal";
 
 interface Props {
   /** 打开时定位到哪一页（Edit > Preferences 的各条目直接指过来） */
@@ -117,6 +118,11 @@ const GROUPS: { id: string; label: string; pages: { id: PrefPage; label: string 
       { id: "integrations", label: "AI 集成" },
     ],
   },
+  {
+    id: "personal",
+    label: "个性化",
+    pages: [{ id: "personal", label: "个性化" }],
+  },
 ];
 
 /** 本地存储占用（KB），暂存盘页显示用。 */
@@ -134,6 +140,28 @@ function localStoreKb(): number {
   }
 }
 
+/** 磨砂色预设：高饱和七色（红橙黄绿青蓝紫）。 */
+const FROST_COLORS = [
+  "#ff3b30",
+  "#ff9500",
+  "#ffd60a",
+  "#34c759",
+  "#32ade6",
+  "#0a84ff",
+  "#bf5af2",
+];
+
+/** UI 字体族选项（id 与 stores/prefs 的 UI_FONT_STACKS 对应）。 */
+const FONT_OPTIONS: { id: string; label: string }[] = [
+  { id: "", label: "系统默认" },
+  { id: "yahei", label: "微软雅黑" },
+  { id: "pingfang", label: "苹方" },
+  { id: "segoe", label: "Segoe UI" },
+  { id: "source-han", label: "思源黑体" },
+  { id: "dengxian", label: "等线" },
+  { id: "song", label: "宋体（衬线）" },
+];
+
 export default function Preferences({
   page,
   onPage,
@@ -146,6 +174,7 @@ export default function Preferences({
   onClearRecent,
 }: Props) {
   const prefs = usePrefs();
+  const lang = useLang();
   const [tab, setTab] = useState<PrefPage>(page ?? "general");
   const go = (p: PrefPage) => {
     setTab(p);
@@ -236,6 +265,29 @@ export default function Preferences({
 
           {tab === "interface" && (
             <>
+              <section className="pref-sec">
+                <h3 className="pref-h">界面语言</h3>
+                <div className="pref-row">
+                  <select
+                    className="pref-select"
+                    value={lang}
+                    onChange={(e) => setLang(e.target.value as ActiveLang)}
+                    aria-label="界面语言"
+                  >
+                    <option value="auto">
+                      跟随系统{resolveLang("auto") !== "zh-CN" ? `（${LANGUAGES.find((l) => l.code === resolveLang("auto"))?.native}）` : ""}
+                    </option>
+                    {LANGUAGES.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.native} · {l.english}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="pref-note">
+                  切换后立即生效，并记住你的选择。未翻译的词条会回退到简体中文，保证界面不空。
+                </p>
+              </section>
               <section className="pref-sec">
                 <h3 className="pref-h">{zh.preferences.theme}</h3>
                 <div className="pref-choice">
@@ -692,6 +744,265 @@ export default function Preferences({
               </p>
               <p className="pref-note">连接管理在左侧「连接器」里做，这里不重复一套开关。</p>
             </section>
+          )}
+
+          {tab === "personal" && (
+            <>
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.bgImage}</h3>
+                <div className="pref-row">
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={async () => {
+                      const p = await open({
+                        multiple: false,
+                        filters: [
+                          { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
+                        ],
+                      });
+                      if (typeof p === "string") setPrefs({ bgImage: p });
+                    }}
+                  >
+                    {zh.preferences.personal.bgImageImport}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    disabled={!prefs.bgImage}
+                    onClick={() => setPrefs({ bgImage: "" })}
+                  >
+                    {zh.preferences.personal.bgImageClear}
+                  </button>
+                </div>
+                {prefs.bgImage ? (
+                  <div className="frost-preview" aria-hidden="true" />
+                ) : (
+                  <div className="frost-preview-empty">{zh.preferences.personal.bgImageHint}</div>
+                )}
+                <p className="pref-note">{zh.preferences.personal.bgImageHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.bgFrost}</h3>
+                <div className="pref-row">
+                  <RangeInput
+                    min={0}
+                    max={100}
+                    value={prefs.bgFrost}
+                    aria-label={zh.preferences.personal.bgFrost}
+                    onChange={(v) => setPrefs({ bgFrost: v })}
+                  />
+                  <span className="pref-val">{prefs.bgFrost}%</span>
+                </div>
+                <p className="pref-note">
+                  {zh.preferences.personal.bgFrostHint}
+                  {prefs.bgFrost >= 70 ? "（高品质磨砂）" : ""}
+                </p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">
+                  {zh.preferences.personal.globalFrost}
+                  <span className="badge" style={{ marginLeft: 8 }}>
+                    {zh.preferences.personal.beta}
+                  </span>
+                </h3>
+                <div className="pref-seg">
+                  <button
+                    type="button"
+                    className={`pref-seg-btn${prefs.globalFrost ? " is-on" : ""}`}
+                    onClick={() => setPrefs({ globalFrost: true })}
+                  >
+                    {zh.panel.yes}
+                  </button>
+                  <button
+                    type="button"
+                    className={`pref-seg-btn${!prefs.globalFrost ? " is-on" : ""}`}
+                    onClick={() => setPrefs({ globalFrost: false })}
+                  >
+                    {zh.panel.no}
+                  </button>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.globalFrostHint}</p>
+              </section>
+
+              {!prefs.globalFrost && (
+                <section className="pref-sec">
+                  <h3 className="pref-h">{zh.preferences.personal.windowFrost}</h3>
+                  <div className="pref-seg">
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${prefs.windowFrost ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ windowFrost: true })}
+                    >
+                      {zh.panel.yes}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${!prefs.windowFrost ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ windowFrost: false })}
+                    >
+                      {zh.panel.no}
+                    </button>
+                  </div>
+                  <p className="pref-note">{zh.preferences.personal.windowFrostHint}</p>
+                </section>
+              )}
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.frostColor}</h3>
+                <div className="frost-swatches">
+                  {FROST_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`frost-swatch${prefs.frostColor.toLowerCase() === c.toLowerCase() ? " is-on" : ""}`}
+                      style={{ background: c }}
+                      aria-label={c}
+                      onClick={() => setPrefs({ frostColor: c })}
+                    />
+                  ))}
+                  <label
+                    className="frost-swatch"
+                    style={{
+                      background: prefs.frostColor,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <input
+                      type="color"
+                      value={prefs.frostColor}
+                      onChange={(e) => setPrefs({ frostColor: e.target.value })}
+                      style={{
+                        width: "180%",
+                        height: "180%",
+                        border: "none",
+                        padding: 0,
+                        background: "none",
+                        cursor: "pointer",
+                      }}
+                      aria-label="自定义磨砂色"
+                    />
+                  </label>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.frostColorHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.glass}</h3>
+                <div className="glass-preview" aria-hidden="true" />
+                <p className="pref-note">{zh.preferences.personal.glassHint}</p>
+                <div className="pref-row">
+                  <span style={{ minWidth: 92 }}>{zh.preferences.personal.glassAlpha}</span>
+                  <RangeInput
+                    min={10}
+                    max={45}
+                    value={prefs.glassAlpha}
+                    aria-label={zh.preferences.personal.glassAlpha}
+                    onChange={(v) => setPrefs({ glassAlpha: v })}
+                  />
+                  <span className="pref-val">{prefs.glassAlpha}%</span>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.glassAlphaHint}</p>
+                <div className="pref-row">
+                  <span style={{ minWidth: 92 }}>{zh.preferences.personal.glassBlur}</span>
+                  <RangeInput
+                    min={8}
+                    max={40}
+                    value={prefs.glassBlur}
+                    aria-label={zh.preferences.personal.glassBlur}
+                    onChange={(v) => setPrefs({ glassBlur: v })}
+                  />
+                  <span className="pref-val">{prefs.glassBlur}px</span>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.glassBlurHint}</p>
+                <div className="pref-row">
+                  <span style={{ minWidth: 92 }}>{zh.preferences.personal.glassSat}</span>
+                  <RangeInput
+                    min={100}
+                    max={200}
+                    value={prefs.glassSat}
+                    aria-label={zh.preferences.personal.glassSat}
+                    onChange={(v) => setPrefs({ glassSat: v })}
+                  />
+                  <span className="pref-val">{prefs.glassSat}%</span>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.glassSatHint}</p>
+                <div className="pref-row">
+                  <span style={{ minWidth: 92 }}>{zh.preferences.personal.glassSheen}</span>
+                  <RangeInput
+                    min={0}
+                    max={40}
+                    value={prefs.glassSheen}
+                    aria-label={zh.preferences.personal.glassSheen}
+                    onChange={(v) => setPrefs({ glassSheen: v })}
+                  />
+                  <span className="pref-val">{prefs.glassSheen}%</span>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.glassSheenHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.motion}</h3>
+                <div className="pref-seg" style={{ flexWrap: "wrap" }}>
+                  {(
+                    [
+                      ["full", zh.preferences.personal.motionFull],
+                      ["reduced", zh.preferences.personal.motionReduced],
+                      ["off", zh.preferences.personal.motionOff],
+                    ] as const
+                  ).map(([v, label]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={`pref-seg-btn${prefs.motion === v ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ motion: v })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="pref-note">{zh.preferences.personal.motionHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.font}</h3>
+                <div className="pref-row">
+                  <select
+                    className="ui-font-select"
+                    value={prefs.uiFont ?? ""}
+                    onChange={(e) => setPrefs({ uiFont: e.target.value })}
+                    aria-label={zh.preferences.personal.font}
+                  >
+                    {FONT_OPTIONS.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.fontHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.uiScale}</h3>
+                <div className="pref-row">
+                  <RangeInput
+                    min={80}
+                    max={140}
+                    value={prefs.uiScale}
+                    aria-label={zh.preferences.personal.uiScale}
+                    onChange={(v) => setPrefs({ uiScale: v })}
+                  />
+                  <span className="pref-val">{prefs.uiScale}%</span>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.uiScaleHint}</p>
+              </section>
+            </>
           )}
         </div>
       </div>

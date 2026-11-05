@@ -1506,6 +1506,12 @@ export interface StrataLayer {
   }[];
   /** 画板边界（只有组才可能有；见 core/artboard.ts） */
   artboard?: { x: number; y: number; w: number; h: number };
+  /**
+   * 组在图层面板里是否展开（PSD 的 `opened`）。只对 `kind === "group"` 有意义：
+   * 缺省或 `true` 视为展开，显式 `false` 视为折叠。engine/psd.ts 的桥接层用它往返
+   * PSD 的组展开状态，LayersPanel 在初始化折叠集合时消费它。可选字段，不影响既有构造点。
+   */
+  opened?: boolean;
   /** 智能滤镜的原始像素（内存里的基准副本，重新渲染从它出发） */
   smartBase?: HTMLCanvasElement;
   /** 智能滤镜蒙版（应用滤镜时若有选区，就用选区当蒙版） */
@@ -1597,6 +1603,23 @@ export function createGroupLayer(name: string): StrataLayer {
     clip: false,
     styles: [],
   };
+}
+
+/**
+ * 初始化图层面板时要折叠的组 id（纯函数，供 LayersPanel 与单测调用）。
+ *
+ * 只把「显式 `opened === false`」的组收进来：缺省 / `true` 都按展开处理，与
+ * engine/psd.ts 的 `openedOf`（`opened !== false`）口径一致；非组图层即便带了
+ * `opened` 也不参与面板折叠。这样从 PSD 读回的展开状态才有人消费。
+ */
+export function initiallyCollapsedGroupIds(
+  layers: readonly StrataLayer[],
+): string[] {
+  const ids: string[] = [];
+  for (const l of layers) {
+    if (l.kind === "group" && l.opened === false) ids.push(l.id);
+  }
+  return ids;
 }
 
 /**

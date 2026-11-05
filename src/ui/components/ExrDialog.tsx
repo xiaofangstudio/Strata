@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { docFromBlank, baseName } from "../../core/document";
 import { createLayer } from "../../core/layer";
 import { DEFAULT_DPI } from "../../core/presets";

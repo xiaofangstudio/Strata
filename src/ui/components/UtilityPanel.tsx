@@ -23,7 +23,7 @@ import { measureDocument } from "../../core/imageOps";
 import { patternList } from "../../core/patterns";
 import { isVideoLayer, videoSummary } from "../../core/videoLayer";
 import { TEXT_FAMILIES } from "../../engine/text";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import Modal from "./Modal";
 import "./UtilityPanel.css";
 

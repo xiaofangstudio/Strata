@@ -1,0 +1,408 @@
+/**
+ * 统一动效体系（motion.css）。
+ *
+ * 设计目标：把散落在 26 条「只有入场」的 keyframes 补成一套完整体系。
+ * 参考 PhotoCraft 的 `Interface::enableAnimations`（全局 reduced-motion 开关），
+ * 但我们做得更细：三档 full / reduced / off，且位移幅度用 --motion-amp 归零，
+ * 而不是粗暴把所有时长压成 1ms —— 精简档仍保留淡入淡出，只去掉位移与弹性。
+ *
+ * 约定：
+ *  - 所有新增位移都写成 calc(var(--motion-amp) * Npx)，reduced 时自动收敛为 0；
+ *  - 入场用 --dur-in，退场用 --dur-out，反馈用 --dur-fast；
+ *  - 弹性只用在「用户主动按下」的反馈上，不用于被动出现的内容。
+ */
+
+/* ---------- 1. 三档动效 ---------- */
+:root[data-motion="reduced"] {
+  --motion-amp: 0;
+  --dur-in: 140ms;
+  --dur-out: 100ms;
+  --dur-fast: 90ms;
+  --dur: 120ms;
+  --dur-slow: 160ms;
+  --ease-spring: var(--ease-out);
+}
+
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* 系统级 reduced-motion：比 app 内三档弱，只做「去位移 + 缩短时长」的分级降级，
+   不再像早期那样把一切压成 1ms（那样连「发生了什么」都看不出来）。 */
+@media (prefers-reduced-motion: reduce) {
+  html *,
+  html *::before,
+  html *::after {
+    --motion-amp: 0;
+    --ease-spring: var(--ease-out);
+    animation-duration: var(--dur-fast) !important;
+    transition-duration: var(--dur-fast) !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- 2. 退场动画（旧版本全缺） ---------- */
+@keyframes motion-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes motion-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-amp) * -4px))
+      scale(calc(1 - var(--motion-amp) * 0.02));
+  }
+}
+
+@keyframes motion-slide-out {
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--motion-amp) * 10px));
+  }
+}
+
+@keyframes motion-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-amp) * -8px)) scale(0.98);
+  }
+}
+
+/* 通用 presence：组件关闭时挂 .is-closing，动画结束再卸载（见 usePresence）。 */
+.is-closing {
+  pointer-events: none;
+  animation: motion-pop-out var(--dur-out) var(--ease) forwards !important;
+}
+
+.modal-mask.is-closing,
+.cp-mask.is-closing,
+.mask.is-closing {
+  animation: motion-fade-out var(--dur-out) var(--ease) forwards !important;
+}
+
+.toast.is-closing,
+.editor-toast.is-closing,
+.notice.is-closing {
+  animation: motion-toast-out var(--dur-out) var(--ease) forwards !important;
+}
+
+.tool-flyout.is-closing,
+.popover.is-closing,
+.tool-fly.is-closing {
+  animation: motion-slide-out var(--dur-out) var(--ease) forwards !important;
+}
+
+/* ---------- 3. 入场补强：弹性出现（用于主动召唤的浮层） ---------- */
+@keyframes motion-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-amp) * 8px))
+      scale(calc(1 - var(--motion-amp) * 0.04));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes motion-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(calc(1 - var(--motion-amp) * 0.08));
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/*  stagger：一组元素按序淡入，用 --i（0,1,2…）控制延迟。 */
+@keyframes motion-stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-amp) * 6px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.motion-stagger > * {
+  animation: motion-stagger-in var(--dur-in) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+/* ---------- 4. 交互反馈 ---------- */
+/* 按钮按下：轻微回弹（只用于主动 press，不滥用）。 */
+@keyframes motion-press {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(calc(1 - var(--motion-amp) * 0.045));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.motion-press:active,
+.btn:active.motion-press,
+button.motion-press:active {
+  animation: motion-press var(--dur-fast) var(--ease-spring);
+}
+
+/* 分段控件选中态：底色滑动过渡 + 选中块微弹，替代原来只有颜色突变。 */
+.pref-seg-btn.is-on,
+.seg-btn.is-on {
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease-spring);
+}
+
+.pref-seg-btn.is-on {
+  box-shadow: 0 1px 4px rgba(20, 20, 30, 0.12);
+}
+
+/* 卡片 / 列表行 hover：极轻的抬升，说明「可点」。 */
+.motion-lift {
+  transition:
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.motion-lift:hover {
+  transform: translateY(calc(var(--motion-amp) * -2px));
+  box-shadow: 0 6px 18px rgba(20, 20, 30, 0.10);
+}
+
+/* 键盘聚焦光环统一（可访问性也算动效体系的一部分）。 */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-ring, rgba(61, 107, 255, 0.45));
+  outline-offset: 2px;
+  transition: outline-offset var(--dur-fast) var(--ease);
+}
+
+/* ---------- 5. 加载 / 处理中反馈（编辑器内原本空白） ---------- */
+@keyframes motion-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+
+.motion-progress {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3, rgba(128, 128, 140, 0.2));
+  overflow: hidden;
+}
+
+.motion-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 32%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent, #3d6bff), transparent);
+  animation: motion-indeterminate 1.15s var(--ease-in-out) infinite;
+}
+
+:root[data-motion="off"] .motion-progress::after,
+:root[data-motion="reduced"] .motion-progress::after {
+  animation: none;
+  width: 100%;
+  opacity: 0.55;
+}
+
+@keyframes motion-skeleton {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.motion-skeleton {
+  background: var(--surface-3, rgba(128, 128, 140, 0.2));
+  border-radius: var(--r-md, 8px);
+  animation: motion-skeleton 1.4s var(--ease-in-out) infinite;
+}
+
+/* ---------- 6. 画布 / 变换控件反馈 ---------- */
+/* 画布浮层（蚂蚁线 + 自由变换手柄）：出现时淡入，避免手柄硬弹出来。 */
+@keyframes motion-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.editor-overlay,
+.canvas-overlay,
+.editor-ants {
+  animation: motion-overlay-in var(--dur-in) var(--ease-out) both;
+}
+
+/* 自由变换 / 操控变形对话框里的「落点波纹」：
+   由组件在放置图钉时挂 .pin-ripple，一次即止。 */
+@keyframes motion-pin-ripple {
+  from {
+    opacity: 0.9;
+    transform: scale(0.35);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+.pin-ripple {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border: 2px solid var(--accent, #3d6bff);
+  pointer-events: none;
+  animation: motion-pin-ripple 480ms var(--ease-out) forwards;
+}
+
+/* 图钉 / 手柄本体：hover 放大、拖拽中缩小，给用户「抓住了」的反馈。 */
+@keyframes motion-handle-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(61, 107, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 calc(var(--motion-amp) * 6px) rgba(61, 107, 255, 0);
+  }
+}
+
+.motion-handle {
+  transition:
+    transform var(--dur-fast) var(--ease-spring),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.motion-handle:hover {
+  transform: scale(calc(1 + var(--motion-amp) * 0.18));
+}
+
+.motion-handle.is-dragging {
+  transform: scale(calc(1 - var(--motion-amp) * 0.12));
+  animation: motion-handle-pulse 900ms var(--ease-in-out) infinite;
+}
+
+/* 笔刷光标：尺寸变化不再突变（原来是纯 JS 每帧写死宽高）。 */
+.brush-cursor,
+.editor-brush-cursor {
+  transition:
+    width var(--dur-fast) var(--ease),
+    height var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+/* ---------- 7. 视图 / 面板切换 ---------- */
+@keyframes motion-view-in {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--motion-amp) * 10px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.motion-view-in {
+  animation: motion-view-in var(--dur-in) var(--ease-out) both;
+}
+
+/* 折叠区高度插值统一走 grid-template-rows，避免 display:none 硬切。 */
+.motion-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur) var(--ease);
+}
+
+.motion-collapse.is-collapsed {
+  grid-template-rows: 0fr;
+}
+
+.motion-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- 8. 全局解码提示（RAW 预览 / 显影降级） ---------- */
+.decode-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(620px, calc(100vw - 48px));
+  padding: 10px 12px 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong, rgba(120, 120, 130, 0.5));
+  background: var(--surface, #fff);
+  color: var(--text, #17171c);
+  box-shadow: 0 10px 34px rgba(20, 20, 30, 0.22);
+  font-size: var(--fs-sm, 13px);
+  line-height: 1.45;
+  animation: motion-notice-in var(--dur-in) var(--ease-out) both;
+  transform: translateX(-50%);
+}
+
+@keyframes motion-notice-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(calc(var(--motion-amp) * 10px));
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.decode-notice__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff9500;
+  box-shadow: 0 0 0 3px rgba(255, 149, 0, 0.18);
+}
+
+.decode-notice__x {
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--text-3, #8f8f9c);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}

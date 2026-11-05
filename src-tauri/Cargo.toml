@@ -25,6 +25,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 exr = "1.74.0"
 windows = { version = "0.61.3", features = ["Win32_Devices_ImageAcquisition", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
+# 移植自 ArtCraft PhotoCraft 的纯 Rust 解码 / 色彩管理依赖（均无 C/C++ 绑定）
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+zune-jpeg = "0.5"
+zune-core = "0.5"
+rayon = "1"
+# HEIC/HEIF 静态图解码（纯 Rust，panic guards 见 src/heif.rs）
+# 打开 parallel：仅启用 heic-rs 自带的 rayon 并行解码（rayon 已在上面声明），
+# 不新增依赖、不额外抬高 MSRV。注：heic-rs 0.1.4 自身声明 edition 2024 /
+# rust-version = 1.85，项目 Cargo.toml 的 rust-version = 1.77 是历史值；
+# 当前工具链可正常编译，此不一致与本次 feature 改动无关。
+heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"] }
+
+# 移植源码里的 testgen 模块是可选特性，声明一下以免 cfg 检查告警
+[features]
+testgen = []
+corpus = []
 
 # 体积红线 ≤ 100MB：发布版优先体积
 [profile.release]

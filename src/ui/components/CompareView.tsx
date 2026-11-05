@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { composeDoc } from "../../engine/compositor";
 import { createSurface } from "../../engine/surface";
 import type { StrataDoc } from "../../core/document";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./CompareView.css";
 
 export type CompareLayout =

@@ -10,7 +10,7 @@
  *  · 移动 / 抓手 / 缩放 —— 视图命令（适应窗口 / 实际像素）；
  *  · 其余 —— 明确写出参数在哪，不留空白面板。
  */
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { isShapeTool, isTextTool, usesBrush, type ToolId } from "../../tools/catalog";
 import type { BrushSettings } from "../../engine/paint";
 import { BrushLibrary, BrushPresetGroup, BrushTipPreview, ColorField, Slider } from "./controls";

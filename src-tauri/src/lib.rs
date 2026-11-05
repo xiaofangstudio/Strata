@@ -11,6 +11,15 @@ use tauri::{Emitter, Manager};
 
 mod exr;
 mod wia;
+// 移植自 ArtCraft PhotoCraft 的纯 Rust RAW 解码与 ICC 色彩管理模块。
+// 这两个库自带大量本应用暂未用到的公开 API，抑制移植副本的死代码告警。
+#[allow(dead_code, unused_imports)]
+mod strata_raw;
+#[allow(dead_code, unused_imports)]
+mod strata_cms;
+// HEIC 解码封装与统一的解码 / 色彩管理命令
+mod heif;
+mod decode;
 
 /// 运行环境信息，开始页面的「关于」区块使用。
 #[derive(Serialize)]
@@ -225,7 +234,12 @@ pub fn run() {
             exr::exr_read_all,
             wia::wia_devices,
             wia::wia_device_count,
-            wia::wia_acquire
+            wia::wia_acquire,
+            decode::decode_heic,
+            decode::decode_raw,
+            decode::cms_transform,
+            decode::cms_read_profile,
+            decode::cms_builtin_profile
         ])
         .run(tauri::generate_context!())
         .expect("Strata 启动失败");

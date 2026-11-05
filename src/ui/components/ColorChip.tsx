@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import ColorPicker from "./ColorPicker";
 import "./picker.css";
 

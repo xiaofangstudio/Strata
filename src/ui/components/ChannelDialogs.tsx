@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import Modal from "./Modal";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { StrataDoc } from "../../core/document";
 import {
   alphaChannelThumb,

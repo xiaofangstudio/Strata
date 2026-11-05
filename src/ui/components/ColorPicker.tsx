@@ -18,7 +18,7 @@ import {
   type CSSProperties,
   type PointerEvent as RPointerEvent,
 } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import {
   COLOR_PRESETS,
   hexToHsv,

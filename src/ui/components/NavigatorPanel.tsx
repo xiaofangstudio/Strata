@@ -5,7 +5,7 @@
  * 底部还有一条缩放滑杆。缩略图内容来自外壳的最新合成结果（compRef）。
  */
 import { useEffect, useRef } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./NavigatorPanel.css";
 import RangeInput from "./RangeInput";
 

@@ -6,7 +6,7 @@
  * 真实面板，没做的（路径、通道独立页）就不放入口 —— 不做假控件。
  */
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./RightDock.css";
 
 type GroupId =

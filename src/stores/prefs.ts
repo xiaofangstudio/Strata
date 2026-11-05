@@ -157,7 +157,45 @@ export interface Prefs {
   brushDefaults: BrushPrefs;
   /** 用户自己存的画笔 */
   customBrushes: CustomBrush[];
+  /* ---------------- 个性化 ---------------- */
+  /** 自定义背景图路径（空 = 用默认背景） */
+  bgImage?: string;
+  /** 背景磨砂程度 0–100（%），默认 80，高品质磨砂 */
+  bgFrost: number;
+  /** 贝塔：全局磨砂大卡片（超椭圆磨砂卡） */
+  globalFrost: boolean;
+  /** 背景磨砂：整个窗口都磨砂（透出桌面），关闭全局磨砂时可用 */
+  windowFrost: boolean;
+  /** 磨砂色调（高饱和十六进制色），默认蓝紫 */
+  frostColor: string;
+  /** UI 字体族 id（空 = 系统默认） */
+  uiFont?: string;
+  /** UI 字号缩放 80–140（%），默认 100 */
+  uiScale: number;
+  /* ---------------- 真正半透明玻璃 ---------------- */
+  /** 玻璃底色不透明度 10–45（%），默认 18；越低越透，越高越实 */
+  glassAlpha: number;
+  /** 玻璃 backdrop 模糊半径 8–40（px），默认 22 */
+  glassBlur: number;
+  /** 玻璃饱和度 100–200（%），默认 165 */
+  glassSat: number;
+  /** 玻璃斜向高光强度 0–40（%），默认 18 */
+  glassSheen: number;
+  /* ---------------- 界面动效 ---------------- */
+  /** 动效档位：full 完整 / reduced 精简（保留淡入去位移）/ off 关闭 */
+  motion: "full" | "reduced" | "off";
 }
+
+/** UI 字体族选项：id → 完整的 font-family 回退栈。空 id 即系统默认。 */
+export const UI_FONT_STACKS: Record<string, string> = {
+  "": '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif',
+  yahei: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
+  pingfang: '"PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif',
+  segoe: '"Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI", sans-serif',
+  "source-han": '"Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif',
+  dengxian: '"DengXian", "Microsoft YaHei", sans-serif',
+  song: '"SimSun", "Songti SC", serif',
+};
 
 export const DEFAULT_PREFS: Prefs = {
   columns: 2,
@@ -229,6 +267,29 @@ export const DEFAULT_PREFS: Prefs = {
     textureContrast: 0,
   },
   customBrushes: [],
+
+  /* ---------------- 个性化 ---------------- */
+  /** 自定义背景图路径（空 = 用默认背景） */
+  bgImage: "",
+  /** 背景磨砂程度 0–100（%），默认 80，高品质磨砂 */
+  bgFrost: 80,
+  /** 贝塔：全局磨砂大卡片（超椭圆磨砂卡） */
+  globalFrost: false,
+  /** 背景磨砂：整个窗口都磨砂（透出桌面），关闭全局磨砂时可用 */
+  windowFrost: false,
+  /** 磨砂色调（高饱和十六进制色），默认高饱和蓝 */
+  frostColor: "#3d6bff",
+  /** UI 字体族 id（空 = 系统默认） */
+  uiFont: "",
+  /** UI 字号缩放 80–140（%），默认 100 */
+  uiScale: 100,
+  /* 真正半透明玻璃：底色是带 alpha 的，不是两个不透明色混出来的「糊」 */
+  glassAlpha: 18,
+  glassBlur: 22,
+  glassSat: 165,
+  glassSheen: 18,
+  /* 界面动效：默认完整 */
+  motion: "full",
 };
 
 const MAX_CUSTOM_BRUSHES = 24;
@@ -285,6 +346,22 @@ function read(): Prefs {
           ? (v.typeParaStyles as Prefs["typeParaStyles"])
           : [],
         rawAutoTone: bool(v.rawAutoTone, dp.rawAutoTone),
+
+        /* 个性化 */
+        bgImage: typeof v.bgImage === "string" ? v.bgImage : dp.bgImage,
+        bgFrost: clampNum(v.bgFrost, 0, 100, dp.bgFrost),
+        globalFrost: bool(v.globalFrost, dp.globalFrost),
+        windowFrost: bool(v.windowFrost, dp.windowFrost),
+        frostColor: typeof v.frostColor === "string" ? v.frostColor : dp.frostColor,
+        uiFont: typeof v.uiFont === "string" ? v.uiFont : dp.uiFont,
+        uiScale: clampNum(v.uiScale, 80, 140, dp.uiScale),
+
+        /* 真正半透明玻璃 + 界面动效 */
+        glassAlpha: clampNum(v.glassAlpha, 10, 45, dp.glassAlpha),
+        glassBlur: clampNum(v.glassBlur, 8, 40, dp.glassBlur),
+        glassSat: clampNum(v.glassSat, 100, 200, dp.glassSat),
+        glassSheen: clampNum(v.glassSheen, 0, 40, dp.glassSheen),
+        motion: v.motion === "reduced" || v.motion === "off" ? v.motion : dp.motion,
       };
     }
   } catch {

@@ -7,7 +7,7 @@
  */
 import { useCallback, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import {
   parseRecipe,
   RECIPE_EXTENSION,

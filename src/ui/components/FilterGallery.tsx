@@ -8,7 +8,7 @@ import {
 } from "../../core/layer";
 import { applyAdjustToLayer } from "../../core/layerOps";
 import type { StrataDoc } from "../../core/document";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import Modal from "./Modal";
 import "./FilterGallery.css";
 import RangeInput from "./RangeInput";

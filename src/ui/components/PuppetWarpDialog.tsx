@@ -18,7 +18,7 @@ import { activeLayer, type StrataDoc } from "../../core/document";
 import { meshWarpActiveLayer } from "../../core/layerOps";
 import { mlsWarp, type MlsMode, type WarpPin } from "../../engine/meshWarp";
 import { cloneSurface, createSurface, mustCtx } from "../../engine/surface";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { ThemeMode } from "../../stores/theme";
 import { capturePointer } from "../pointer";
 import Modal from "./Modal";
@@ -83,6 +83,8 @@ export default function PuppetWarpDialog({
     return out;
   });
   const [selected, setSelected] = useState(-1);
+  /** 落钉反馈：一次性的超椭圆波纹，动画结束自动清掉 */
+  const [ripple, setRipple] = useState<{ x: number; y: number; key: number } | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -269,8 +271,10 @@ export default function PuppetWarpDialog({
         setSelected(hit);
         return;
       }
-      // 空白处：放一个新钉
+      // 空白处：放一个新钉，并在手指落点播一圈波纹反馈
       const pin: WarpPin = { ox: pos.x, oy: pos.y, x: pos.x, y: pos.y };
+      const rect = cv.getBoundingClientRect();
+      setRipple({ x: e.clientX - rect.left, y: e.clientY - rect.top, key: Date.now() });
       setPins((prev) => {
         setSelected(prev.length);
         return [...prev, pin];
@@ -360,7 +364,7 @@ export default function PuppetWarpDialog({
           ref={stageRef}
           tabIndex={0}
           onKeyDown={onKeyDown}
-          style={{ height: 460 }}
+          style={{ height: 460, position: "relative" }}
         >
           <canvas
             ref={canvasRef}
@@ -370,6 +374,14 @@ export default function PuppetWarpDialog({
             onPointerUp={onPointerUp}
             onPointerLeave={onPointerUp}
           />
+          {ripple && (
+            <span
+              key={ripple.key}
+              className="pin-ripple"
+              style={{ left: ripple.x, top: ripple.y }}
+              onAnimationEnd={() => setRipple(null)}
+            />
+          )}
         </div>
       </div>
       <div className="lq-side" style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>

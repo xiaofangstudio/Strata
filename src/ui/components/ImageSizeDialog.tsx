@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { Anchor } from "../../core/layerOps";
 import Modal from "./Modal";
 import "./ImageSizeDialog.css";

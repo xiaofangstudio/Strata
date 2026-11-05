@@ -11,7 +11,7 @@
  * 文字真正使用的颜色 —— 没有只显示不生效的假控件。
  */
 import { useEffect, useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { ToolId } from "../../tools/catalog";
 import {
   hexToRgb,

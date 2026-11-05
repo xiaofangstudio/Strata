@@ -19,7 +19,7 @@ import {
   useMemo,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { activeLayer, type StrataDoc } from "../../core/document";
 import { capturePointer } from "../pointer";
 import {
@@ -34,6 +34,7 @@ import {
   setCurveOf,
   newAdjustState,
   newLayerStyle,
+  initiallyCollapsedGroupIds,
   styleDef,
   type AdjustFamily,
   type AdjustId,
@@ -667,7 +668,9 @@ function LayerTab({
 }: LayerTabProps) {
   const [dragOpacity, setDragOpacity] = useState<number | null>(null);
   /** 被折叠起来的组 id（只影响面板显示，不动文档） */
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(initiallyCollapsedGroupIds(doc.layers)),
+  );
   const shown = dragOpacity ?? cur.opacity;
   const rows = buildRows(doc, collapsed);
 

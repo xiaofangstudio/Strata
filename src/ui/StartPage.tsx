@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { zh } from "../i18n/zh-CN";
+import { zh } from "../i18n";
 import {
   IMAGE_EXTENSIONS,
   fileStat,

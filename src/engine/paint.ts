@@ -15,6 +15,7 @@
  * 同一笔内来回涂抹不会越描越黑，不透明度才是可预期的（与 PS 一致）。
  */
 import { cloneSurface, createSurface, mustCtx } from "./surface";
+import { tiltToBrush, type PenSample } from "./pen";
 
 /**
  * 笔尖材质。
@@ -38,6 +39,16 @@ export type SymmetryMode = "none" | "vertical" | "horizontal" | "both";
 
 /** 画笔参数。 */
 export interface BrushSettings {
+  /* ---------------- 数位板（Windows Ink / Pointer Events） ---------------- */
+  /** 是否把笔压感映射到笔尖大小与浓度；关掉后一律按 0.5 处理 */
+  penPressure?: boolean;
+  /** 是否把笔的倾斜映射到笔尖圆度与旋转 */
+  penTilt?: boolean;
+  /** 倾斜映射强度 0–100（%），100 = 完全倾斜时笔尖压到 12% 圆度 */
+  penTiltStrength?: number;
+  /** 翻笔用擦除笔端时是否自动切到橡皮擦 */
+  penEraser?: boolean;
+
   /** 笔尖直径（像素，满压感时） */
   size: number;
   /** 笔尖材质（决定笔迹的骨架） */
@@ -138,6 +149,11 @@ export interface BrushSettings {
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
+  penPressure: true,
+  penTilt: true,
+  penTiltStrength: 70,
+  penEraser: true,
+
   size: 32,
   tip: "round",
   texture: "none",
@@ -819,6 +835,8 @@ export class Stroke {
   private readonly clipMask: HTMLCanvasElement | null;
   /** 对称模式：每个笔尖按中轴镜像再补落 */
   private readonly symmetry: SymmetryMode;
+  /** 最近一次数位板采样；鼠标 / 触摸也会给一份恒等采样 */
+  private pen: PenSample | null = null;
 
   /* --- 由画笔参数推导出的「mypaint 设置」，一笔之内不变 --- */
   /** 满压感时的笔尖半径 */
@@ -979,6 +997,14 @@ export class Stroke {
    */
   get buffer(): HTMLCanvasElement {
     return this.buf;
+  }
+
+  /**
+   * 更新数位板采样（倾角 / 方位 / 自转）。
+   * 落笔前与每个合并事件都调一次，笔尖贴图在 stampDab 里按最新采样形变。
+   */
+  setPen(sample: PenSample | null): void {
+    this.pen = sample;
   }
 
   /** 落笔：初始化全部状态并投下第一个笔尖（点一下就是一个点）。 */
@@ -1244,16 +1270,24 @@ export class Stroke {
         : 0;
 
     // 角度 / 圆度 / 翻转抖动：都作用在贴图绘制这一下
-    const spin = this.angleJitterAmp > 0
-      ? (Math.random() * 2 - 1) * 180 * this.angleJitterAmp
-      : 0;
-    let qScale = 1;
+    // 数位板倾斜：倾角把正圆笔尖压成椭圆，方位角 + 笔杆自转决定椭圆朝向
+    const penTilt =
+      this.pen && this.settings.penTilt !== false
+        ? tiltToBrush(this.pen, this.settings.penTiltStrength ?? 70)
+        : null;
+    const tiltSpin = penTilt?.spinDeg ?? 0;
+    const tiltScale = penTilt?.roundnessScale ?? 1;
+
+    const spin =
+      (this.angleJitterAmp > 0 ? (Math.random() * 2 - 1) * 180 * this.angleJitterAmp : 0) +
+      tiltSpin;
+    let qScale = tiltScale;
     if (this.roundnessJitterAmp > 0) {
       const q = Math.max(
         this.roundnessMinAmp,
         this.roundnessBase * (1 - Math.random() * this.roundnessJitterAmp),
       );
-      qScale = clamp(q / this.roundnessBase, 0.01, 1);
+      qScale = clamp((q / this.roundnessBase) * tiltScale, 0.01, 1);
     }
     const fx = this.flipX && Math.random() < 0.5 ? -1 : 1;
     const fy = this.flipY && Math.random() < 0.5 ? -1 : 1;

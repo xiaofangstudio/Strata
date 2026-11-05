@@ -54,6 +54,30 @@ export const DEFAULT_PROOF: ProofSettings = {
   warningThreshold: 18,
 };
 
+/**
+ * 可选的 ICC 接入参数 —— 让 applyProof / gamutWarning 能消费真 ICC 结果，
+ * 但本模块仍是纯函数：不 import 任何 Tauri / DOM API，测试不会因此崩溃。
+ *
+ * 真 ICC transform 在 cms.ts 的 iccSoftProofBestEffort 里异步完成，这里只
+ * 接收「已经算好的结果」：一个同步 transform 回调（返回校样像素）或一张
+ * 预计算的超色域掩码。没传这个参数时，两个函数的行为与旧版完全一致。
+ *
+ * iccBytes / intent / bpc / srcProfile / dstProfile 是随结果带来的上下文
+ * 元数据（供调用方记录、断言，以及把同一对象复用到 cms.ts 的 API），
+ * proof.ts 本身不会用它们去触发任何浏览器 / Tauri 调用。
+ */
+export interface IccProofContext {
+  srcProfile?: ProfileId;
+  dstProfile?: ProfileId;
+  intent?: number;
+  bpc?: boolean;
+  iccBytes?: Uint8Array;
+  /** 同步应用校样变换；返回 null 表示本次 ICC 不可用，应回退到矩阵近似 */
+  transform?: (pixels: Uint8ClampedArray) => Uint8ClampedArray | null;
+  /** 预计算超色域掩码（每像素 0 / 255），长度须 = width * height */
+  outOfGamutMask?: Uint8Array;
+}
+
 const clamp255 = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
 
 /** 单色分色版：把某个油墨量画成灰度（墨多 = 深）。 */
@@ -125,13 +149,39 @@ function outOfCmykGamut(r: number, g: number, b: number, maxChroma: number): boo
 export function gamutWarning(
   src: RgbaBuffer,
   settings: ProofSettings,
+  icc?: IccProofContext,
 ): { buf: RgbaBuffer; coverage: number } {
+  const total = src.width * src.height;
+  const [wr, wg, wb] = settings.warningColor;
+  const mask = icc?.outOfGamutMask;
+  // ICC 掩码路径：真 ICC 已算好超色域掩码时直接按掩码刷警示色，
+  // 跳过 CMYK 往返 + Lab 彩度近似，避免两套判定打架。
+  if (mask && mask.length === total) {
+    const out = makeBuffer(src.width, src.height);
+    let hit = 0;
+    for (let p = 0; p < total; p += 1) {
+      const o = p * 4;
+      if (mask[p] !== 0) {
+        out.data[o] = wr;
+        out.data[o + 1] = wg;
+        out.data[o + 2] = wb;
+        out.data[o + 3] = src.data[o + 3];
+        hit += 1;
+      } else {
+        out.data[o] = src.data[o];
+        out.data[o + 1] = src.data[o + 1];
+        out.data[o + 2] = src.data[o + 2];
+        out.data[o + 3] = src.data[o + 3];
+      }
+    }
+    return { buf: out, coverage: hit / total };
+  }
+  // ——以下为原有实现：未传 icc / 掩码长度不符时行为完全不变——
   const round = toCmyk(src, settings.inkLimit, settings.ucr);
   const out = makeBuffer(src.width, src.height);
   // 阈值 18 → 约 78 的彩度上限；阈值越小，标记越严格
   const maxChroma = Math.max(30, 96 - settings.warningThreshold);
   let hit = 0;
-  const [wr, wg, wb] = settings.warningColor;
   for (let p = 0; p < src.width * src.height; p += 1) {
     const o = p * 4;
     const dr = Math.abs(src.data[o] - round.data[o]);
@@ -188,11 +238,14 @@ export function previewTone(src: RgbaBuffer, exposure: number, gamma: number): R
 /**
  * 按校样设置变换一张图。kind=none 时原样返回。
  * `extra` 里可以叠加 32 位预览的曝光/伽马（两者可同时生效）。
+ * `icc` 是可选的 ICC 接入参数：传了就用真 ICC 校样结果（custom 分支），
+ * 不传时行为与旧版完全一致，且本文件不因此引入任何 Tauri / DOM 依赖。
  */
 export function applyProof(
   src: RgbaBuffer,
   settings: ProofSettings,
   extra?: { exposure?: number; gamma?: number },
+  icc?: IccProofContext,
 ): RgbaBuffer {
   let out = src;
   switch (settings.kind) {
@@ -218,6 +271,15 @@ export function applyProof(
       out = legacyMacGamma(src);
       break;
     case "custom":
+      // 传了 ICC transform 就优先用真 ICC 校样像素（外层把异步 ICC 结果
+      // 包成同步回调）；返回 null / 长度不符则明确回退到原来的矩阵近似。
+      if (icc?.transform) {
+        const t = icc.transform(src.data);
+        if (t && t.length === src.data.length) {
+          out = { data: t, width: src.width, height: src.height };
+          break;
+        }
+      }
       out = settings.customSpace ? convertProfile(src, "srgb", settings.customSpace) : src;
       break;
     case "internetStandardRgb":

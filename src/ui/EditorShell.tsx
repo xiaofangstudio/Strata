@@ -14,16 +14,43 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { zh } from "../i18n/zh-CN";
+import { zh } from "../i18n";
 import { currentPrefs } from "../stores/prefs";
 import {
   IMAGE_EXTENSIONS,
   encodePng,
   loadImage,
   decodeImage,
+  extOf,
   readFileBytes,
   writeFileBytes,
 } from "../engine/image";
+import {
+  INTENT_LABELS,
+  convertDocumentBestEffort,
+  iccSoftProofBestEffort,
+  profileIdFromIccStructured,
+  profileIdFromIcc,
+  readEmbeddedProfile,
+  type RenderingIntent,
+} from "../engine/cms";
+import { flattenImageBestEffort } from "../engine/gpuBridge";
+import {
+  zoomSteps,
+  startZoom,
+  stepZoom,
+  flickFromSamples,
+  stepFlick,
+  pinchMetrics,
+  pinchDelta,
+  stepHandleAnim,
+  handleRadius,
+  HANDLE_ANIM_INIT,
+  type ZoomAnim,
+  type PointerSample,
+  type HandleAnim,
+  type PinchMetrics,
+} from "../engine/motion";
 import { quitApp, type AppInfo } from "../core/appInfo";
 import {
   activeLayer,
@@ -136,7 +163,6 @@ import {
   findLayers,
   isolateLayers,
   assignProfile,
-  convertToProfile,
   fadeDocument,
   revealAll,
   setColorMode,
@@ -269,6 +295,7 @@ import {
   type BrushSettings,
   type GradientStyle,
 } from "../engine/paint";
+import { penSampleOf, penPressureOf } from "../engine/pen";
 import {
   DEFAULT_RETOUCH,
   RetouchStroke,
@@ -503,11 +530,12 @@ const SHAPE_KIND: Record<string, ShapeKind> = {
   shapeLine: "line",
 };
 
-/** 指针压感：笔用真实压力，鼠标/触摸退回 0.5，保证笔触粗细稳定。 */
-function pressureOf(pressure: number, pointerType: string): number {
-  if (pointerType === "pen" && pressure > 0) return Math.min(1, pressure);
-  if (pressure > 0 && pressure !== 0.5) return Math.min(1, pressure);
-  return 0.5;
+/**
+ * 指针压感：笔用真实压力，鼠标 / 触摸退回 0.5，保证笔触粗细稳定。
+ * `usePressure=false` 时一律 0.5 —— 选项条里关掉「压感」就是这条分支。
+ */
+function pressureFrom(ev: { pressure?: number; pointerType?: string }, usePressure: boolean): number {
+  return penPressureOf(penSampleOf(ev), usePressure);
 }
 
 /** 修饰键临时接管选区组合方式（松开就回到选项条里选的那一档）。 */
@@ -790,6 +818,9 @@ export default function EditorShell({
   /** 弯曲文字对话框 */
   const [warpTextDialog, setWarpTextDialog] = useState<{ warp: string; amount: string } | null>(null);
   const [profilePick, setProfilePick] = useState<NonNullable<StrataDoc["profile"]>>("srgb");
+  /** 真 ICC 转换的 rendering intent 与黑点补偿（色彩设置对话框） */
+  const [profileIntent, setProfileIntent] = useState<RenderingIntent>(1);
+  const [profileBpc, setProfileBpc] = useState(true);
 
   // 偏好里的「视图外观」直接落到根节点：棋盘格大小 + 界面密度。
   // 放根节点而不是局部，弹窗、侧栏、画布才会一起跟着变。
@@ -824,7 +855,10 @@ export default function EditorShell({
       return;
     }
     let cancelled = false;
-    const timer = setTimeout(() => {
+    // 「自定义校样」走真 ICC：六项差距里 iccSoftProof 原本是写好了零调用的死代码，
+    // 现在接进实时预览；其余校样类型保持原来的矩阵路径，性能不受影响。
+    const useIccProof = wantProof && proofSet.kind === "custom";
+    const timer = setTimeout(async () => {
       if (cancelled) return;
       const src = canvasRef.current;
       if (!src) return;
@@ -845,15 +879,45 @@ export default function EditorShell({
         width: pw,
         height: ph,
       };
+      let iccCtx: Parameters<typeof gamutWarning>[2] = undefined;
+      if (useIccProof) {
+        const from = doc?.profile ?? "srgb";
+        const output = proofSet.customSpace ?? "srgb";
+        const r = await iccSoftProofBestEffort(
+          buf.data,
+          pw,
+          ph,
+          from,
+          output,
+          1,
+          true,
+          { threshold: proofSet.warningThreshold },
+        );
+        if (cancelled) return;
+        // 把异步算好的真 ICC 结果包成同步回调交给 applyProof（同一帧同一份像素）。
+        iccCtx = {
+          srcProfile: from,
+          dstProfile: output,
+          intent: 1,
+          bpc: true,
+          transform: (pixels) =>
+            pixels.length === r.proofPixels.length ? r.proofPixels : null,
+          outOfGamutMask: r.outOfGamutMask,
+        };
+        if (!r.usedIcc && r.fallbackReason) {
+          // 明确回退，不静默：控制台留痕，界面仍给结果。
+          console.info(`[Strata CMS] 已回退矩阵近似：${r.fallbackReason}`);
+        }
+      }
       if (wantProof || wantTone) {
         buf = applyProof(buf, wantProof ? proofSet : { ...DEFAULT_PROOF }, {
           exposure: wantTone ? preview32.exposure : 0,
           gamma: wantTone ? preview32.gamma : 1,
-        });
+        }, iccCtx);
       }
       if (gamutOn) {
-        // 色域警告叠在校样结果上：超出印刷色域的像素刷成警示色
-        buf = gamutWarning(buf, proofSet).buf;
+        // 色域警告叠在校样结果上；有真 ICC 掩码时按掩码判定，不用 CMYK 往返近似。
+        buf = gamutWarning(buf, proofSet, iccCtx).buf;
       }
       canvas.width = pw;
       canvas.height = ph;
@@ -1078,6 +1142,20 @@ export default function EditorShell({
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   /** 平移起点（屏幕坐标） */
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  /* ---- 画布动效：缓动缩放 / 惯性平移 / 双指手势 / 变换手柄反馈 ---- */
+  const zoomAnimRef = useRef<ZoomAnim | null>(null);
+  const zoomRafRef = useRef<number | null>(null);
+  /** 动画中的实时倍率（scale state 每帧也会更新，但连续手势要读这个更准） */
+  const zoomLiveRef = useRef(1);
+  const panSamplesRef = useRef<PointerSample[]>([]);
+  const flickRafRef = useRef<number | null>(null);
+  const touchPtsRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchPrevRef = useRef<PinchMetrics | null>(null);
+  const multiTouchRef = useRef(false);
+  const handleAnimRef = useRef<HandleAnim>(HANDLE_ANIM_INIT);
+  const lastPaintRef = useRef(0);
+  /** 动效档位从 :root 读（App 写入），off 时所有插值瞬时收敛 */
+  const motionMode = (): string => document.documentElement.dataset.motion ?? "full";
   const gradRef = useRef<{
     from: { x: number; y: number };
     to: { x: number; y: number };
@@ -1991,6 +2069,19 @@ export default function EditorShell({
     }
 
     const paint = (t: number) => {
+      // 变换手柄 / 图钉的出现与抓取反馈：逐帧指数平滑，off 档瞬时收敛。
+      const dt = lastPaintRef.current ? Math.min(50, t - lastPaintRef.current) : 16;
+      lastPaintRef.current = t;
+      handleAnimRef.current = stepHandleAnim(
+        handleAnimRef.current,
+        {
+          visible: !!freeTRef.current,
+          hovered: false,
+          dragging: !!freeDragRef.current,
+        },
+        dt,
+        motionMode() === "full",
+      );
       const live = selRef.current;
       const sp = shapeRef.current;
       let path: Path2D | null = null;
@@ -2134,14 +2225,18 @@ export default function EditorShell({
           ctx.restore();
         }
 
-        // 自由变换框：外框 + 八手柄 + 顶部旋转圆点，全部按屏幕像素恒定大小画
+        // 自由变换框：外框 + 八手柄 + 顶部旋转圆点，全部按屏幕像素恒定大小画。
+        // 手柄带出现淡入 / 抓取收缩 / 抓取光环，不再硬弹出来（用户说的「手指动画」）。
         if (ft) {
           const u = 1 / scale;
           const cs = transformCorners(ft);
+          const ha = handleAnimRef.current;
+          const half = handleRadius((FREE_HANDLE_SIZE / 2) * u, ha);
           ctx.save();
           ctx.strokeStyle = accent;
           ctx.fillStyle = "#ffffff";
           ctx.lineWidth = 1.5 * u;
+          ctx.globalAlpha = Math.max(0, Math.min(1, ha.appear));
 
           // 外框
           ctx.beginPath();
@@ -2158,17 +2253,27 @@ export default function EditorShell({
           ctx.lineTo(rot.x, rot.y);
           ctx.stroke();
           ctx.beginPath();
-          ctx.arc(rot.x, rot.y, (FREE_HANDLE_SIZE / 2) * u, 0, Math.PI * 2);
+          ctx.arc(rot.x, rot.y, half, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
 
           // 八个缩放手柄
           const hs = freeHandles(ft);
-          const half = (FREE_HANDLE_SIZE / 2) * u;
           for (const h of hs) {
             ctx.beginPath();
             ctx.rect(h.x - half, h.y - half, half * 2, half * 2);
             ctx.fill();
+            ctx.stroke();
+          }
+
+          // 抓取中：在框中心给一圈随呼吸扩散的光环，明确「正抓着变换」
+          if (ha.grab > 0.02) {
+            const cx = (cs[0].x + cs[2].x) / 2;
+            const cy = (cs[0].y + cs[2].y) / 2;
+            const pulse = (1.5 + Math.sin(t / 140) * 0.5) * 12 * u;
+            ctx.globalAlpha = ha.grab * 0.55;
+            ctx.beginPath();
+            ctx.arc(cx, cy, pulse, 0, Math.PI * 2);
             ctx.stroke();
           }
           ctx.restore();
@@ -2184,6 +2289,13 @@ export default function EditorShell({
 
   const onDown = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
+      // 双指手势由原生监听接管：第二根手指不落笔、不拖框。
+      if (multiTouchRef.current) return;
+      // 新一次按下先掐掉上一段惯性滑行，否则画布会「被拖着走」。
+      if (flickRafRef.current !== null) {
+        cancelAnimationFrame(flickRafRef.current);
+        flickRafRef.current = null;
+      }
       const act = activeLayer(doc);
       if (e.button === 1 || spaceDown || tool === "hand") {
         panRef.current = { x: e.clientX, y: e.clientY };
@@ -2435,14 +2547,19 @@ export default function EditorShell({
                 tip: "round" as const,
               }
             : { ...brush, color: fg };
+        // 数位板：落笔时读取 tilt / twist / 擦除笔端；翻笔自动临时切橡皮擦
+        const pen = penSampleOf(e.nativeEvent);
+        const eraserEnd =
+          pen.eraser && pen.pointerType === "pen" && settings.penEraser !== false;
         const s = new Stroke(
           docW,
           docH,
           settings,
-          tool === "eraser",
+          tool === "eraser" || eraserEnd,
           doc.selection ?? null,
         );
-        s.begin(p.x, p.y, pressureOf(e.pressure, e.pointerType), e.timeStamp);
+        s.setPen(pen);
+        s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false), e.timeStamp);
         strokeRef.current = s;
         scheduleRender();
         return;
@@ -2463,7 +2580,7 @@ export default function EditorShell({
           anchor: needsSample(mode) ? anchor : null,
           mask: doc.selection ?? null,
         });
-        rt.begin(p.x, p.y, pressureOf(e.pressure, e.pointerType), e.timeStamp);
+        rt.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false), e.timeStamp);
         rt.pull();
         retouchRef.current = rt;
         scheduleRender();
@@ -2529,6 +2646,10 @@ export default function EditorShell({
         panRef.current = { x: e.clientX, y: e.clientY };
         // 平移中只改变量：一帧一次 DOM 写入，零 React 重渲染
         panLiveRef.current = { x: panLiveRef.current.x + dx, y: panLiveRef.current.y + dy };
+        // 记最近一小段轨迹，松手时用来估计惯性初速度
+        const samples = panSamplesRef.current;
+        samples.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+        if (samples.length > 12) samples.shift();
         applyPanDom();
         return;
       }
@@ -2650,11 +2771,13 @@ export default function EditorShell({
         if (batch.length > 1) {
           for (const ev of batch) {
             const q = docXY(ev.clientX, ev.clientY);
-            s.extend(q.x, q.y, pressureOf(ev.pressure, ev.pointerType), ev.timeStamp);
+            s.setPen(penSampleOf(ev));
+            s.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false), ev.timeStamp);
           }
         } else {
           const p = docXY(native.clientX, native.clientY);
-          s.extend(p.x, p.y, pressureOf(native.pressure, native.pointerType), native.timeStamp);
+          s.setPen(penSampleOf(native));
+          s.extend(p.x, p.y, pressureFrom(native, brush.penPressure !== false), native.timeStamp);
         }
         scheduleRender();
         return;
@@ -2668,11 +2791,11 @@ export default function EditorShell({
         if (batch.length > 1) {
           for (const ev of batch) {
             const q = docXY(ev.clientX, ev.clientY);
-            rt.extend(q.x, q.y, pressureOf(ev.pressure, ev.pointerType), ev.timeStamp);
+            rt.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false), ev.timeStamp);
           }
         } else {
           const q = docXY(native.clientX, native.clientY);
-          rt.extend(q.x, q.y, pressureOf(native.pressure, native.pointerType), native.timeStamp);
+          rt.extend(q.x, q.y, pressureFrom(native, brush.penPressure !== false), native.timeStamp);
         }
         rt.pull();
         scheduleRender();
@@ -2702,6 +2825,31 @@ export default function EditorShell({
       panRef.current = null;
       // 松手才把实时值写回 state（导航器、后续缩放都读它）
       setPan(panLiveRef.current);
+      // 惯性滑行：指数摩擦逐帧衰减，沿用平移的 DOM 直写路径，不触发 React 重渲染。
+      const v = flickFromSamples(panSamplesRef.current);
+      panSamplesRef.current = [];
+      if (motionMode() === "full" && (v.vx !== 0 || v.vy !== 0)) {
+        if (flickRafRef.current !== null) cancelAnimationFrame(flickRafRef.current);
+        let state = v;
+        let last = performance.now();
+        const tick = (now: number) => {
+          const r = stepFlick(state, (now - last) / 1000);
+          last = now;
+          state = r.next;
+          panLiveRef.current = {
+            x: panLiveRef.current.x + r.dx,
+            y: panLiveRef.current.y + r.dy,
+          };
+          applyPanDom();
+          if (r.done) {
+            flickRafRef.current = null;
+            setPan(panLiveRef.current);
+          } else {
+            flickRafRef.current = requestAnimationFrame(tick);
+          }
+        };
+        flickRafRef.current = requestAnimationFrame(tick);
+      }
       return;
     }
     // 自由变换：松手只是结束这一次拖拽，变换本身还挂在浮层上，等 Enter 才落库
@@ -3010,9 +3158,39 @@ export default function EditorShell({
     return true;
   }, [render]);
 
-  // 滚轮：Ctrl 缩放，其余平移。放在原生监听里是为了能阻止 WebView 的页面缩放
+  // 滚轮：Ctrl 缩放（带缓动），其余平移。原生监听是为了能阻止 WebView 页面缩放。
+  // 早期是 `zoom(scale * ZOOM_STEP)` 一次性跳变；现在用 RAF 插值到目标倍率，
+  // 连续滚轮会从「动画中的实时值」接着走，不会一顿一顿。
   const wheelZoomRef = useRef<(dir: number) => void>(() => {});
-  wheelZoomRef.current = (dir: number) => zoom(scale * (dir > 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+  zoomLiveRef.current = scale;
+  wheelZoomRef.current = (dir: number) => {
+    const target = zoomSteps(zoomLiveRef.current, dir);
+    if (motionMode() !== "full") {
+      zoomAnimRef.current = null;
+      zoomLiveRef.current = target;
+      zoom(target);
+      return;
+    }
+    zoomAnimRef.current = startZoom(zoomLiveRef.current, target, 160);
+    if (zoomRafRef.current !== null) cancelAnimationFrame(zoomRafRef.current);
+    let last = performance.now();
+    const tick = (now: number) => {
+      const a = zoomAnimRef.current;
+      if (!a) return;
+      const r = stepZoom(a, now - last);
+      last = now;
+      zoomAnimRef.current = r.anim;
+      zoomLiveRef.current = r.scale;
+      zoom(r.scale);
+      if (r.done) {
+        zoomAnimRef.current = null;
+        zoomRafRef.current = null;
+      } else {
+        zoomRafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    zoomRafRef.current = requestAnimationFrame(tick);
+  };
 
   useEffect(() => {
     const vp = viewportRef.current;
@@ -3020,7 +3198,9 @@ export default function EditorShell({
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        wheelZoomRef.current(e.deltaY < 0 ? 1 : -1);
+        // 精确触控板的捏合会发 ctrl+wheel：幅度大就多走几档，仍是连续插值。
+        const dir = e.deltaY < 0 ? 1 : -1;
+        wheelZoomRef.current(dir);
         return;
       }
       setPan((p) => ({
@@ -3029,8 +3209,62 @@ export default function EditorShell({
       }));
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
-    return () => vp.removeEventListener("wheel", onWheel);
+    return () => {
+      vp.removeEventListener("wheel", onWheel);
+      if (zoomRafRef.current !== null) cancelAnimationFrame(zoomRafRef.current);
+    };
   }, []);
+
+  /**
+   * 双指手势（手指变换）：捏合缩放 + 双指平移。
+   * 用 capture 阶段维护触点；第二根手指落下时置 multiTouchRef，
+   * onDown 里早退，避免第二指被当成画笔落笔。
+   */
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const points = touchPtsRef.current;
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (points.size >= 2) {
+        multiTouchRef.current = true;
+        const [a, b] = [...points.values()];
+        pinchPrevRef.current = pinchMetrics(a, b);
+      }
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !points.has(e.pointerId)) return;
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (points.size < 2 || !pinchPrevRef.current) return;
+      e.preventDefault();
+      const [a, b] = [...points.values()];
+      const next = pinchMetrics(a, b);
+      const d = pinchDelta(pinchPrevRef.current, next);
+      pinchPrevRef.current = next;
+      const target = zoomLiveRef.current * d.scale;
+      zoomLiveRef.current = target;
+      zoom(target);
+      setPan((p) => ({ x: p.x + d.dx, y: p.y + d.dy }));
+    };
+    const onUp = (e: PointerEvent) => {
+      points.delete(e.pointerId);
+      if (points.size < 2) {
+        multiTouchRef.current = false;
+        pinchPrevRef.current = null;
+      }
+    };
+    vp.addEventListener("pointerdown", onDown, true);
+    vp.addEventListener("pointermove", onMove, true);
+    vp.addEventListener("pointerup", onUp, true);
+    vp.addEventListener("pointercancel", onUp, true);
+    return () => {
+      vp.removeEventListener("pointerdown", onDown, true);
+      vp.removeEventListener("pointermove", onMove, true);
+      vp.removeEventListener("pointerup", onUp, true);
+      vp.removeEventListener("pointercancel", onUp, true);
+    };
+  }, [zoom]);
 
   /* ---------------------------------------------------------------- 命令 */
 
@@ -3158,7 +3392,17 @@ export default function EditorShell({
             setToast(zh.editor.projectOpened);
           } else {
             const bitmap = await loadImage(path);
-            onOpenDoc(docFromBitmap(bitmap, baseName(path), path));
+            const next = docFromBitmap(bitmap, baseName(path), path);
+            // 打开 PNG / JPEG 时读嵌入 ICC，把文档标成真实色彩空间（不改像素）
+            if (["png", "jpg", "jpeg", "webp", "tif", "tiff"].includes(extOf(path))) {
+              const icc = await readEmbeddedProfile(path);
+              // 真解析优先，描述文本猜标签只作兜底（与 openFile 统一入口同一套逻辑）。
+              const guessed = icc
+                ? (profileIdFromIccStructured(icc) ?? profileIdFromIcc(icc))
+                : null;
+              if (guessed) next.profile = guessed;
+            }
+            onOpenDoc(next);
           }
         }
         pushRecent(path);
@@ -3271,9 +3515,13 @@ export default function EditorShell({
         filters: [{ name: "Photoshop PSD", extensions: [PSD_EXTENSION] }],
       });
       if (typeof target !== "string") return;
-      const bytes = await encodeDocToPsd(doc);
+      const { bytes, warnings } = await encodeDocToPsd(doc);
       await writeFileBytes(target, bytes);
-      setToast(zh.editor.psdExported);
+      setToast(
+        warnings.length
+          ? `${zh.editor.psdLossyHint}${warnings.join("、")}`
+          : zh.editor.psdExported,
+      );
     } catch (e) {
       setError(`${zh.error.exportFailed}：${e instanceof Error ? e.message : String(e)}`);
     }
@@ -7587,7 +7835,15 @@ export default function EditorShell({
             ? { run: () => onCommit(mergeDown(doc), zh.menu.mergeDown) }
             : undefined;
         case "layer.flattenImage":
-          return { run: () => onCommit(flattenImage(doc), zh.menu.flatten) };
+          return {
+            run: () => {
+              // 纯像素层文档优先走 WebGPU 拼合，其余情况静默回退 Canvas2D
+              void flattenImageBestEffort(doc).then(({ doc: next, gpu }) => {
+                onCommit(next, zh.menu.flatten);
+                if (gpu) setToast(zh.editor.gpuFlattenDone);
+              });
+            },
+          };
         case "layer.ungroupLayers":
           return doc.layers[at]?.kind === "group"
             ? { run: () => onCommit(ungroupLayers(doc), zh.menu.ungroup) }
@@ -10412,8 +10668,17 @@ export default function EditorShell({
                       setToast("源配置文件与目标相同，无需转换");
                       return;
                     }
-                    onCommit(convertToProfile(doc, profilePick), "转换为配置文件");
-                    setToast(`已从 ${PROFILE_LABELS[from]} 转换到 ${PROFILE_LABELS[profilePick]}`);
+                    // 真 ICC 转换是异步的（要走 Tauri 命令），失败自动回退矩阵近似
+                    void convertDocumentBestEffort(doc, profilePick, profileIntent, profileBpc).then(
+                      ({ doc: next, icc }) => {
+                        onCommit(next, "转换为配置文件");
+                        setToast(
+                          icc
+                            ? `${zh.editor.iccConverted}${PROFILE_LABELS[from]} → ${PROFILE_LABELS[profilePick]}（${INTENT_LABELS[profileIntent]}）`
+                            : `${zh.editor.matrixConverted}${PROFILE_LABELS[from]} → ${PROFILE_LABELS[profilePick]}`,
+                        );
+                      },
+                    );
                   } else {
                     onCommit(assignProfile(doc, profilePick), "色彩设置");
                     setToast("已记录工作空间（Strata 渲染管线固定 sRGB 输出）");
@@ -10430,7 +10695,7 @@ export default function EditorShell({
             {profileDialog === "assign"
               ? "只换解释标签，不改像素 —— 用于修正「这张图本来就是 P3，但被当成 sRGB」的情况。"
               : profileDialog === "convert"
-                ? "真的按原色矩阵把像素换算到目标空间：线性 RGB → XYZ(D65) → 目标线性 RGB。"
+                ? "优先走真 ICC 引擎：按指定 rendering intent 与黑点补偿换算像素；ICC 不可用时自动回退矩阵近似。"
                 : "设置这份文档的工作空间。Strata 的渲染与导出固定按 sRGB 输出。"}
           </p>
           <label className="field">
@@ -10448,6 +10713,36 @@ export default function EditorShell({
               </select>
             </span>
           </label>
+          {profileDialog === "convert" && (
+            <>
+              <label className="field">
+                <span className="field-label">{zh.editor.profileIntent}</span>
+                <span className="field-input">
+                  <select
+                    value={profileIntent}
+                    onChange={(e) => setProfileIntent(Number(e.target.value) as RenderingIntent)}
+                  >
+                    {([0, 1, 2, 3] as RenderingIntent[]).map((i) => (
+                      <option key={i} value={i}>
+                        {INTENT_LABELS[i]}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.editor.profileBpc}</span>
+                <span className="field-input">
+                  <input
+                    type="checkbox"
+                    checked={profileBpc}
+                    onChange={(e) => setProfileBpc(e.target.checked)}
+                  />
+                </span>
+              </label>
+              <p className="isz-note">{zh.editor.iccHint}</p>
+            </>
+          )}
           <p className="isz-note">当前文档：{PROFILE_LABELS[doc.profile ?? "srgb"]}</p>
         </Modal>
       )}

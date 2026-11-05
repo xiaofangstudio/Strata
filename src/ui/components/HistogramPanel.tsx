@@ -6,7 +6,7 @@
  * 通道可切：颜色（RGB 三通道叠加）/ 明度 / R / G / B。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./HistogramPanel.css";
 
 type Channel = "colors" | "luminosity" | "r" | "g" | "b";

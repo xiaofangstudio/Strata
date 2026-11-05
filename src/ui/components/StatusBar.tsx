@@ -4,7 +4,7 @@
  * 底边一条：当前工具、缩放比例、文档尺寸、色彩空间、图层数、内存占用。
  * 数值一律用等宽数字，滚动画布时不会左右抖动。
  */
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { StrataDoc } from "../../core/document";
 import type { ToolId } from "../../tools/catalog";
 import "./StatusBar.css";

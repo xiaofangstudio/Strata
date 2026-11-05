@@ -9,7 +9,7 @@
  * 才能在深色面板上看清稀疏的边缘；网格一律虚线淡灰，不跟数据抢注意力。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import {
   binIntensity,
   computeParade,

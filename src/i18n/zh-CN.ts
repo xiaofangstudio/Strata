@@ -4,7 +4,7 @@
  * Strata 是中文第一的产品，界面不出现英文硬编码。
  * 这里集中存放全部用户可见文案，便于后续统一校对与替换。
  */
-export const zh = {
+export const zhCN = {
   app: {
     name: "Strata",
     tagline: "修图 · 绘画",
@@ -206,6 +206,18 @@ export const zh = {
 
   /** 选项条（§7.1：默认 3 项 + 「⋯ 更多」）。 */
   options: {
+    /* 数位板（Windows Ink / Pointer Events） */
+    pen: "数位板",
+    penHint: "压感 / 倾斜 / 擦除笔端来自 Windows Ink；鼠标与触摸不受影响",
+    penPressure: "压感控制大小",
+    penPressureHint: "关掉后所有笔触按 50% 压力绘制，粗细恒定",
+    penTilt: "倾斜改变笔尖",
+    penTiltHint: "笔倾斜时笔尖压扁成椭圆，并随笔杆方向旋转",
+    penTiltStrength: "倾斜强度",
+    penTiltStrengthHint: "0% 关闭形变，100% 时完全倾斜把笔尖压到最扁",
+    penEraser: "翻笔自动擦除",
+    penEraserHint: "把笔翻到橡皮端时临时切到橡皮擦，抬笔自动还原",
+
     size: "大小",
     hardness: "硬度",
     opacity: "不透明度",
@@ -770,6 +782,51 @@ export const zh = {
     spacingHint: "间距越小笔触越顺滑，推荐 5%–12%",
     resetAll: "恢复默认设置",
     done: "完成",
+    personal: {
+      title: "个性化",
+      beta: "贝塔",
+      bgImage: "背景图",
+      bgImageImport: "导入背景图…",
+      bgImageClear: "清除背景图",
+      bgImageHint: "导入一张图片作为应用背景，支持 PNG / JPG / WebP 等常见格式。",
+      bgFrost: "背景磨砂程度",
+      bgFrostHint: "把背景图磨砂化的强度，默认 80% 为高品质磨砂。",
+      globalFrost: "全局磨砂（大卡片）",
+      globalFrostHint: "贝塔：把面板、工具栏、对话框整体换成磨砂大卡片（超椭圆圆角）。",
+      windowFrost: "窗口磨砂（透出桌面）",
+      windowFrostHint: "关闭全局磨砂后可用：整窗磨砂，直接透出后面的壁纸与其它软件。",
+      frostColor: "磨砂颜色",
+      frostColorHint: "高饱和色调，红橙黄绿青蓝紫，可微调。",
+      font: "界面字体",
+      fontHint: "选择 UI 字体族，或保持系统默认。",
+      uiScale: "界面缩放",
+      uiScaleHint: "整体放大 / 缩小界面，范围 80%–140%。",
+      glass: "玻璃质感",
+      glassHint: "真正半透明磨砂：半透明底色 + 背景虚化 + 亮边高光，不是一层糊。",
+      glassAlpha: "玻璃透明度",
+      glassAlphaHint: "数值越小越通透，越大越接近实心面板。",
+      glassBlur: "玻璃模糊",
+      glassBlurHint: "玻璃背后的虚化半径，单位像素。",
+      glassSat: "玻璃饱和度",
+      glassSatHint: "透过玻璃看到的颜色浓淡。",
+      glassSheen: "玻璃高光",
+      glassSheenHint: "斜向反光与亮边的强度。",
+      motion: "界面动效",
+      motionHint: "完整 / 精简（只留淡入）/ 关闭。精简适合低性能设备。",
+      motionFull: "完整",
+      motionReduced: "精简",
+      motionOff: "关闭",
+      colors: {
+        red: "红",
+        orange: "橙",
+        yellow: "黄",
+        green: "绿",
+        cyan: "青",
+        blue: "蓝",
+        purple: "紫",
+      },
+    },
+
   },
 
   shortcuts: {
@@ -842,6 +899,13 @@ export const zh = {
     zoom100: "100%",
     exported: "已导出图片",
     psdExported: "已导出 PSD",
+    psdLossyHint: "已导出 PSD；以下调整层没有 PSD 等价物，已存为占位层（效果需先在 Strata 内栅格化）：",
+    iccConverted: "真 ICC 已转换：",
+    matrixConverted: "ICC 引擎不可用，已用矩阵近似转换：",
+    profileIntent: "转换意图",
+    profileBpc: "黑点补偿",
+    iccHint: "打开带嵌入 ICC 的图片会自动识别色彩空间；软打样与色域警告目前仍走矩阵近似。",
+    gpuFlattenDone: "已用 WebGPU 拼合图像",
     quickMaskOn: "快速蒙版已开启：画笔涂抹的区域退出后将取消选中",
     quickMaskOff: "快速蒙版已关闭：蒙版已转回选区",
     projectSaved: "已保存工程",
@@ -1049,6 +1113,9 @@ export const zh = {
     exportFailed: "导出失败",
     saveFailed: "保存失败",
   },
-} as const;
+};
 
-export type Dict = typeof zh;
+/** 中文是「源语言」：其它语言缺译时回退到这里的词条，保证界面不空、不崩。 */
+export const zh = zhCN;
+
+export type Dict = typeof zhCN;

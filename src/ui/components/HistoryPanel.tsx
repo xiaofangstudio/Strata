@@ -7,7 +7,7 @@
  *
  * 点击任意一步即跳过去，跳过去之后再画一笔就从那里长出新分支。
  */
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./LayersPanel.css";
 
 interface Props {

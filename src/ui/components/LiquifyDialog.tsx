@@ -13,7 +13,7 @@ import {
 } from "../../engine/liquify";
 import { cloneRaster, type Raster, type Rect } from "../../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels } from "../../engine/surface";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import type { ThemeMode } from "../../stores/theme";
 import { capturePointer } from "../pointer";
 import Modal from "./Modal";

@@ -14,7 +14,7 @@
  */
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { usePrefs } from "../../stores/prefs";
 import { TOOL_GROUPS, toolsInGroup, type ToolGroupId, type ToolId } from "../../tools/catalog";
 import ToolIcon from "./ToolIcon";

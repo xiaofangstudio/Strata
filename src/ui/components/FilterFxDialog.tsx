@@ -15,7 +15,7 @@ import {
 } from "../../engine/filters/defs";
 import { applyFilterToLayer } from "../../core/filterOps";
 import type { StrataDoc } from "../../core/document";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import Modal from "./Modal";
 import RangeInput from "./RangeInput";
 import "./FilterGallery.css";

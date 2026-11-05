@@ -6,7 +6,7 @@
  * 所以改任何一项都会立刻在预览里体现，不存在「面板里好看、落笔不一样」。
  */
 import { useEffect, useRef, useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import {
   Stroke,
   type BrushSettings,
@@ -160,7 +160,7 @@ function NumFields({
           min={f.min}
           max={f.max}
           suffix={f.suffix}
-          value={brush[f.key]}
+          value={brush[f.key] ?? f.min}
           onChange={(v) => onBrush({ [f.key]: v } as Partial<BrushSettings>)}
         />
       ))}
@@ -184,7 +184,7 @@ function BoolFields({
           key={f.key}
           label={f.label}
           hint={f.hint}
-          on={brush[f.key]}
+          on={brush[f.key] ?? false}
           onChange={(v) => onBrush({ [f.key]: v } as Partial<BrushSettings>)}
         />
       ))}

@@ -22,7 +22,7 @@ import {
   type TextFamilyId,
   type WarpStyle,
 } from "../../engine/text";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import Modal from "./Modal";
 import RangeInput from "./RangeInput";
 import "./Preferences.css";

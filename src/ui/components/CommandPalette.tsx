@@ -11,7 +11,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./CommandPalette.css";
 
 export interface Command {

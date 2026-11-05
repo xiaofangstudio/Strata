@@ -6,12 +6,13 @@
  * 开始页面与启动流程共用同一条通路，两边的打开行为完全一致。
  *
  * 图片走位图解码，.strata 工程走工程解码；顺带把缩略图造好，
- * 交给调用方写进最近文件记录。
+ * 交给调用方写进最近文件记录；打开位图时还会读嵌入 ICC 标到 doc.profile。
  */
 import { fileStat, loadImage, makeThumbnail, readFileBytes } from "./image";
 import { composeDoc } from "./compositor";
 import { createSurface } from "./surface";
 import { decodeProject, isStrataPath } from "./project";
+import { readEmbeddedProfileId } from "./cms";
 import { baseName, docFromBitmap, type StrataDoc } from "../core/document";
 
 export interface OpenedFile {
@@ -54,5 +55,11 @@ export async function openFileToDoc(path: string): Promise<OpenedFile> {
   const bitmap = await loadImage(path);
   const thumb = await makeThumbnail(bitmap);
   const doc = docFromBitmap(bitmap, baseName(path), path);
+  // 读嵌入 ICC 并标到文档上：开始页 / 双击启动 / BrowseDialog / DropletRunner
+  // 共用这条路径，以前完全不读 ICC。统一走 cms.ts 的共用入口
+  // readEmbeddedProfileId（真解析优先 + 猜标签兜底），与 EditorShell.openPath、
+  // convertDocumentIcc 用同一套逻辑。没有嵌入 / 引擎不可用时不改 doc.profile。
+  const embeddedId = await readEmbeddedProfileId(path);
+  if (embeddedId) doc.profile = embeddedId;
   return { doc, thumb: thumb || undefined, ...meta };
 }

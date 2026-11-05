@@ -8,7 +8,7 @@
 import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { fileStat, loadImage, makeThumbnail } from "../../engine/image";
 import { openFileToDoc } from "../../engine/openFile";
 import { isOpenablePath } from "../../core/launch";

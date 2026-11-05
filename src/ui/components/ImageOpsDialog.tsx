@@ -19,7 +19,7 @@ import {
   type ColorModeId,
   type ColorModeOptions,
 } from "../../core/imageOps";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import Modal from "./Modal";
 
 export type ImageOpsKind =

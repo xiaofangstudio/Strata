@@ -8,7 +8,7 @@
  * 不做假控件：当前工具没有任何参数时，明确写「此工具暂无可调参数」。
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import {
   isRetouchTool,
   isSelectionTool,
@@ -355,6 +355,42 @@ function buildControls(tool: ToolId, c: Ctx): Built {
             />
           </div>
           <p className="opt-note">{zh.options.spacingHint}</p>
+          <p className="opt-note">{zh.options.penHint}</p>
+          <div className="opt-extra-row">
+            <Check
+              key="penPressure"
+              label={zh.options.penPressure}
+              on={c.brush.penPressure !== false}
+              onChange={(v) => c.onBrush({ penPressure: v })}
+              hint={zh.options.penPressureHint}
+            />
+            <Check
+              key="penTilt"
+              label={zh.options.penTilt}
+              on={c.brush.penTilt !== false}
+              onChange={(v) => c.onBrush({ penTilt: v })}
+              hint={zh.options.penTiltHint}
+            />
+            <Check
+              key="penEraser"
+              label={zh.options.penEraser}
+              on={c.brush.penEraser !== false}
+              onChange={(v) => c.onBrush({ penEraser: v })}
+              hint={zh.options.penEraserHint}
+            />
+          </div>
+          <div className="opt-extra-row">
+            <Slider
+              key="penTiltStrength"
+              label={zh.options.penTiltStrength}
+              min={0}
+              max={100}
+              value={c.brush.penTiltStrength ?? 70}
+              onChange={(v) => c.onBrush({ penTiltStrength: v })}
+              suffix="%"
+              hint={zh.options.penTiltStrengthHint}
+            />
+          </div>
           <div className="opt-extra-row">
             <Check
               key="pulled"

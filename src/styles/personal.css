@@ -1,0 +1,324 @@
+/**
+ * 个性化样式（贝塔）。
+ *
+ * 三块能力：
+ *  1. 背景层 `.app-bg`：固定铺底，画布外框 / 开始页透出的「底」。
+ *     - 基色 = 主题 --bg，所以默认外观与改动前完全一致；
+ *     - 导入背景图后叠一层模糊（背景磨砂），强度由 --app-bg-frost（0–100）决定；
+ *     - 全局玻璃开启时再叠柔和光晕，让玻璃「有东西可透」而不是透一片纯色。
+ *  2. 窗口磨砂 `[data-window-frost="on"]`：整窗透出桌面（壁纸 / 其它软件），
+ *     靠 Tauri 的 Acrylic 把桌面磨砂；页面在这些区域变透明，让磨砂透出来。
+ *  3. 全局磨砂 `[data-global-frost="on"]`：**真正半透明玻璃**。
+ *     - 关键：底色必须带 alpha。早期版本用 `color-mix(surface 72%, frost 10%)`
+ *       两个不透明色混合，结果仍是 100% 不透明，backdrop-filter 完全白做，
+ *       观感只剩一层染色模糊 —— 也就是用户说的「糊」。
+ *     - 现在是：半透明 tint + 斜向光泽 + blur/saturate/brightness + 亮边 + 内高光 + 双层阴影。
+ *     - 超椭圆 --squircle 不再 clip 到玻璃卡本体：clip-path 会创建裁剪上下文，
+ *       在 WebView2 下会切断 backdrop-filter 的采样区域，且裁不出圆角高光边。
+ *       本体改用 --r-glass 大圆角；超椭圆留给预览与装饰层。
+ *
+ * 磨砂色调 --frost-color、玻璃参数、背景图 URL --app-bg-image、UI 字体 --ui-font、
+ * 界面缩放 --ui-scale 都由 App 在运行时写进 :root。
+ */
+
+:root {
+  /* 默认磨砂色（高饱和蓝），运行时被偏好覆盖 */
+  --frost-color: #3d6bff;
+
+  /* 0–100 的背景磨砂强度；默认 80 */
+  --app-bg-frost: 80;
+
+  /* UI 字体族回退栈（系统默认），运行时被偏好覆盖 */
+  --ui-font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
+    "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* ---------- 真正半透明玻璃参数（App 运行时注入） ----------
+     --glass-alpha 是 0–1 的小数；其余都是带单位的 CSS 值，直接进 filter / color。 */
+  --glass-tint-rgb: 61, 107, 255;
+  --glass-alpha: 0.18;
+  --glass-blur: 22px;
+  --glass-sat: 165%;
+  --glass-sheen: 0.18;
+  --r-glass: 26px;
+
+  /** 超椭圆（superellipse，n=5）裁剪路径：120 点多边形。
+   *  保留给预览 / 装饰层用，不再 clip 到玻璃卡本体（理由见文件头）。 */
+  --squircle: polygon(
+    100.00% 50.00%, 99.97% 65.36%, 99.89% 70.26%, 99.75% 73.81%, 99.56% 76.68%,
+    99.31% 79.12%, 99.01% 81.26%, 98.64% 83.17%, 98.22% 84.89%, 97.74% 86.46%,
+    97.20% 87.89%, 96.60% 89.21%, 95.94% 90.43%, 95.20% 91.54%, 94.40% 92.58%,
+    93.53% 93.53%, 92.58% 94.40%, 91.54% 95.20%, 90.43% 95.94%, 89.21% 96.60%,
+    87.89% 97.20%, 86.46% 97.74%, 84.89% 98.22%, 83.17% 98.64%, 81.26% 99.01%,
+    79.12% 99.31%, 76.68% 99.56%, 73.81% 99.75%, 70.26% 99.89%, 65.36% 99.97%,
+    50.00% 100.00%, 34.64% 99.97%, 29.74% 99.89%, 26.19% 99.75%, 23.32% 99.56%,
+    20.88% 99.31%, 18.74% 99.01%, 16.83% 98.64%, 15.11% 98.22%, 13.54% 97.74%,
+    12.11% 97.20%, 10.79% 96.60%, 9.57% 95.94%, 8.46% 95.20%, 7.42% 94.40%,
+    6.47% 93.53%, 5.60% 92.58%, 4.80% 91.54%, 4.06% 90.43%, 3.40% 89.21%,
+    2.80% 87.89%, 2.26% 86.46%, 1.78% 84.89%, 1.36% 83.17%, 0.99% 81.26%,
+    0.69% 79.12%, 0.44% 76.68%, 0.25% 73.81%, 0.11% 70.26%, 0.03% 65.36%,
+    0.00% 50.00%, 0.03% 34.64%, 0.11% 29.74%, 0.25% 26.19%, 0.44% 23.32%,
+    0.69% 20.88%, 0.99% 18.74%, 1.36% 16.83%, 1.78% 15.11%, 2.26% 13.54%,
+    2.80% 12.11%, 3.40% 10.79%, 4.06% 9.57%, 4.80% 8.46%, 5.60% 7.42%,
+    6.47% 6.47%, 7.42% 5.60%, 8.46% 4.80%, 9.57% 4.06%, 10.79% 3.40%,
+    12.11% 2.80%, 13.54% 2.26%, 15.11% 1.78%, 16.83% 1.36%, 18.74% 0.99%,
+    20.88% 0.69%, 23.32% 0.44%, 26.19% 0.25%, 29.74% 0.11%, 34.64% 0.03%,
+    50.00% 0.00%, 65.36% 0.03%, 70.26% 0.11%, 73.81% 0.25%, 76.68% 0.44%,
+    79.12% 0.69%, 81.26% 0.99%, 83.17% 1.36%, 84.89% 1.78%, 86.46% 2.26%,
+    87.89% 2.80%, 89.21% 3.40%, 90.43% 4.06%, 91.54% 4.80%, 92.58% 5.60%,
+    93.53% 6.47%, 94.40% 7.42%, 95.20% 8.46%, 95.94% 9.57%, 96.60% 10.79%,
+    97.20% 12.11%, 97.74% 13.54%, 98.22% 15.11%, 98.64% 16.83%, 99.01% 18.74%,
+    99.31% 20.88%, 99.56% 23.32%, 99.75% 26.19%, 99.89% 29.74%, 99.97% 34.64%
+  );
+}
+
+/* ---------- 1. 背景层 ---------- */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: var(--bg);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* 玻璃开启时，给纯色底加两团柔和光晕 —— 玻璃才有层次可透，不会像透一片白墙。 */
+.app-bg::before {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(circle at 16% 20%, rgba(var(--glass-tint-rgb), 0.30), transparent 46%),
+    radial-gradient(circle at 84% 78%, rgba(var(--glass-tint-rgb), 0.20), transparent 50%),
+    radial-gradient(circle at 60% 8%, rgba(255, 255, 255, 0.16), transparent 42%);
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+[data-global-frost="on"] .app-bg::before {
+  opacity: 1;
+}
+
+/* 背景图：cover 铺满，放大一档避免模糊把边缘啃出透明，再按强度磨砂。 */
+.app-bg-img {
+  position: absolute;
+  inset: -8%;
+  background-image: var(--app-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: blur(calc(var(--app-bg-frost, 80) * 0.6px)) saturate(120%);
+  transform: scale(1.06);
+  transition:
+    filter var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+/* ---------- 2. 窗口磨砂（透出桌面） ---------- */
+/* 这些区域在窗口磨砂时变透明，让 Tauri Acrylic 把桌面磨砂透出来。 */
+[data-window-frost="on"] html,
+[data-window-frost="on"] body {
+  background: transparent;
+}
+
+[data-window-frost="on"] .app-bg {
+  background-color: transparent;
+}
+
+[data-window-frost="on"] .app-bg::before,
+[data-window-frost="on"] .app-bg-img {
+  opacity: 0;
+}
+
+/* 编辑壳本体也透明，露出磨砂后的桌面（画布 / 面板仍是实心，不受影响）。 */
+[data-window-frost="on"] .editor {
+  background: transparent;
+}
+
+/* ---------- 3. 全局磨砂（真正半透明玻璃） ---------- */
+/*
+ * 选中一类「面」做玻璃卡：顶栏、工具轨、右侧面板坞与单个面板、状态栏、
+ * 菜单条、对话框、浮层、开始页的顶/底栏、卡片。
+ * 比它们各自 `.xxx { background: var(--surface) }` 特异性高（属性 + 类），
+ * 所以这里一定能盖住；与加载顺序无关。
+ */
+[data-global-frost="on"] .editor-top,
+[data-global-frost="on"] .toolrail,
+[data-global-frost="on"] .dock,
+[data-global-frost="on"] .dock-panel,
+[data-global-frost="on"] .statusbar,
+[data-global-frost="on"] .menubar,
+[data-global-frost="on"] .modal,
+[data-global-frost="on"] .popover,
+[data-global-frost="on"] .card,
+[data-global-frost="on"] .start-top,
+[data-global-frost="on"] .start-foot {
+  /* 三层都是半透明，叠完整体 alpha 仍远小于 1 ——  backdrop-filter 才有意义 */
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, calc(var(--glass-sheen) * 0.9)) 0%,
+      rgba(255, 255, 255, 0) 48%
+    ),
+    rgba(var(--glass-tint-rgb), var(--glass-alpha)),
+    color-mix(in srgb, var(--surface) 12%, transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  /* 1px 亮边 + 顶部内高光 + 底部暗边 + 双层外阴影：玻璃的「厚度」 */
+  border: 1px solid rgba(255, 255, 255, calc(var(--glass-sheen) * 2.4));
+  border-radius: var(--r-glass);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(var(--glass-sheen) * 2.8)),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.05),
+    0 10px 32px rgba(20, 20, 30, 0.16),
+    0 2px 8px rgba(20, 20, 30, 0.06);
+  transition:
+    background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+/* 全局磨砂时，编辑壳底色透明，玻璃卡才能「磨」到后面的背景图 / 光晕 / 桌面。 */
+[data-global-frost="on"] .editor {
+  background: transparent;
+}
+
+/* 面板坞里的单面板去掉自身描边与阴影，避免和坞的玻璃卡叠出双线。 */
+[data-global-frost="on"] .dock-panel {
+  border: none;
+  box-shadow: none;
+}
+
+/* 对话框遮罩只做很轻的压暗，不再叠一层重模糊 —— 否则玻璃卡被二次虚化。 */
+[data-global-frost="on"] .modal-mask {
+  background: color-mix(in srgb, var(--mask) 42%, transparent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* 玻璃卡标题与正文保持可读对比：分割线用半透明亮边而不是实心灰线。 */
+[data-global-frost="on"] .dock-head,
+[data-global-frost="on"] .modal-head,
+[data-global-frost="on"] .editor-top {
+  border-bottom: 1px solid rgba(255, 255, 255, calc(var(--glass-sheen) * 1.6));
+}
+
+/* ---------- 4. 界面缩放 ---------- */
+/* 由 App 写入 --ui-scale（uiScale / 100，如 1.2）。zoom 在 WebView2(Chromium) 稳定。 */
+#root {
+  zoom: var(--ui-scale, 1);
+}
+
+/* ---------- 5. 偏好设置：个性化页专属控件 ---------- */
+.frost-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.frost-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-full);
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.frost-swatch:hover {
+  transform: scale(1.12);
+}
+
+.frost-swatch.is-on {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* 背景图预览 */
+.frost-preview {
+  margin-top: var(--sp-3);
+  height: 84px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background-image: var(--app-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.frost-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 84px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  margin-top: var(--sp-3);
+}
+
+/* 玻璃实时预览：与上面第 3 段完全复用同一套 --glass-* 变量，所见即所得。 */
+.glass-preview {
+  position: relative;
+  margin-top: var(--sp-3);
+  height: 96px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 18% 24%, rgba(var(--glass-tint-rgb), 0.55), transparent 48%),
+    radial-gradient(circle at 82% 76%, rgba(var(--glass-tint-rgb), 0.35), transparent 52%),
+    var(--surface-3);
+}
+
+.glass-preview::before {
+  content: "";
+  position: absolute;
+  inset: 14px 22px;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, calc(var(--glass-sheen) * 0.9)) 0%,
+      rgba(255, 255, 255, 0) 48%
+    ),
+    rgba(var(--glass-tint-rgb), var(--glass-alpha)),
+    color-mix(in srgb, var(--surface) 12%, transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  border: 1px solid rgba(255, 255, 255, calc(var(--glass-sheen) * 2.4));
+  border-radius: var(--r-glass);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(var(--glass-sheen) * 2.8)),
+    0 10px 32px rgba(20, 20, 30, 0.16);
+}
+
+.glass-preview::after {
+  content: "玻璃质感";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+}
+
+.ui-font-select {
+  height: 30px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0 var(--sp-2);
+}
+
+.ui-font-select:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}

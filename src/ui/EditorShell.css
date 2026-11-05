@@ -11,7 +11,9 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  /* 底色交给固定的 .app-bg 层（基色 + 背景图 + 磨砂），
+     这里透明，背景图 / 全局磨砂 / 窗口磨砂才能透出来。默认外观不变。 */
+  background: transparent;
   overflow: hidden;
 }
 

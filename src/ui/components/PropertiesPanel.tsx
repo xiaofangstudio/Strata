@@ -8,7 +8,7 @@
  *     与 PS / PhotoCraft 的「调整」面板同一套用法。
  */
 import { Fragment, useState } from "react";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import { activeLayer, type StrataDoc } from "../../core/document";
 import {
   ADJUST_DEFS,

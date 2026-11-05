@@ -6,7 +6,7 @@
  * 而不是静默退回欢迎页让人以为没反应。
  */
 import BrandMark from "./BrandMark";
-import { zh } from "../../i18n/zh-CN";
+import { zh } from "../../i18n";
 import "./BootScreen.css";
 
 interface Props {
