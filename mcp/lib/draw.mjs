@@ -11,7 +11,7 @@
 import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 
 /** 中文字体回退链：优先思源/雅黑，再退黑体，最后 sans-serif。 */
-const ZH_STACK = '"Noto Sans SC","Microsoft YaHei","SimHei",sans-serif';
+const ZH_STACK = '"Noto Sans SC","Noto Sans CJK SC","Microsoft YaHei","SimHei",sans-serif';
 const EN_STACK = '"Inter","Segoe UI",Arial,sans-serif';
 
 /** 是否装了中文字体（决定默认字体栈）。 */
@@ -19,8 +19,10 @@ let zhProbe = null;
 function hasChineseFont() {
   if (zhProbe !== null) return zhProbe;
   try {
+    // Linux（fonts-noto-cjk 包）的家族名是「Noto Sans CJK SC」，与 Google 版
+    // 「Noto Sans SC」不是同一个名字，探测必须两种都认，否则误判无中文字体。
     zhProbe = GlobalFonts.families.some((f) =>
-      /Noto Sans SC|Microsoft YaHei|SimHei|SimSun/i.test(f.family),
+      /Noto Sans (CJK )?SC|Microsoft YaHei|SimHei|SimSun/i.test(f.family),
     );
   } catch {
     zhProbe = false;
