@@ -184,6 +184,10 @@ export interface Prefs {
   /* ---------------- 界面动效 ---------------- */
   /** 动效档位：full 完整 / reduced 精简（保留淡入去位移）/ off 关闭 */
   motion: "full" | "reduced" | "off";
+  /** 触控板自然滚动方向（两指平移是否按 OS 方向）；false 时反向。 */
+  touchpadNaturalScroll: boolean;
+  /** 沉浸光效：鼠标悬停时柔和的跟随光斑。 */
+  hoverGlow: boolean;
 }
 
 /** UI 字体族选项：id → 完整的 font-family 回退栈。空 id 即系统默认。 */
@@ -278,7 +282,7 @@ export const DEFAULT_PREFS: Prefs = {
   /** 背景磨砂：整个窗口都磨砂（透出桌面），关闭全局磨砂时可用 */
   windowFrost: false,
   /** 磨砂色调（高饱和十六进制色），默认高饱和蓝 */
-  frostColor: "#3d6bff",
+  frostColor: "#e8edf5",
   /** UI 字体族 id（空 = 系统默认） */
   uiFont: "",
   /** UI 字号缩放 80–140（%），默认 100 */
@@ -290,6 +294,8 @@ export const DEFAULT_PREFS: Prefs = {
   glassSheen: 18,
   /* 界面动效：默认完整 */
   motion: "full",
+  touchpadNaturalScroll: true,
+  hoverGlow: true,
 };
 
 const MAX_CUSTOM_BRUSHES = 24;
@@ -353,7 +359,8 @@ function read(): Prefs {
         globalFrost: bool(v.globalFrost, dp.globalFrost),
         windowFrost: bool(v.windowFrost, dp.windowFrost),
         frostColor: typeof v.frostColor === "string" ? v.frostColor : dp.frostColor,
-        uiFont: typeof v.uiFont === "string" ? v.uiFont : dp.uiFont,
+        // 迁移：旧版默认是高饱和蓝，那是「没改过磨砂色」的信号 —— 换成中性白磨砂。
+        ...(v.frostColor === "#3d6bff" ? { frostColor: "#e8edf5" } : {}),        uiFont: typeof v.uiFont === "string" ? v.uiFont : dp.uiFont,
         uiScale: clampNum(v.uiScale, 80, 140, dp.uiScale),
 
         /* 真正半透明玻璃 + 界面动效 */
@@ -362,6 +369,8 @@ function read(): Prefs {
         glassSat: clampNum(v.glassSat, 100, 200, dp.glassSat),
         glassSheen: clampNum(v.glassSheen, 0, 40, dp.glassSheen),
         motion: v.motion === "reduced" || v.motion === "off" ? v.motion : dp.motion,
+        touchpadNaturalScroll: bool(v.touchpadNaturalScroll, dp.touchpadNaturalScroll),
+        hoverGlow: bool(v.hoverGlow, dp.hoverGlow),
       };
     }
   } catch {

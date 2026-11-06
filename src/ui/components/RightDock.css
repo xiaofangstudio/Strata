@@ -336,3 +336,42 @@
   background: var(--surface-2);
   border-radius: var(--r-full);
 }
+
+/* ---- 质感精修 2026-11-06 ---- */
+
+/* 面板坞 / 开关轨 / 底栏 / 分隔条 / 标题条：半透明细边替代实色线，边界更透气 */
+.dock,
+.dock-rail,
+.dock-footer,
+.dock-split,
+.dock-head {
+  border-color: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+/* 面板标题区：极淡的分层渐变 + 顶缘内高光，和下方内容拉开一层 */
+.dock-head {
+  background-image: linear-gradient(color-mix(in srgb, var(--text) 3%, transparent), transparent);
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 开关轨按钮：hover / 选中加 1px 内高光，左沿蓝条（::before）原样保留 */
+.dock-rail-btn {
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.dock-rail-btn:hover {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+.dock-rail-btn.is-on {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft), inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 计数胶囊 / 分隔条抓握：半透明边与 hover 内高光 */
+.dock-head-count {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
+}
+.dock-split:hover {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}

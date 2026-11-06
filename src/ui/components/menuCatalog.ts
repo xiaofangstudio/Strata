@@ -572,6 +572,7 @@ const LABEL_ZH: Record<string, string> = {
   "Send to Back": "置为底层",
   "Set Measurement Scale…": "设置测量比例…",
   "Settings…": "设置…",
+  "Personalization…": "个性化…",
   "Shadows/Highlights…": "阴影/高光…",
   Shape: "形状",
   "Shape Blur…": "形状模糊…",

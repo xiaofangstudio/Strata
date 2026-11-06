@@ -72,7 +72,10 @@ mod tiff;
 mod tiffep;
 mod tone;
 
-#[cfg(feature = "testgen")]
+// 测试生成器既供 `cargo test` 的单元测试构造合成 RAW，也可通过 feature 单独启用
+// （给外部造样本用）。只写 feature 会让默认 `cargo test --lib` 编译不过：
+// 各解码器的 #[cfg(test)] 模块都要 import 这里的构造器。
+#[cfg(any(test, feature = "testgen"))]
 pub mod testgen;
 
 pub use crate::strata_raw::color::{Calibration, ColorInfo, Mat3};

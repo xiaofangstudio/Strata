@@ -3696,10 +3696,7 @@ function wheelVector(x, y) {
   const amp = Math.min(1, len) * 0.28;
   return [(r - 1 / 3) * amp * 3, (g - 1 / 3) * amp * 3, (b - 1 / 3) * amp * 3];
 }
-function applyGrade(src, p, curves) {
-  const out = makeBuffer(src.width, src.height);
-  const d = src.data;
-  const o = out.data;
+function gradeChannelLuts(p, curves) {
   const num = (k, def = 0) => {
     const v = p[k];
     return typeof v === "number" && Number.isFinite(v) ? v : def;
@@ -3729,12 +3726,9 @@ function applyGrade(src, p, curves) {
     1 / Math.max(0.05, 1 + num("gammaB") / 100 * 0.9)
   ];
   const master = curveToTable(curves?.rgb);
-  const lutR = curveToTable(curves?.r);
-  const lutG = curveToTable(curves?.g);
-  const lutB = curveToTable(curves?.b);
-  const buildLut = (c) => {
-    const t = new Uint8ClampedArray(256);
-    const perCh = c === 0 ? lutR : c === 1 ? lutG : lutB;
+  const perCh = [curveToTable(curves?.r), curveToTable(curves?.g), curveToTable(curves?.b)];
+  const build = (c) => {
+    const t = new Float32Array(256);
     for (let i = 0; i < 256; i += 1) {
       let v = i / 255;
       v *= gain[c];
@@ -3744,14 +3738,22 @@ function applyGrade(src, p, curves) {
       v = (v - pivot) * contrast + pivot;
       v = clamp012(v);
       v = master[Math.round(v * 255)];
-      v = perCh[Math.round(clamp012(v) * 255)];
-      t[i] = Math.round(clamp012(v) * 255);
+      v = perCh[c][Math.round(clamp012(v) * 255)];
+      t[i] = clamp012(v);
     }
     return t;
   };
-  const rLut = buildLut(0);
-  const gLut = buildLut(1);
-  const bLut = buildLut(2);
+  return { r: build(0), g: build(1), b: build(2) };
+}
+function applyGrade(src, p, curves) {
+  const out = makeBuffer(src.width, src.height);
+  const d = src.data;
+  const o = out.data;
+  const num = (k, def = 0) => {
+    const v = p[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : def;
+  };
+  const luts = gradeChannelLuts(p, curves);
   const wheels = {
     dark: wheelVector(num("darkX") / 100, num("darkY") / 100),
     shad: wheelVector(num("shadX") / 100, num("shadY") / 100),
@@ -3789,9 +3791,9 @@ function applyGrade(src, p, curves) {
       o[k + 3] = 0;
       continue;
     }
-    let r = rLut[d[k]] / 255;
-    let g = gLut[d[k + 1]] / 255;
-    let b = bLut[d[k + 2]] / 255;
+    let r = luts.r[d[k]];
+    let g = luts.g[d[k + 1]];
+    let b = luts.b[d[k + 2]];
     if (needPixel) {
       let l = lumaOf(r, g, b);
       const wDark = (1 - l) * (1 - l) * (1 - l);

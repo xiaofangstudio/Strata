@@ -406,3 +406,133 @@ button.motion-press:active {
   cursor: pointer;
   white-space: nowrap;
 }
+
+/* ---- Toast 防溢出：长提示不折成竖条 ---- */
+.toast {
+  max-width: min(560px, 80vw);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 沉浸光效（prefs.hoverGlow → :root[data-glow]）：悬停处柔和跟随光斑 ---- */
+[data-glow="on"] .toolrail .tool-btn,
+[data-glow="on"] .menubar > button,
+[data-glow="on"] .dock-panel,
+[data-glow="on"] .pref-sec,
+[data-glow="on"] .modal,
+[data-glow="on"] .optbar-pop,
+[data-glow="on"] .menu-pop {
+  position: relative;
+}
+[data-glow="on"] .toolrail .tool-btn::after,
+[data-glow="on"] .menubar > button::after,
+[data-glow="on"] .dock-panel::after,
+[data-glow="on"] .pref-sec::after,
+[data-glow="on"] .modal::after,
+[data-glow="on"] .optbar-pop::after,
+[data-glow="on"] .menu-pop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast, 120ms) var(--ease, ease);
+  background: radial-gradient(
+    160px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(139, 156, 255, 0.16),
+    transparent 70%
+  );
+}
+[data-glow="on"] .toolrail .tool-btn:hover::after,
+[data-glow="on"] .menubar > button:hover::after,
+[data-glow="on"] .dock-panel:hover::after,
+[data-glow="on"] .pref-sec:hover::after,
+[data-glow="on"] .modal:hover::after,
+[data-glow="on"] .optbar-pop:hover::after,
+[data-glow="on"] .menu-pop:hover::after {
+  opacity: 1;
+}
+
+/* ---- 光效 v2（覆盖上方淡蓝紫版）：真实的白色镜面反射 ----
+   两层：① 斜向白色高光带，hover 时从右上扫到左下（玻璃反光扫过的样子）；
+        ② 白色跟随光斑，亮度提到真实「白光」级别。 */
+[data-glow="on"] .toolrail .tool-btn::after,
+[data-glow="on"] .menubar > button::after,
+[data-glow="on"] .dock-panel::after,
+[data-glow="on"] .pref-sec::after,
+[data-glow="on"] .modal::after,
+[data-glow="on"] .optbar-pop::after,
+[data-glow="on"] .menu-pop::after {
+  background:
+    linear-gradient(
+      105deg,
+      transparent 32%,
+      rgba(255, 255, 255, 0.24) 45%,
+      rgba(255, 255, 255, 0.52) 50%,
+      rgba(255, 255, 255, 0.24) 55%,
+      transparent 68%
+    ),
+    radial-gradient(
+      190px circle at var(--mx, 50%) var(--my, 50%),
+      rgba(255, 255, 255, 0.26),
+      rgba(255, 255, 255, 0.10) 45%,
+      transparent 68%
+    );
+  background-size: 320% 100%, 100% 100%;
+  background-position: 130% 0, 0 0;
+  transition:
+    background-position 0.7s var(--ease, ease),
+    opacity var(--dur-fast, 120ms) var(--ease, ease);
+}
+[data-glow="on"] .toolrail .tool-btn:hover::after,
+[data-glow="on"] .menubar > button:hover::after,
+[data-glow="on"] .dock-panel:hover::after,
+[data-glow="on"] .pref-sec:hover::after,
+[data-glow="on"] .modal:hover::after,
+[data-glow="on"] .optbar-pop:hover::after,
+[data-glow="on"] .menu-pop:hover::after {
+  background-position: -70% 0, 0 0;
+}
+
+/* ---- 光效 v3：修复浮层溢出 + 全按钮真实反光 ----
+   上一版给 .modal/.menu-pop/.optbar-pop 强制 position:relative，顶掉了它们原本的
+   fixed/absolute，浮层掉进文档流 → 严重溢出。这里显式还原，并把光效铺到所有按钮。 */
+[data-glow="on"] .modal { position: fixed; }
+[data-glow="on"] .menu-pop,
+[data-glow="on"] .optbar-pop { position: absolute; }
+[data-glow="on"] button,
+[data-glow="on"] .menu-row,
+[data-glow="on"] .dock-panel,
+[data-glow="on"] .pref-sec { position: relative; }
+
+/* 每个按钮都有两层真实白光：斜向反光带（hover 扫过）+ 跟随白色光斑 */
+[data-glow="on"] button::after,
+[data-glow="on"] .menu-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    linear-gradient(105deg, transparent 32%, rgba(255,255,255,0.22) 45%,
+      rgba(255,255,255,0.50) 50%, rgba(255,255,255,0.22) 55%, transparent 68%),
+    radial-gradient(150px circle at var(--mx, 50%) var(--my, 50%),
+      rgba(255,255,255,0.28), rgba(255,255,255,0.10) 46%, transparent 70%);
+  background-size: 320% 100%, 100% 100%;
+  background-position: 130% 0, 0 0;
+  transition: background-position 0.7s var(--ease, ease), opacity var(--dur-fast, 120ms);
+}
+[data-glow="on"] button:hover::after,
+[data-glow="on"] .menu-row:hover::after {
+  opacity: 1;
+  background-position: -70% 0, 0 0;
+}
+/* 按钮本体被光「照到」：顶部镜面高光 + 轻微外发光 */
+[data-glow="on"] button:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.10),
+    0 0 14px rgba(255, 255, 255, 0.16);
+}

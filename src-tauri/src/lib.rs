@@ -117,6 +117,43 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 窗口磨砂（Windows Acrylic）的真实开关。
+///
+/// 不用 `Window::setEffects` 的原因（Tauri 2.12 源码实证）：
+/// `vibrancy::set_window_effects` 在 Windows 分支调用 `apply_acrylic` 后**丢弃**了
+/// Result 并一律返回 `Ok(())`，而且只采用 effects 数组里的第一个效果。前端因此
+/// 拿不到「系统其实没采纳 Acrylic」这个事实 —— 会出现开关显示已开、窗口却不磨砂。
+/// 这里直接调用并把失败真返回给前端，失败时浮出可见降级提示，不假装成功。
+/// macOS 走 `setEffects(UnderWindowBackground)`，Linux 官方明确不支持，均由前端分支处理。
+#[tauri::command]
+fn window_frost_acrylic(
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    color: Option<(u8, u8, u8)>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if enabled {
+            let (r, g, b) = color.unwrap_or((232, 237, 245));
+            // alpha 传 1：window-vibrancy 对 0 会自行改成 1，显式写更清楚。
+            window_vibrancy::apply_acrylic(&window, Some((r, g, b, 1)))
+                .map_err(|e| format!("系统 Acrylic 不可用：{e}"))?;
+        } else {
+            // 关闭时把三种系统背景效果都清干净，避免残留一层模糊。
+            window_vibrancy::clear_acrylic(&window)
+                .map_err(|e| format!("清除 Acrylic 失败：{e}"))?;
+            let _ = window_vibrancy::clear_mica(&window);
+            let _ = window_vibrancy::clear_blur(&window);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, enabled, color);
+        Err("当前平台没有 Windows Acrylic（macOS / Linux 由各自分支处理）".to_string())
+    }
+}
+
 /// 启动意图：这次进程到底是「用户主动打开软件」还是「用 Strata 打开某个文件」。
 ///
 /// 两件事在界面上必须分开：前者进欢迎页，后者直接进编辑器。
@@ -228,6 +265,7 @@ pub fn run() {
             files_stat,
             quit_app,
             app_info,
+            window_frost_acrylic,
             launch_intent,
             list_dir,
             exr::exr_part_info,

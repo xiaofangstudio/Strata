@@ -24,7 +24,6 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 exr = "1.74.0"
-windows = { version = "0.61.3", features = ["Win32_Devices_ImageAcquisition", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 # 移植自 ArtCraft PhotoCraft 的纯 Rust 解码 / 色彩管理依赖（均无 C/C++ 绑定）
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 zune-jpeg = "0.5"
@@ -36,6 +35,21 @@ rayon = "1"
 # rust-version = 1.85，项目 Cargo.toml 的 rust-version = 1.77 是历史值；
 # 当前工具链可正常编译，此不一致与本次 feature 改动无关。
 heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"] }
+
+# WIA 扫描是 Windows 图像采集 COM，macOS / Linux 上既没有这套 API 也没有链接库。
+# 依赖必须按 target 门控，否则 CI 的三平台原生构建在 macOS / Linux runner 上
+# 会因为找不到 windows crate 的 Win32 符号 / 导入库而失败（「只能一次成功」的硬前提）。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_Devices_ImageAcquisition", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
+# 直接调用系统 Acrylic 并拿到 Result：Tauri 的 setEffects 内部会丢弃 apply_acrylic
+# 的错误并一律返回 Ok，前端无法判断磨砂是否真的生效（那就是「假功能」）。
+# 只挂 Windows target，macOS / Linux 不编译这个 crate。
+window-vibrancy = "0.8.1"
+
+# 只给单元测试用：移植源码的 strata_raw::testgen::baseline_jpeg 用它生成合成 JPEG，
+# 各解码器的 #[cfg(test)] 模块都要经 testgen 构造样本。发布构建不链接这个 crate。
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 # 移植源码里的 testgen 模块是可选特性，声明一下以免 cfg 检查告警
 [features]

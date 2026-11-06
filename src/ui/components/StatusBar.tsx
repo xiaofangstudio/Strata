@@ -14,9 +14,13 @@ interface Props {
   /** 当前缩放比例，1 表示 100% */
   scale: number;
   tool: ToolId;
+  /** 点击尺寸 → 改图像大小（打印店那种改像素直接开打） */
+  onSizeClick?: () => void;
+  /** 右键尺寸 → 改画布大小（不改内容、只扩/裁画布） */
+  onCanvasClick?: () => void;
 }
 
-export default function StatusBar({ doc, scale, tool }: Props) {
+export default function StatusBar({ doc, scale, tool, onSizeClick, onCanvasClick }: Props) {
   return (
     <footer className="statusbar">
       <span className="st-item">
@@ -31,9 +35,18 @@ export default function StatusBar({ doc, scale, tool }: Props) {
 
       <span className="st-item">
         <span className="st-key">{zh.status.size}</span>
-        <span className="st-val">
+        <button
+          type="button"
+          className="st-size-edit"
+          onClick={onSizeClick}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onCanvasClick?.();
+          }}
+          title={`${zh.dialog.imageSizeTitle} / ${zh.dialog.canvasSizeTitle}`}
+        >
           {doc.width} × {doc.height}
-        </span>
+        </button>
       </span>
 
       <span className="st-item">

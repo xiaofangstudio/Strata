@@ -32,4 +32,11 @@
   font-size: 10px;
   opacity: 0.75;
   white-space: nowrap;
+  /* 窄 dock（290px）下三项统计放不下时折行，不无声裁切 */
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 2px 12px;
+}
+.hist-stats > span {
+  min-width: 0;
 }

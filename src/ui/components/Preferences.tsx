@@ -66,6 +66,11 @@ interface Props {
  */
 const GROUPS: { id: string; label: string; pages: { id: PrefPage; label: string }[] }[] = [
   {
+    id: "personal",
+    label: "个性化",
+    pages: [{ id: "personal", label: "个性化" }],
+  },
+  {
     id: "general",
     label: "常规",
     pages: [
@@ -140,8 +145,9 @@ function localStoreKb(): number {
   }
 }
 
-/** 磨砂色预设：高饱和七色（红橙黄绿青蓝紫）。 */
+/** 磨砂色预设：首位是中性白（真磨砂玻璃的默认观感），其余高饱和七色供着色。 */
 const FROST_COLORS = [
+  "#e8edf5",
   "#ff3b30",
   "#ff9500",
   "#ffd60a",
@@ -748,6 +754,9 @@ export default function Preferences({
 
           {tab === "personal" && (
             <>
+              <p className="pref-note" style={{ marginTop: 0 }}>
+                {zh.preferences.personal.title}：{zh.preferences.personal.bgImageHint}
+              </p>
               <section className="pref-sec">
                 <h3 className="pref-h">{zh.preferences.personal.bgImage}</h3>
                 <div className="pref-row">
@@ -802,12 +811,7 @@ export default function Preferences({
               </section>
 
               <section className="pref-sec">
-                <h3 className="pref-h">
-                  {zh.preferences.personal.globalFrost}
-                  <span className="badge" style={{ marginLeft: 8 }}>
-                    {zh.preferences.personal.beta}
-                  </span>
-                </h3>
+                <h3 className="pref-h">{zh.preferences.personal.globalFrost}</h3>
                 <div className="pref-seg">
                   <button
                     type="button"
@@ -967,6 +971,54 @@ export default function Preferences({
                   ))}
                 </div>
                 <p className="pref-note">{zh.preferences.personal.motionHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.touchpad}</h3>
+                <div className="pref-row">
+                  <span>{zh.preferences.personal.touchpadNaturalScroll}</span>
+                  <div className="pref-seg">
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${prefs.touchpadNaturalScroll ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ touchpadNaturalScroll: true })}
+                    >
+                      {zh.panel.yes}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${!prefs.touchpadNaturalScroll ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ touchpadNaturalScroll: false })}
+                    >
+                      {zh.panel.no}
+                    </button>
+                  </div>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.touchpadNaturalScrollHint}</p>
+              </section>
+
+              <section className="pref-sec">
+                <h3 className="pref-h">{zh.preferences.personal.hoverGlow}</h3>
+                <div className="pref-row">
+                  <span>{zh.preferences.personal.hoverGlow}</span>
+                  <div className="pref-seg">
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${prefs.hoverGlow ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ hoverGlow: true })}
+                    >
+                      {zh.panel.yes}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pref-seg-btn${!prefs.hoverGlow ? " is-on" : ""}`}
+                      onClick={() => setPrefs({ hoverGlow: false })}
+                    >
+                      {zh.panel.no}
+                    </button>
+                  </div>
+                </div>
+                <p className="pref-note">{zh.preferences.personal.hoverGlowHint}</p>
               </section>
 
               <section className="pref-sec">

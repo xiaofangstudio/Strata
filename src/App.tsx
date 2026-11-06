@@ -89,22 +89,39 @@ export default function App() {
     root.dataset.globalFrost = prefs.globalFrost ? "on" : "off";
     root.dataset.windowFrost = prefs.windowFrost ? "on" : "off";
     root.dataset.motion = prefs.motion;
-    root.style.setProperty("--frost-color", prefs.frostColor || "#3d6bff");
+    root.dataset.glow = prefs.hoverGlow ? "on" : "off";
+    // 平台标记：Mac 顶栏融合系统标题栏、Linux 玻璃降级、触控板手势系数都读它。
+    const ua = navigator.userAgent;
+    root.dataset.os = /Macintosh|Mac OS X/.test(ua)
+      ? "macos"
+      : /Linux/.test(ua) && !/Android/.test(ua)
+        ? "linux"
+        : "windows";
+    root.style.setProperty("--frost-color", prefs.frostColor || "#e8edf5");
     root.style.setProperty("--app-bg-frost", String(prefs.bgFrost));
     root.style.setProperty("--ui-scale", String(prefs.uiScale / 100));
     const stack = UI_FONT_STACKS[prefs.uiFont ?? ""] ?? UI_FONT_STACKS[""];
     root.style.setProperty("--ui-font", stack);
 
-    // 真正半透明玻璃：底色透明度、模糊、饱和、高光全部由偏好驱动（CSS 只消费）。
-    const c = hexToRgb(prefs.frostColor || "#3d6bff");
-    root.style.setProperty("--glass-tint-rgb", `${c.r}, ${c.g}, ${c.b}`);
-    root.style.setProperty("--glass-alpha", String(prefs.glassAlpha / 100));
-    root.style.setProperty("--glass-blur", `${prefs.glassBlur}px`);
-    root.style.setProperty("--glass-sat", `${prefs.glassSat}%`);
+    // 真毛玻璃：玻璃卡几乎无色，选色只留 0.08–0.14 的极淡均匀 tint。
+    // pastel 把高饱和色混白，避免整卡被染成一块彩色（保留「整卡淡淡那个颜色」）。
+    const c = hexToRgb(prefs.frostColor || "#e8edf5");
+    const pastel = (n: number) => Math.round(n * 0.35 + 255 * 0.65);
+    root.style.setProperty(
+      "--glass-tint-rgb",
+      `${pastel(c.r)}, ${pastel(c.g)}, ${pastel(c.b)}`,
+    );
+    // 把控件值映射到真玻璃观感（默认 18→0.10 tint、22→28px、165→180%），
+    // 控件仍全程可调；卡片与 .glass-preview 共用这组变量，所见即所得。
+    const tintAlpha = 0.08 + ((prefs.glassAlpha - 10) / 35) * 0.06;
+    root.style.setProperty("--glass-alpha", tintAlpha.toFixed(3));
+    root.style.setProperty("--glass-blur", `${prefs.glassBlur + 6}px`);
+    root.style.setProperty("--glass-sat", `${prefs.glassSat + 15}%`);
     root.style.setProperty("--glass-sheen", String(prefs.glassSheen / 100));
   }, [
     prefs.globalFrost,
     prefs.windowFrost,
+    prefs.hoverGlow,
     prefs.frostColor,
     prefs.bgFrost,
     prefs.uiFont,
@@ -141,30 +158,109 @@ export default function App() {
     };
   }, [prefs.bgImage]);
 
-  // 窗口磨砂：开 → Tauri Acrylic（透出桌面并磨砂）；关 → 清除。
+  // 窗口磨砂：系统级 vibrancy，三平台各走各的真实实现，不做「点了没反应」的假功能。
+  //   Windows —— 走 Rust 命令 window_frost_acrylic：直接调系统 Acrylic 并把失败
+  //              **真返回**。不能用 Tauri 的 setEffects：它内部丢弃 apply_acrylic
+  //              的 Result 一律返回 Ok，且只认 effects 数组第一个（写 Mica 兜底无效）。
+  //   macOS   —— NSVisualEffectView：UnderWindowBackground 透出桌面壁纸；
+  //              state / radius 是 macOS 专属参数（@tauri-apps/api/window.d.ts）。
+  //   Linux   —— 官方明确标注 Unsupported：不调用 API，直接降级并给出可见提示。
+  //  非 Tauri（浏览器 dev）—— 同样降级。
   useEffect(() => {
+    const root = document.documentElement;
     let cancelled = false;
-    import("@tauri-apps/api/window")
-      .then(async ({ getCurrentWindow, Effect }) => {
-        if (cancelled) return;
-        const win = getCurrentWindow();
-        if (!prefs.windowFrost) {
-          await win.clearEffects();
-          return;
+    // 每轮重新判定：先清掉上一轮的降级标记，成功就不再提示。
+    root.removeAttribute("data-window-frost-fallback");
+
+    const fallback = (reason: string) => {
+      if (!prefs.windowFrost || cancelled) return;
+      root.dataset.windowFrostFallback = "on";
+      console.info(`[Strata] 窗口磨砂不可用：${reason}，已降级`);
+    };
+
+    if (!("__TAURI_INTERNALS__" in window)) {
+      fallback("非 Tauri 窗口环境，没有系统窗口效果");
+      return;
+    }
+    // data-os 由上面的偏好 effect 写入（同一轮渲染里先行执行）。
+    const os = root.dataset.os;
+    if (os === "linux") {
+      fallback("Linux 不支持系统级窗口效果");
+      return;
+    }
+
+    (async () => {
+      try {
+        if (os === "macos") {
+          const { getCurrentWindow, Effect, EffectState } =
+            await import("@tauri-apps/api/window");
+          const win = getCurrentWindow();
+          if (!prefs.windowFrost) {
+            await win.clearEffects();
+          } else {
+            await win.setEffects({
+              effects: [Effect.UnderWindowBackground],
+              state: EffectState.FollowsWindowActiveState,
+              radius: 18,
+            });
+          }
+        } else {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const c = hexToRgb(prefs.frostColor || "#e8edf5");
+          await invoke("window_frost_acrylic", {
+            enabled: prefs.windowFrost,
+            color: [c.r, c.g, c.b],
+          });
         }
-        const c = hexToRgb(prefs.frostColor || "#3d6bff");
-        // Acrylic 的 alpha 跟玻璃透明度联动：越「透」越能看见桌面，不再固定 170。
-        const alpha = Math.round(80 + prefs.glassAlpha * 3);
-        await win.setEffects({
-          effects: [Effect.Acrylic],
-          color: [c.r, c.g, c.b, alpha] as [number, number, number, number],
-        });
-      })
-      .catch(() => {});
+        if (cancelled) return;
+        console.info(
+          os === "macos"
+            ? "[Strata] 窗口磨砂（NSVisualEffectView / UnderWindowBackground）已请求"
+            : prefs.windowFrost
+              ? "[Strata] 窗口磨砂（系统 Acrylic）已应用"
+              : "[Strata] 窗口磨砂（系统 Acrylic）已清除",
+        );
+      } catch (err) {
+        if (cancelled) return;
+        // 失败不能静默：写降级标记，personal.css 据此浮出一条可见提示。
+        if (prefs.windowFrost) root.dataset.windowFrostFallback = "on";
+        console.info("[Strata] 窗口磨砂设置失败：", err);
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [prefs.windowFrost, prefs.frostColor, prefs.glassAlpha]);
+  }, [prefs.windowFrost, prefs.frostColor]);
+
+  // 沉浸光效：光标进入光效宿主时，把相对坐标写进 --mx/--my（rAF 合帧，光斑跟随不抖）。
+  useEffect(() => {
+    if (!prefs.hoverGlow) return;
+    const SEL =
+      ".toolrail .tool-btn, .menubar > button, .dock-panel, .pref-sec, .modal, .optbar-pop, .menu-pop";
+    let raf = 0;
+    let lx = 0;
+    let ly = 0;
+    let target: HTMLElement | null = null;
+    const flush = () => {
+      raf = 0;
+      if (!target) return;
+      const r = target.getBoundingClientRect();
+      target.style.setProperty("--mx", `${lx - r.left}px`);
+      target.style.setProperty("--my", `${ly - r.top}px`);
+    };
+    const onMove = (e: PointerEvent) => {
+      lx = e.clientX;
+      ly = e.clientY;
+      const el = (e.target as Element | null)?.closest?.(SEL);
+      target = el instanceof HTMLElement ? el : null;
+      if (target && !raf) raf = requestAnimationFrame(flush);
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [prefs.hoverGlow]);
 
   // 解码警告来自 Rust 侧的 source/warning，欢迎页 / 双击启动 / 编辑器内打开
   // 三条链路都会经过 loadImage，用全局事件统一兜住，不依赖某一条路径去消费。

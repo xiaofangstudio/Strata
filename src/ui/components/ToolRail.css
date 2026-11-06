@@ -219,3 +219,61 @@
   background: var(--border);
   opacity: 0.9;
 }
+
+/* ---- i18n 溢出防护（2026-11-06）：显示工具名时按钮自撑高，长名折行不裁切 ---- */
+.tool-btn.has-label {
+  height: auto;
+  min-height: var(--tool-btn);
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.tool-btn-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+/* ---- 质感精修 2026-11-06 ---- */
+
+/* 工具轨：右缘半透明细边 */
+.toolrail {
+  border-right-color: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+/* 工具按钮：hover / 选中加 1px 内高光与极淡半透明边；
+   原有 scale 回弹、is-on 动画与 focus 光环全部保留，只补齐 box-shadow 过渡 */
+.tool-btn {
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.tool-btn:hover:not(:disabled) {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft), inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+.tool-btn.is-on {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft), inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 齿轮入口：同一套内高光 */
+.toolrail-gear {
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.toolrail-gear:hover {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 前景 / 背景色卡：保留原有投影，叠 1px 内高光与半透明边 */
+.swatch-chip {
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: var(--shadow-xs), inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 分组细线：更淡一点，成组感靠留白而非线 */
+.toolrail-sep {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}

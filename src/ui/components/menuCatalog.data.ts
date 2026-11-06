@@ -148,6 +148,7 @@ export const RAW: RawRow[] = [
   ["Edit", "Toolbar…", "", "edit.toolbar"],
   ["Edit", "---", "", "---"],
   ["Edit/Preferences", "Settings…", "Ctrl+K", "edit.preferences.general"],
+  ["Edit/Preferences", "Personalization…", "", "edit.preferences.personal"],
   ["Edit/Preferences", "AI Integrations…", "", "edit.preferences.integrations"],
   ["Edit/Preferences", "Interface…", "", "edit.preferences.interface"],
   ["Edit/Preferences", "Workspace…", "", "edit.preferences.workspace"],

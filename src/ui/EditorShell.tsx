@@ -1152,6 +1152,12 @@ export default function EditorShell({
   const touchPtsRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchPrevRef = useRef<PinchMetrics | null>(null);
   const multiTouchRef = useRef(false);
+  /** 视图旋转（度，实时值）：双指夹角变化映射到这里，抬手后保持（不改像素）。 */
+  const rotLiveRef = useRef(0);
+  /** Shift 直线锁定：按住期间 onMove 不喂轨迹点，终点严格=按下点，两点必成线。 */
+  const lineLockRef = useRef(false);
+  /** 上一笔的落点（抬笔时记录），Shift+单击 从这里连直线。 */
+  const lastPaintPointRef = useRef<Point | null>(null);
   const handleAnimRef = useRef<HandleAnim>(HANDLE_ANIM_INIT);
   const lastPaintRef = useRef(0);
   /** 动效档位从 :root 读（App 写入），off 时所有插值瞬时收敛 */
@@ -1655,6 +1661,7 @@ export default function EditorShell({
     if (!el) return;
     el.style.setProperty("--pan-x", `${pan.x}px`);
     el.style.setProperty("--pan-y", `${pan.y}px`);
+    el.style.setProperty("--view-rot", `${rotLiveRef.current}deg`);
   }, [pan]);
 
   /** 只改 DOM 的平移（拖动过程中每帧调）。 */
@@ -1666,6 +1673,7 @@ export default function EditorShell({
       if (!el) return;
       el.style.setProperty("--pan-x", `${panLiveRef.current.x}px`);
       el.style.setProperty("--pan-y", `${panLiveRef.current.y}px`);
+      el.style.setProperty("--view-rot", `${rotLiveRef.current}deg`);
     });
   }, []);
 
@@ -1682,14 +1690,32 @@ export default function EditorShell({
     (clientX: number, clientY: number) => {
       const c = canvasRef.current;
       if (!c) return { x: 0, y: 0 };
+      // 视图旋转围绕画布几何中心：先取「变换后包围盒的中心」（纯 rotate 围绕
+      // 自身中心时中心不动，平移则跟着走），把屏幕坐标转成相对中心的偏移，
+      // 逆旋转回未旋转坐标系，再按未旋转时的几何换算文档坐标。
       const r = c.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      let dx = clientX - cx;
+      let dy = clientY - cy;
+      const rot = (rotLiveRef.current * Math.PI) / 180;
+      if (rot !== 0) {
+        const cos = Math.cos(-rot);
+        const sin = Math.sin(-rot);
+        const nx = dx * cos - dy * sin;
+        const ny = dx * sin + dy * cos;
+        dx = nx;
+        dy = ny;
+      }
       // 像素长宽比校正会把画布横向拉伸，坐标换算要一并除以拉伸倍数
       const ax = aspectCorrection ? pixelAspect : 1;
-      const raw = (clientX - r.left) / (scale * ax);
+      const raw = dx / (scale * ax) + docW / 2;
       // 视图水平翻转（视图 > 水平翻转）只镜像显示，坐标要折回来
-      return { x: viewFlipped ? docW - raw : raw, y: (clientY - r.top) / scale };
+      const x = viewFlipped ? docW - raw : raw;
+      const y = dy / scale + docH / 2;
+      return { x, y };
     },
-    [scale, aspectCorrection, pixelAspect, viewFlipped, docW],
+    [scale, aspectCorrection, pixelAspect, viewFlipped, docW, docH],
   );
 
   const docPoint = useCallback(
@@ -2559,7 +2585,18 @@ export default function EditorShell({
           doc.selection ?? null,
         );
         s.setPen(pen);
-        s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false), e.timeStamp);
+        const press = pressureFrom(e, brush.penPressure !== false);
+        // Shift+单击：从上一落点连直线（速查面板承诺的行为，这次是真的）。
+        // 期间锁定 onMove 的轨迹喂点，终点严格=按下点，两点必成直线。
+        const from = e.shiftKey ? lastPaintPointRef.current : null;
+        if (from) {
+          lineLockRef.current = true;
+          s.begin(from.x, from.y, press, e.timeStamp);
+          s.extend(p.x, p.y, press, e.timeStamp);
+          lastPaintPointRef.current = p;
+        } else {
+          s.begin(p.x, p.y, press, e.timeStamp);
+        }
         strokeRef.current = s;
         scheduleRender();
         return;
@@ -2763,6 +2800,8 @@ export default function EditorShell({
       }
       const s = strokeRef.current;
       if (s) {
+        // Shift 直线锁定中：不喂真实轨迹，直线端点严格锁定为按下那一点
+        if (lineLockRef.current) return;
         // 指下的移动事件往往被合并成低频的大跨度折线，直接用会画成折角；
         // getCoalescedEvents 能拿回浏览器攒下的全部中间点，配合压感一起喂给样条。
         const native = e.nativeEvent;
@@ -2771,11 +2810,13 @@ export default function EditorShell({
         if (batch.length > 1) {
           for (const ev of batch) {
             const q = docXY(ev.clientX, ev.clientY);
+            lastPaintPointRef.current = q;
             s.setPen(penSampleOf(ev));
             s.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false), ev.timeStamp);
           }
         } else {
           const p = docXY(native.clientX, native.clientY);
+          lastPaintPointRef.current = p;
           s.setPen(penSampleOf(native));
           s.extend(p.x, p.y, pressureFrom(native, brush.penPressure !== false), native.timeStamp);
         }
@@ -2935,6 +2976,8 @@ export default function EditorShell({
         maskEdit && act.mask ? act.mask : act.surface,
         maskEdit ? null : doc.selection,
       );
+      // 解除 Shift 直线锁定（落点已在 onDown/onMove 记录）
+      lineLockRef.current = false;
       resetGesture();
       onCommit({ ...doc, dirty: true }, zh.tools[tool]);
       return;
@@ -3198,14 +3241,29 @@ export default function EditorShell({
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        // 精确触控板的捏合会发 ctrl+wheel：幅度大就多走几档，仍是连续插值。
-        const dir = e.deltaY < 0 ? 1 : -1;
-        wheelZoomRef.current(dir);
+        // 触控板捏合（像素模式、增量小而连续）→ 指数平滑连续缩放；
+        // 鼠标 Ctrl+滚轮（离散行/页）→ 保留原来的步进+缓动。两种手感互不干扰。
+        const pixelMode = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL;
+        if (pixelMode && Math.abs(e.deltaY) < 60) {
+          // macOS 触控板捏合的事件幅度与 Windows 精准触控板不同，系数按平台换。
+          const k = document.documentElement.dataset.os === "macos" ? 0.0035 : 0.0045;
+          const target = Math.min(
+            MAX_SCALE,
+            Math.max(MIN_SCALE, zoomLiveRef.current * Math.exp(-e.deltaY * k)),
+          );
+          zoomLiveRef.current = target;
+          zoom(target);
+        } else {
+          wheelZoomRef.current(e.deltaY < 0 ? 1 : -1);
+        }
         return;
       }
+      // 触控板两指滚动（像素模式）原样映射；鼠标滚轮（行/页模式）按每行约 16px 换算。
+      const unit = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? 1 : 16;
+      const dir = prefs.touchpadNaturalScroll === false ? -1 : 1;
       setPan((p) => ({
-        x: p.x - (e.shiftKey ? e.deltaY : e.deltaX),
-        y: p.y - (e.shiftKey ? 0 : e.deltaY),
+        x: p.x - dir * (e.shiftKey ? e.deltaY : e.deltaX) * unit,
+        y: p.y - dir * (e.shiftKey ? 0 : e.deltaY) * unit,
       }));
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
@@ -3246,6 +3304,11 @@ export default function EditorShell({
       zoomLiveRef.current = target;
       zoom(target);
       setPan((p) => ({ x: p.x + d.dx, y: p.y + d.dy }));
+      // 双指夹角变化 → 视图旋转（不改像素）；小于 0.3° 的抖动忽略。
+      if (Math.abs(d.rotationDeg) > 0.3) {
+        rotLiveRef.current = (rotLiveRef.current + d.rotationDeg + 360) % 360;
+        applyPanDom();
+      }
     };
     const onUp = (e: PointerEvent) => {
       points.delete(e.pointerId);
@@ -7490,6 +7553,8 @@ export default function EditorShell({
           return { run: () => setModal("shortcuts") };
         case "edit.preferences.general":
           return { run: () => setPrefsOpen(true) };
+        case "edit.preferences.personal":
+          return { run: () => { setPrefsPage("personal"); setPrefsOpen(true); } };
         case "edit.preferences.integrations":
           return { run: () => { setPrefsPage("integrations"); setPrefsOpen(true); } };
         case "edit.preferences.interface":
@@ -8959,6 +9024,16 @@ export default function EditorShell({
         else setShowGuides((v) => !v);
         return;
       }
+      // Shift+R：视图旋转归零（双指转过的画布转回正）
+      if (k === "r" && e.shiftKey) {
+        e.preventDefault();
+        if (rotLiveRef.current !== 0) {
+          rotLiveRef.current = 0;
+          applyPanDom();
+          setToast("视图已转正");
+        }
+        return;
+      }
       // 剪切 / 复制 / 复制合并 / 粘贴（PS 的老习惯）
       if (k === "x") {
         e.preventDefault();
@@ -9340,7 +9415,7 @@ export default function EditorShell({
                 width: docW * scale * (aspectCorrection ? pixelAspect : 1),
                 height: docH * scale,
                 // 平移走 CSS 变量：拖动时只改变量、不重渲染；松手才同步回 state
-                transform: `translate(var(--pan-x, 0px), var(--pan-y, 0px))${
+                transform: `translate(var(--pan-x, 0px), var(--pan-y, 0px)) rotate(var(--view-rot, 0deg))${
                   viewFlipped ? " scaleX(-1)" : ""
                 }`,
               }}
@@ -9818,7 +9893,13 @@ export default function EditorShell({
         />
       </div>
 
-      <StatusBar doc={doc} scale={scale} tool={tool} />
+      <StatusBar
+        doc={doc}
+        scale={scale}
+        tool={tool}
+        onSizeClick={() => setSizeDialog("image")}
+        onCanvasClick={() => setSizeDialog("canvas")}
+      />
 
       {palette && (
         <CommandPalette commands={commands} onClose={() => setPalette(false)} />

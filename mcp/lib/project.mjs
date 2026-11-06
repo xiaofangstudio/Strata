@@ -11,6 +11,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { decodePngBase64, encodePngBase64 } from "./png.mjs";
 import {
   ADJUST_DEFS,
   ADJUST_IDS,
@@ -738,6 +739,402 @@ export function duplicateLayerInFile(file, index) {
   copy.name = `${src.name} 副本`;
   next.layers.splice(index + 1, 0, copy);
   return { ok: true, file: next, copyIndex: index + 1, errors: [], warnings: [] };
+}
+
+/* ------------------------------------------------ 工程级批量操作（对齐 src/core/layerOps.ts） */
+
+/**
+ * 删除全部隐藏图层（layerOps.deleteHiddenLayers 的文件形态）。
+ *
+ * 语义对齐界面「图层 > 删除 > 隐藏图层」：隐藏的组被删掉时，
+ * 组里的可见子层一并删掉（否则留下无主图层）；至少保留一层；
+ * active 指向的层没了就改指最上层。
+ */
+export function deleteHiddenLayersInFile(file) {
+  const layers = Array.isArray(file.layers) ? file.layers : [];
+  const gone = new Set();
+  layers.forEach((l, i) => {
+    if (l.visible === false) gone.add(i);
+  });
+  if (gone.size === 0) {
+    return { ok: true, file, removed: 0, errors: [], warnings: ["没有隐藏图层，无需删除"] };
+  }
+  // 隐藏组的子孙一并删除（parent 链上有任一祖先被删就连坐）
+  let grew = true;
+  while (grew) {
+    grew = false;
+    layers.forEach((l, i) => {
+      if (!gone.has(i) && Number.isInteger(l.parent) && gone.has(l.parent)) {
+        gone.add(i);
+        grew = true;
+      }
+    });
+  }
+  const kept = [];
+  const remap = new Map();
+  layers.forEach((l, i) => {
+    if (!gone.has(i)) {
+      remap.set(i, kept.length);
+      kept.push(l);
+    }
+  });
+  if (kept.length === 0) {
+    return { ok: false, file, errors: ["全部图层都是隐藏层，至少保留一层，已拒绝"], warnings: [] };
+  }
+  const next = cloneFile(file);
+  next.layers = kept.map((l) => {
+    if (Number.isInteger(l.parent)) {
+      const mapped = remap.get(l.parent);
+      if (Number.isInteger(mapped)) return { ...l, parent: mapped };
+      const copy = { ...l };
+      delete copy.parent; // 理论到不了（连坐已删），防御一下
+      return copy;
+    }
+    return l;
+  });
+  const removed = layers.length - kept.length;
+  if (!remap.has(next.active)) next.active = next.layers.length - 1;
+  else next.active = remap.get(next.active);
+  return { ok: true, file: next, removed, errors: [], warnings: [] };
+}
+
+/**
+ * 反转图层顺序（layerOps.reverseLayerOrder 的文件形态）。
+ *
+ * 只反转最外层堆叠次序：组连同它内部的整块一起搬，组员关系不变。
+ * .strata 里组的子层紧跟在组后面连续排列、用 parent 指回组下标，
+ * 所以「整块」= 顶层层 + 其后连续的带 parent 层；反转后重排 parent 下标。
+ */
+export function reverseLayersInFile(file) {
+  const layers = Array.isArray(file.layers) ? file.layers : [];
+  const blocks = [];
+  let i = 0;
+  while (i < layers.length) {
+    if (Number.isInteger(layers[i].parent)) {
+      i += 1; // 组员不自己成块
+      continue;
+    }
+    const start = i;
+    i += 1;
+    while (i < layers.length && Number.isInteger(layers[i].parent)) i += 1;
+    blocks.push([start, i - 1]);
+  }
+  if (blocks.length < 2) {
+    return { ok: true, file, reversed: false, errors: [], warnings: ["顶层少于两层，无需反转"] };
+  }
+  const next = cloneFile(file);
+  const out = [];
+  const parentRemap = new Map(); // 旧下标 → 新下标
+  for (let b = blocks.length - 1; b >= 0; b -= 1) {
+    const [start, end] = blocks[b];
+    const newStart = out.length;
+    for (let j = start; j <= end; j += 1) {
+      parentRemap.set(j, out.length);
+      out.push(layers[j]);
+    }
+    // 块内 parent 都指向块内下标：平移即可
+    for (let j = newStart; j < out.length; j += 1) {
+      if (Number.isInteger(out[j].parent)) {
+        out[j] = { ...out[j], parent: newStart + (out[j].parent - start) };
+      }
+    }
+  }
+  next.layers = out;
+  return { ok: true, file: next, reversed: true, errors: [], warnings: [] };
+}
+
+/* ------------------------------------------ 图层 / 文档变换（对齐 src/core/transform.ts） */
+
+/** 水平 / 垂直翻转一份 RGBA（尺寸不变）。 */
+function flipRgba(width, height, data, axis) {
+  const out = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sx = axis === "h" ? width - 1 - x : x;
+      const sy = axis === "v" ? height - 1 - y : y;
+      const si = (sy * width + sx) * 4;
+      const di = (y * width + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return out;
+}
+
+/**
+ * 90 / 180 / 270 度顺时针旋转一份 RGBA。
+ * swapDims 为 true 时交换宽高（文档旋转，rotateDocument 语义）；
+ * 为 false 时保持原尺寸、绕中心转、越界裁掉（rotateLayerQuarter 语义）。
+ */
+function turnRgba(width, height, data, deg, swapDims) {
+  const d = ((Math.round(deg) % 360) + 360) % 360;
+  if (d === 0) return { width, height, data: new Uint8ClampedArray(data) };
+  const swap = d === 90 || d === 270;
+  const nw = swapDims ? (swap ? height : width) : width;
+  const nh = swapDims ? (swap ? width : height) : height;
+  const out = new Uint8ClampedArray(nw * nh * 4); // 默认全透明
+  const cx = width / 2;
+  const cy = height / 2;
+  const rad = (d * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const ncx = nw / 2;
+  const ncy = nh / 2;
+  for (let y = 0; y < nh; y += 1) {
+    for (let x = 0; x < nw; x += 1) {
+      // 逆映射：目标 → 源（90/180/270 是精确整倍，最近邻无采样损失）
+      const dx = x - ncx;
+      const dy = y - ncy;
+      const sx = cx + dx * cos + dy * sin;
+      const sy = cy - dx * sin + dy * cos;
+      const ix = Math.round(sx);
+      const iy = Math.round(sy);
+      if (ix < 0 || iy < 0 || ix >= width || iy >= height) continue;
+      const si = (iy * width + ix) * 4;
+      const di = (y * nw + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return { width: nw, height: nh, data: out };
+}
+
+const TURN_OPS = { flipH: 0, flipV: 0, rot90: 90, rot180: 180, rot270: 270 };
+
+/**
+ * 变换像素层 / 整份文档（transform.ts 的 flipLayer / rotateLayerQuarter /
+ * rotateLayerHalf / rotateDocument / flipDocument 的文件形态）。
+ *
+ * scope=layer：只动指定像素层的 surface 与 mask，画布尺寸不变（越界裁掉，
+ *   与 PS「变换 > 旋转 90°」一致）；调整层与锁定层会被拒绝。
+ * scope=document：所有像素层、蒙版与选区一起转，90/270 时画布宽高互换。
+ */
+export function transformInFile(file, index, op, scope = "layer") {
+  if (!(op in TURN_OPS)) {
+    return { ok: false, file, errors: [`op 必须是 ${Object.keys(TURN_OPS).join(" / ")} 之一`], warnings: [] };
+  }
+  if (!["layer", "document"].includes(scope)) {
+    return { ok: false, file, errors: [`scope 必须是 layer / document 之一（收到 ${scope}）`], warnings: [] };
+  }
+  const apply = (b64) => {
+    const png = decodePngBase64(b64); // 解不开会抛错，由外层兜底
+    const out =
+      op === "flipH" || op === "flipV"
+        ? { width: png.width, height: png.height, data: flipRgba(png.width, png.height, png.data, op === "flipH" ? "h" : "v") }
+        : turnRgba(png.width, png.height, png.data, TURN_OPS[op], scope === "document");
+    return { b64: encodePngBase64(out.width, out.height, out.data), width: out.width, height: out.height };
+  };
+
+  if (scope === "layer") {
+    if (!Number.isInteger(index) || index < 0 || index >= file.layers.length) {
+      return { ok: false, file, errors: [`index=${index} 超出图层范围 [0, ${file.layers.length - 1}]`], warnings: [] };
+    }
+    const layer = file.layers[index];
+    const label = typeof layer.name === "string" ? layer.name : `#${index}`;
+    if (layer.kind === "adjust") {
+      return { ok: false, file, errors: [`图层「${label}」是调整层，没有可变换的像素`], warnings: [] };
+    }
+    if (layer.locked === true) {
+      return { ok: false, file, errors: [`图层「${label}」已锁定，请先解锁再变换`], warnings: [] };
+    }
+    if (typeof layer.surface !== "string") {
+      return { ok: false, file, errors: [`图层「${label}」没有 surface（空像素层），无处可变换`], warnings: [] };
+    }
+    const next = cloneFile(file);
+    const target = next.layers[index];
+    let surface;
+    try {
+      surface = apply(target.surface);
+    } catch (e) {
+      return { ok: false, file, errors: [`surface 解码失败：${e.message}`], warnings: [] };
+    }
+    target.surface = surface.b64;
+    let maskDims = null;
+    if (typeof target.mask === "string") {
+      try {
+        const mask = apply(target.mask);
+        target.mask = mask.b64;
+        maskDims = `${mask.width}×${mask.height}`;
+      } catch (e) {
+        return { ok: false, file, errors: [`mask 解码失败：${e.message}`], warnings: [] };
+      }
+    }
+    return {
+      ok: true,
+      file: next,
+      errors: [],
+      warnings: [],
+      surfaceDims: `${surface.width}×${surface.height}`,
+      maskDims,
+    };
+  }
+
+  // document 范围：所有像素层、蒙版、选区一起转，画布宽高随 90/270 互换
+  const next = cloneFile(file);
+  const swap = TURN_OPS[op] === 90 || TURN_OPS[op] === 270;
+  const touched = [];
+  for (let i = 0; i < next.layers.length; i += 1) {
+    const l = next.layers[i];
+    const pieces = [];
+    if (typeof l.surface === "string") pieces.push("surface");
+    if (typeof l.mask === "string") pieces.push("mask");
+    if (pieces.length === 0) continue;
+    try {
+      for (const key of pieces) {
+        const r = apply(l[key]);
+        next.layers[i] = { ...next.layers[i], [key]: r.b64 };
+      }
+      touched.push(i);
+    } catch (e) {
+      return { ok: false, file, errors: [`第 ${i + 1} 层的 ${pieces.join("/")} 解码失败：${e.message}`], warnings: [] };
+    }
+  }
+  let selectionDims = null;
+  if (typeof next.selection === "string") {
+    try {
+      const r = apply(next.selection);
+      next.selection = r.b64;
+      selectionDims = `${r.width}×${r.height}`;
+    } catch (e) {
+      return { ok: false, file, errors: [`选区解码失败：${e.message}`], warnings: [] };
+    }
+  }
+  if (swap) {
+    next.width = file.height;
+    next.height = file.width;
+  }
+  return {
+    ok: true,
+    file: next,
+    errors: [],
+    warnings: [],
+    canvas: `${next.width}×${next.height}`,
+    touchedLayers: touched,
+    selectionDims,
+  };
+}
+
+/**
+ * 图层蒙版的写入 / 清除 / 反相 / 快速新建（layerOps 的 addMask / removeMask /
+ * invertMask 的文件形态）。蒙版在 .strata 里就是 base64 PNG；
+ * 反相按界面同款语义处理 alpha 通道。
+ */
+export function setLayerMaskInFile(file, index, action, maskB64) {
+  if (!Number.isInteger(index) || index < 0 || index >= file.layers.length) {
+    return { ok: false, file, errors: [`index=${index} 超出图层范围 [0, ${file.layers.length - 1}]`], warnings: [] };
+  }
+  if (!["set", "clear", "invert", "reveal", "hide"].includes(action)) {
+    return { ok: false, file, errors: ["action 必须是 set / clear / invert / reveal / hide 之一"], warnings: [] };
+  }
+  const next = cloneFile(file);
+  const layer = next.layers[index];
+  const label = typeof layer.name === "string" ? layer.name : `#${index}`;
+
+  if (action === "clear") {
+    if (typeof layer.mask !== "string") {
+      return { ok: true, file: next, errors: [], warnings: [`图层「${label}」本来就没有蒙版`], removed: false };
+    }
+    delete layer.mask;
+    layer.maskActive = false;
+    return { ok: true, file: next, errors: [], warnings: [], removed: true };
+  }
+
+  if (action === "invert") {
+    if (typeof layer.mask !== "string") {
+      return { ok: false, file, errors: [`图层「${label}」没有蒙版可反相`], warnings: [] };
+    }
+    let png;
+    try {
+      png = decodePngBase64(layer.mask);
+    } catch (e) {
+      return { ok: false, file, errors: [`mask 解码失败：${e.message}`], warnings: [] };
+    }
+    const inv = new Uint8ClampedArray(png.data);
+    for (let i = 3; i < inv.length; i += 4) inv[i] = 255 - inv[i];
+    layer.mask = encodePngBase64(png.width, png.height, inv);
+    return { ok: true, file: next, errors: [], warnings: [], dims: `${png.width}×${png.height}` };
+  }
+
+  if (action === "set") {
+    if (typeof maskB64 !== "string" || !isPngBase64(maskB64)) {
+      return { ok: false, file, errors: ["set 需要一段合法的 PNG base64 作为 mask"], warnings: [] };
+    }
+    let png;
+    try {
+      png = decodePngBase64(maskB64);
+    } catch (e) {
+      return { ok: false, file, errors: [`mask 解码失败：${e.message}`], warnings: [] };
+    }
+    const warnings = [];
+    if (png.width !== file.width || png.height !== file.height) {
+      warnings.push(
+        `蒙版尺寸 ${png.width}×${png.height} 与画布 ${file.width}×${file.height} 不一致，` +
+          "界面按画布尺寸取用，超出部分会被裁掉",
+      );
+    }
+    layer.mask = maskB64;
+    layer.maskActive = true;
+    return { ok: true, file: next, errors: [], warnings, dims: `${png.width}×${png.height}` };
+  }
+
+  // reveal / hide：按界面语义快速新建全画布蒙版
+  if (typeof layer.mask === "string") {
+    return { ok: false, file, errors: [`图层「${label}」已有蒙版；要重来请先 clear`], warnings: [] };
+  }
+  const color = action === "reveal" ? [255, 255, 255, 255] : [0, 0, 0, 0];
+  const data = new Uint8ClampedArray(file.width * file.height * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = color[0];
+    data[i + 1] = color[1];
+    data[i + 2] = color[2];
+    data[i + 3] = color[3];
+  }
+  layer.mask = encodePngBase64(file.width, file.height, data);
+  layer.maskActive = true;
+  return {
+    ok: true,
+    file: next,
+    errors: [],
+    warnings: [],
+    dims: `${file.width}×${file.height}`,
+    note: action === "reveal" ? "全白蒙版 = 全部显示" : "全透明蒙版 = 全部遮住",
+  };
+}
+
+/**
+ * 灰度文档（layerOps.grayscaleDocument 的文件形态）：
+ * 把每个像素层的 surface 按亮度权重 0.299/0.587/0.114 去色，alpha 不动。
+ * 调整层没有像素，跳过。
+ */
+export function grayscaleLayersInFile(file) {
+  const next = cloneFile(file);
+  let touched = 0;
+  const warnings = [];
+  for (let i = 0; i < next.layers.length; i += 1) {
+    const l = next.layers[i];
+    if (l.kind === "adjust" || typeof l.surface !== "string") continue;
+    let png;
+    try {
+      png = decodePngBase64(l.surface);
+    } catch (e) {
+      return { ok: false, file, errors: [`第 ${i + 1} 层 surface 解码失败：${e.message}`], warnings };
+    }
+    const d = new Uint8ClampedArray(png.data);
+    for (let p = 0; p < d.length; p += 4) {
+      const v = Math.round(d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114);
+      d[p] = v;
+      d[p + 1] = v;
+      d[p + 2] = v;
+    }
+    next.layers[i] = { ...l, surface: encodePngBase64(png.width, png.height, d) };
+    touched += 1;
+  }
+  if (touched === 0) warnings.push("没有可灰度化的像素层（全是调整层或空层）");
+  return { ok: true, file: next, touched, errors: [], warnings };
 }
 
 /* ------------------------------------------------ 文件读写与路径安全 */

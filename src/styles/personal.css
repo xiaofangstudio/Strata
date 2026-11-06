@@ -5,14 +5,20 @@
  *  1. 背景层 `.app-bg`：固定铺底，画布外框 / 开始页透出的「底」。
  *     - 基色 = 主题 --bg，所以默认外观与改动前完全一致；
  *     - 导入背景图后叠一层模糊（背景磨砂），强度由 --app-bg-frost（0–100）决定；
- *     - 全局玻璃开启时再叠柔和光晕，让玻璃「有东西可透」而不是透一片纯色。
- *  2. 窗口磨砂 `[data-window-frost="on"]`：整窗透出桌面（壁纸 / 其它软件），
- *     靠 Tauri 的 Acrylic 把桌面磨砂；页面在这些区域变透明，让磨砂透出来。
+ *     - 全局玻璃开启时只叠「细淡半透明棋盘格 + 几乎看不见的中性亮度」，
+ *       让 backdrop-filter 有细腻纹理可磨，不再铺大块彩色光晕（那就是用户说的「丑渐变」）。
+ *  2. 窗口磨砂 `html[data-window-frost="on"]`：整窗透出桌面（壁纸 / 其它软件），
+ *     靠 Tauri 的 Acrylic 把桌面磨砂；页面在这些区域全部真透明，让磨砂透出来。
+ *     属性挂在 <html> 自身，所以 html 要用 `html[...]` 选中（旧版写成后代选择器，
+ *     `[data-window-frost="on"] html` 永远匹配不到）。Acrylic 不可用时 App 置
+ *     `:root[data-window-frost-fallback="on"]`，这里浮出一条可见提示，不静默假装成功。
  *  3. 全局磨砂 `[data-global-frost="on"]`：**真正半透明玻璃**。
- *     - 关键：底色必须带 alpha。早期版本用 `color-mix(surface 72%, frost 10%)`
- *       两个不透明色混合，结果仍是 100% 不透明，backdrop-filter 完全白做，
- *       观感只剩一层染色模糊 —— 也就是用户说的「糊」。
- *     - 现在是：半透明 tint + 斜向光泽 + blur/saturate/brightness + 亮边 + 内高光 + 双层阴影。
+ *     - 玻璃卡几乎无色：中性底 rgba(255,255,255,0.08) + 选色 tint 0.08–0.14 均匀一层
+ *       + 顶部 1px 极细白色高光线；删掉所有大面积白渐变与 0.46 重染色。
+ *     - 质感来自 `backdrop-filter: blur(28px) saturate(180%) brightness(1.03)`
+ *       把背后的棋盘格 / 背景图 / 桌面真的磨出来，而不是来自染了一层颜色。
+ *     - 只保留：1px 半透明白边、inset 顶部高光、柔和双层阴影。
+ *     - 卡片与 .glass-preview 共用同一组 --glass-* 配方变量，所见即所得。
  *     - 超椭圆 --squircle 不再 clip 到玻璃卡本体：clip-path 会创建裁剪上下文，
  *       在 WebView2 下会切断 backdrop-filter 的采样区域，且裁不出圆角高光边。
  *       本体改用 --r-glass 大圆角；超椭圆留给预览与装饰层。
@@ -22,8 +28,8 @@
  */
 
 :root {
-  /* 默认磨砂色（高饱和蓝），运行时被偏好覆盖 */
-  --frost-color: #3d6bff;
+  /* 默认磨砂色：中性冷白 —— 真磨砂玻璃的默认观感就是无色毛玻璃，彩色由用户自选 */
+  --frost-color: #e8edf5;
 
   /* 0–100 的背景磨砂强度；默认 80 */
   --app-bg-frost: 80;
@@ -32,14 +38,28 @@
   --ui-font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
     "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  /* ---------- 真正半透明玻璃参数（App 运行时注入） ----------
-     --glass-alpha 是 0–1 的小数；其余都是带单位的 CSS 值，直接进 filter / color。 */
-  --glass-tint-rgb: 61, 107, 255;
-  --glass-alpha: 0.18;
-  --glass-blur: 22px;
-  --glass-sat: 165%;
+  /* ---------- 真毛玻璃配方（卡片与 .glass-preview 共用，所见即所得） ----------
+     玻璃卡几乎无色：中性底 0.08 + 选色 tint 0.08–0.14 均匀一层 + 顶部 1px 高光线。
+     质感来自 backdrop-filter 把背后内容磨出来，不是来自染色 / 大面积白渐变。 */
+  --glass-tint-rgb: 232, 237, 245;
+  --glass-alpha: 0.10; /* 选色 tint 的 alpha（App 注入，0.08–0.14） */
+  --glass-blur: 28px;
+  --glass-sat: 180%;
   --glass-sheen: 0.18;
   --r-glass: 26px;
+
+  /* 中性底 / 边 / 高光 / 阴影：明暗主题都用固定白色低 alpha，不随主题染色。
+     --glass-sheen 仍驱动边与高光强度，偏好控件不失效。 */
+  --glass-neutral: rgba(255, 255, 255, 0.08);
+  --glass-edge: rgba(255, 255, 255, calc(var(--glass-sheen) * 1.2));
+  --glass-hilite: rgba(255, 255, 255, calc(var(--glass-sheen) * 1.8));
+  --glass-bg:
+    linear-gradient(180deg, var(--glass-hilite) 0, rgba(255, 255, 255, 0) 1px),
+    rgba(var(--glass-tint-rgb), var(--glass-alpha)),
+    var(--glass-neutral);
+  --glass-shadow:
+    0 8px 28px rgba(20, 20, 30, 0.14),
+    0 2px 8px rgba(20, 20, 30, 0.05);
 
   /** 超椭圆（superellipse，n=5）裁剪路径：120 点多边形。
    *  保留给预览 / 装饰层用，不再 clip 到玻璃卡本体（理由见文件头）。 */
@@ -81,20 +101,40 @@
   overflow: hidden;
 }
 
-/* 玻璃开启时，给纯色底加两团柔和光晕 —— 玻璃才有层次可透，不会像透一片白墙。 */
+/* 删掉四团彩色光晕（用户眼里就是「卡片压了一层花里胡哨的渐变」）。
+   只留一层几乎看不见的中性亮度起伏，给 blur 一点点层次可磨。 */
 .app-bg::before {
   content: "";
   position: absolute;
   inset: -25%;
-  background:
-    radial-gradient(circle at 16% 20%, rgba(var(--glass-tint-rgb), 0.30), transparent 46%),
-    radial-gradient(circle at 84% 78%, rgba(var(--glass-tint-rgb), 0.20), transparent 50%),
-    radial-gradient(circle at 60% 8%, rgba(255, 255, 255, 0.16), transparent 42%);
+  background: radial-gradient(ellipse at 50% -10%, rgba(255, 255, 255, 0.10), transparent 60%);
   opacity: 0;
   transition: opacity var(--dur-slow) var(--ease);
 }
 
 [data-global-frost="on"] .app-bg::before {
+  opacity: 0.12; /* 峰值约 0.10 × 0.12 ≈ 0.012，几乎不可见 */
+}
+
+/* 细淡棋盘格：玻璃磨砂后面「有东西可磨」的那一层。
+   - 不再用实色 --checker + 大块格（那就是用户说的「粗 / 丑纹」）；
+     改成半透明白、格子 clamp 在 8–14px，blur 后是细腻的磨砂纹理。
+   - 仍随偏好 --checker-size 微调，但锁死上限，拉满也不会变回大块。 */
+.app-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  --_fine: clamp(8px, calc(var(--checker-size, 8px) * 1.25), 14px);
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%);
+  background-size: var(--_fine) var(--_fine), var(--_fine) var(--_fine);
+  background-position: 0 0, calc(var(--_fine) / 2) calc(var(--_fine) / 2);
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+[data-global-frost="on"] .app-bg::after {
   opacity: 1;
 }
 
@@ -114,24 +154,65 @@
 }
 
 /* ---------- 2. 窗口磨砂（透出桌面） ---------- */
-/* 这些区域在窗口磨砂时变透明，让 Tauri Acrylic 把桌面磨砂透出来。 */
-[data-window-frost="on"] html,
-[data-window-frost="on"] body {
+/* 属性挂在 <html> 自身，所以 html 用 `html[...]` 选中；其余是它的后代。
+   旧版写成 `[data-window-frost="on"] html`（后代选择器）永远匹配不到，
+   html 的不透明底色会盖住桌面 —— 这是「窗口磨砂没有」的一个确定原因。
+   窗口磨砂时 html/body/#root/.editor/.app-bg 全部真透明，不留任何白底。 */
+html[data-window-frost="on"],
+html[data-window-frost="on"] body,
+html[data-window-frost="on"] #root,
+html[data-window-frost="on"] .editor,
+html[data-window-frost="on"] .app-bg {
   background: transparent;
 }
 
-[data-window-frost="on"] .app-bg {
-  background-color: transparent;
-}
-
-[data-window-frost="on"] .app-bg::before,
-[data-window-frost="on"] .app-bg-img {
+/* 背景层的光晕 / 细格 / 背景图全部让路，只留系统 Acrylic 磨出来的桌面。 */
+html[data-window-frost="on"] .app-bg::before,
+html[data-window-frost="on"] .app-bg::after,
+html[data-window-frost="on"] .app-bg-img {
   opacity: 0;
 }
 
-/* 编辑壳本体也透明，露出磨砂后的桌面（画布 / 面板仍是实心，不受影响）。 */
-[data-window-frost="on"] .editor {
-  background: transparent;
+/* 窗口磨砂的真语义：**整窗**透桌面。所有面板卡也跟着半透明化 ——
+   Acrylic 在系统层已经把桌面磨砂了，这里只留一层轻底保证可读性，
+   不再加 backdrop-filter（省一层无效模糊，透得也更干净）。 */
+html[data-window-frost="on"] .editor-top,
+html[data-window-frost="on"] .toolrail,
+html[data-window-frost="on"] .dock,
+html[data-window-frost="on"] .dock-panel,
+html[data-window-frost="on"] .statusbar,
+html[data-window-frost="on"] .menubar,
+html[data-window-frost="on"] .modal,
+html[data-window-frost="on"] .popover,
+html[data-window-frost="on"] .card,
+html[data-window-frost="on"] .start-top,
+html[data-window-frost="on"] .start-foot {
+  background: color-mix(in srgb, var(--surface) 38%, transparent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: rgba(255, 255, 255, 0.30);
+}
+
+/* Acrylic 不可用（非 Tauri 环境 / setEffects 失败）时的**明确可见降级**：
+   App 会写 :root[data-window-frost-fallback="on"]，这里浮出一条提示，
+   不再静默假装磨砂成功。纯 CSS，不依赖任何组件或文案资源。 */
+:root[data-window-frost-fallback="on"] body::after {
+  content: "窗口磨砂不可用：当前平台 / 环境未提供系统级窗口效果，已降级为普通背景（可改用「全局磨砂」）";
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 9999;
+  max-width: min(92vw, 560px);
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(28, 28, 34, 0.86);
+  color: #fff;
+  font: 500 12px/1.5 var(--ui-font);
+  text-align: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
 }
 
 /* ---------- 3. 全局磨砂（真正半透明玻璃） ---------- */
@@ -150,27 +231,21 @@
 [data-global-frost="on"] .modal,
 [data-global-frost="on"] .popover,
 [data-global-frost="on"] .card,
+[data-global-frost="on"] .optbar-pop,
+[data-global-frost="on"] .menu-pop,
 [data-global-frost="on"] .start-top,
 [data-global-frost="on"] .start-foot {
-  /* 三层都是半透明，叠完整体 alpha 仍远小于 1 ——  backdrop-filter 才有意义 */
-  background:
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, calc(var(--glass-sheen) * 0.9)) 0%,
-      rgba(255, 255, 255, 0) 48%
-    ),
-    rgba(var(--glass-tint-rgb), var(--glass-alpha)),
-    color-mix(in srgb, var(--surface) 12%, transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  /* 1px 亮边 + 顶部内高光 + 底部暗边 + 双层外阴影：玻璃的「厚度」 */
-  border: 1px solid rgba(255, 255, 255, calc(var(--glass-sheen) * 2.4));
+  /* 玻璃卡几乎无色：中性底 + 极淡均匀 tint + 顶部 1px 高光线（--glass-bg）。
+     没有大面积白渐变、没有 0.46 重染色 —— 质感全靠 backdrop-filter 把背后磨出来。 */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.03);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.03);
+  /* 1px 半透明白边 + inset 顶部高光 + 柔和双层阴影：玻璃的「厚度」 */
+  border: 1px solid var(--glass-edge);
   border-radius: var(--r-glass);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, calc(var(--glass-sheen) * 2.8)),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.05),
-    0 10px 32px rgba(20, 20, 30, 0.16),
-    0 2px 8px rgba(20, 20, 30, 0.06);
+    inset 0 1px 0 var(--glass-hilite),
+    var(--glass-shadow);
   transition:
     background var(--dur) var(--ease),
     box-shadow var(--dur) var(--ease),
@@ -261,7 +336,8 @@
   margin-top: var(--sp-3);
 }
 
-/* 玻璃实时预览：与上面第 3 段完全复用同一套 --glass-* 变量，所见即所得。 */
+/* 玻璃实时预览：与第 3 段**完全复用同一组 --glass-* 配方变量**，所见即所得。
+   底也换成和 .app-bg 一致的细淡格纹，让 blur 后有同样的细腻磨砂纹理。 */
 .glass-preview {
   position: relative;
   margin-top: var(--sp-3);
@@ -269,31 +345,27 @@
   border-radius: var(--r-md);
   overflow: hidden;
   border: 1px solid var(--border);
-  background:
-    radial-gradient(circle at 18% 24%, rgba(var(--glass-tint-rgb), 0.55), transparent 48%),
-    radial-gradient(circle at 82% 76%, rgba(var(--glass-tint-rgb), 0.35), transparent 52%),
-    var(--surface-3);
+  --_fine: clamp(8px, calc(var(--checker-size, 8px) * 1.25), 14px);
+  background-color: var(--surface-3);
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%);
+  background-size: var(--_fine) var(--_fine), var(--_fine) var(--_fine);
+  background-position: 0 0, calc(var(--_fine) / 2) calc(var(--_fine) / 2);
 }
 
 .glass-preview::before {
   content: "";
   position: absolute;
   inset: 14px 22px;
-  background:
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, calc(var(--glass-sheen) * 0.9)) 0%,
-      rgba(255, 255, 255, 0) 48%
-    ),
-    rgba(var(--glass-tint-rgb), var(--glass-alpha)),
-    color-mix(in srgb, var(--surface) 12%, transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  border: 1px solid rgba(255, 255, 255, calc(var(--glass-sheen) * 2.4));
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.03);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.03);
+  border: 1px solid var(--glass-edge);
   border-radius: var(--r-glass);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, calc(var(--glass-sheen) * 2.8)),
-    0 10px 32px rgba(20, 20, 30, 0.16);
+    inset 0 1px 0 var(--glass-hilite),
+    var(--glass-shadow);
 }
 
 .glass-preview::after {
@@ -321,4 +393,26 @@
 
 .ui-font-select:focus-visible {
   box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* ---------- 6. 平台适配 ---------- */
+/* macOS：titleBarStyle=Overlay 让内容延伸进系统标题栏，系统红绿灯浮在左上角。
+   菜单栏补 80px 左内边距避让红绿灯，顶栏空白区可拖窗；按钮仍可点（no-drag）。 */
+:root[data-os="macos"] .menubar {
+  padding-left: 80px;
+  -webkit-app-region: drag;
+}
+:root[data-os="macos"] .menubar button,
+:root[data-os="macos"] .menubar [role="button"] {
+  -webkit-app-region: no-drag;
+}
+:root[data-os="macos"] .editor-top {
+  padding-top: 4px;
+}
+
+/* Linux：WebKitGTK 的 backdrop-filter 支持有限，玻璃模糊降级到 10px、
+   底色略加浓，保证仍然「透得出去」且文字可读，而不是假装有效。 */
+:root[data-os="linux"] {
+  --glass-blur: 10px;
+  --glass-alpha: 0.30;
 }

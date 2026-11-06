@@ -23,7 +23,9 @@
         "decorations": true,
         "dragDropEnabled": true,
         "visible": true,
-        "transparent": true
+        "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
@@ -56,8 +58,8 @@
     "publisher": "小方工作室",
     "copyright": "小方工作室 · MIT License",
     "category": "GraphicsAndDesign",
-    "shortDescription": "Windows 优先、全中文、免费开源的修图与绘画工具",
-    "longDescription": "Strata 是小方工作室自研的 Windows 优先、全中文、永久免费开源（MIT）的 Photoshop 平替，修图与绘画并列为一级能力。",
+    "shortDescription": "全中文、免费开源的修图与绘画工具（Windows / macOS / Linux）",
+    "longDescription": "Strata 是小方工作室自研的全中文、永久免费开源（MIT）的 Photoshop 平替，修图与绘画并列为一级能力，三平台同一份代码。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -65,6 +67,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"],

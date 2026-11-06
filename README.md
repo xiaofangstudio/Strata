@@ -41,6 +41,18 @@
 
 ## 🆕 这个版本更新了什么
 
+### 📅 本轮更新（11-06）：跨平台就绪 + CI 三平台构建 + MCP 补全
+
+> 这一轮**没有一个新功能**——但它是项目意义最重大的一轮：Strata 从「Windows 专属」变成「三平台就绪」，并且把「零假功能」写成了铁律。
+
+45 个文件、+2760/−282。适配细节见 [docs/平台适配清单](docs/平台适配清单.md)，后续计划见 [docs/绘画能力补齐计划](docs/绘画能力补齐计划-2026-11-06.md) 与 [下一轮计划](docs/下一轮-精准触控板与完善计划-2026-11-06.md)。
+
+- 🧭 **零假功能铁律（最高优先级，成文）**：所有功能必须真出正确结果，不是 stub / 占位 / 静默降级 / 假装成功；确实做不到的明确报错或明确标记。应用内实现 ↔ `mcp/lib/capabilities.mjs`（单一事实来源）↔ 测试，三者必须同步。
+- 🖥️ **macOS / Linux 就绪**：`windows` crate 等平台依赖按 `cfg(windows)` 门控；WIA 扫描三个命令在非 Windows 上**明确报「不支持」**（推荐系统自带「图像捕捉 / SANE」），不静默降级、不假装扫描成功；新增 `platform.css` 与 macOS 标题栏 Overlay 适配（内容延伸进标题栏、菜单栏让位红绿灯）。
+- 🏗️ **CI 三平台原生构建**（`.github/workflows/release.yml`）：Tauri 不能交叉编译，macOS 的 .app/.dmg 与 Linux 的 deb/rpm/AppImage 由 `macos-latest` / `ubuntu-22.04` runner 原生产出；push `v*` 标签触发，Rust 单测进 CI。硬约束如实声明：本机没有 Mac / Linux 测试机，靠「CI 原生构建 + 严格静态检查」前置拦截。
+- 🔌 **MCP 大补全**：工程级批量操作（对齐 `layerOps.ts` / `transform.ts`）、会话补全接成真工具；新增 `gap-tools` / `psd-boundary` 两组测试。搬不过 MCP 进程的能力**如实列边界**（RAW/HEIC 真解码、真 ICC、GPU 通路、自由变换拖手柄、选区羽化、16/32bit——讲清楚而不是含糊其辞）。
+- 🧪 新测试：`filter-truth` / `proof-perf`；`Cargo.toml` 补 `window-vibrancy`（Acrylic 错误真透传）与 `dev-dependencies` 门控。
+
 ### 📅 本轮更新（11-05）：真正的玻璃 UI + 动效体系 + 六项差距全修（有史以来最大一轮）
 
 58 个文件、+2600/−214，测试从 674 条涨到 790 条全过。完整对比与验收见 [docs/PhotoCraft功能对比与六项重修](docs/PhotoCraft功能对比与六项重修-2026-11-05.md) 与 [验收报告](docs/六项差距全修-验收报告-2026-11-05.md)。

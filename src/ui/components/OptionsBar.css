@@ -430,3 +430,60 @@
   color: var(--text);
   border-color: var(--border-strong);
 }
+
+/* ---- i18n 溢出防护（2026-11-06）---- */
+.opt-mode {
+  height: auto;
+  min-height: 26px;
+}
+.opt-fine-reset {
+  height: auto;
+  min-height: 20px;
+}
+.optbar-pop {
+  width: min(300px, calc(100vw - 24px));
+}
+.optbar-pop .opt-modes {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+/* ---- 质感精修 2026-11-06 ---- */
+
+/* 选项条：底部半透明细边 + 顶缘内高光，与顶栏同一套分层语言 */
+.optbar {
+  border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent);
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 数值框 / 色块 / 笔尖预览：细腻半透明边 + 1px 内高光 */
+.opt-num,
+.opt-tip,
+.opt-chip,
+.opt-chip-btn {
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.opt-num,
+.opt-tip,
+.opt-chip {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 段控：凹槽内影 + 选中态 1px 内高光，选中更"按进去又浮起" */
+.opt-modes {
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: inset 0 1px 2px var(--fx-lo);
+}
+.opt-mode.is-on {
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 颜色 / 更多浮层：半透明细边 + 顶部内高光 + 多层柔影 */
+.color-pop,
+.optbar-pop {
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--fx-hi-soft),
+    var(--shadow-sm),
+    var(--shadow-lg);
+}

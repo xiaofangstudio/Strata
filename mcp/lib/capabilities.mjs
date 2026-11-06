@@ -82,8 +82,8 @@ export const SERVER_VERSION = "2.6.2";
 
 /** 工程文件魔数（src/engine/project.ts）。 */
 export const MAGIC = "STRATA-PROJECT";
-/** 当前工程格式版本（v3：新增文档选区）。 */
-export const PROJECT_VERSION = 3;
+/** 当前工程格式版本（v5：Alpha 通道；v4：图层组；v3：文档选区）。 */
+export const PROJECT_VERSION = 5;
 /** 工程文件扩展名（小写，不含点）。 */
 export const PROJECT_EXTENSION = "strata";
 
@@ -301,6 +301,190 @@ export const ADJUST_DEFS = [
     ],
   },
   {
+    id: "huesat",
+    label: "色相 / 饱和度（全功能）",
+    family: "color",
+    params: [
+      { id: "hue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "全图" },
+      { id: "saturate", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "全图" },
+      { id: "lightness", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "全图" },
+      { id: "colorize", label: "着色", min: 0, max: 1, step: 1, def: 0, group: "全图" },
+      { id: "redHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "红色" },
+      { id: "redSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "红色" },
+      { id: "redLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "红色" },
+      { id: "yellowHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "黄色" },
+      { id: "yellowSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "黄色" },
+      { id: "yellowLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "黄色" },
+      { id: "greenHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "绿色" },
+      { id: "greenSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "绿色" },
+      { id: "greenLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "绿色" },
+      { id: "cyanHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "青色" },
+      { id: "cyanSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "青色" },
+      { id: "cyanLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "青色" },
+      { id: "blueHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "蓝色" },
+      { id: "blueSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "蓝色" },
+      { id: "blueLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "蓝色" },
+      { id: "magentaHue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "洋红" },
+      { id: "magentaSat", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "洋红" },
+      { id: "magentaLight", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "洋红" },
+    ],
+  },
+  {
+    id: "blackwhite",
+    label: "黑白（通道权重）",
+    family: "color",
+    params: [
+      { id: "red", label: "红色", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "通道权重" },
+      { id: "yellow", label: "黄色", min: 0, max: 100, step: 1, def: 60, unit: "%", group: "通道权重" },
+      { id: "green", label: "绿色", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "通道权重" },
+      { id: "cyan", label: "青色", min: 0, max: 100, step: 1, def: 60, unit: "%", group: "通道权重" },
+      { id: "blue", label: "蓝色", min: 0, max: 100, step: 1, def: 20, unit: "%", group: "通道权重" },
+      { id: "magenta", label: "洋红", min: 0, max: 100, step: 1, def: 80, unit: "%", group: "通道权重" },
+    ],
+  },
+  {
+    id: "vibrance",
+    label: "自然饱和度",
+    family: "color",
+    params: [
+      { id: "vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, def: 0 },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0 },
+    ],
+  },
+  {
+    id: "selectivecolor",
+    label: "可选颜色",
+    family: "color",
+    params: [
+      { id: "mode", label: "方法", min: 0, max: 1, step: 1, def: 0, group: "模式" },
+      { id: "redsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "redsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "红色" },
+      { id: "yellowsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "yellowsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黄色" },
+      { id: "greensC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "greensK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "绿色" },
+      { id: "cyansC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "cyansK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "青色" },
+      { id: "bluesC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "bluesK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "蓝色" },
+      { id: "magentasC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "magentasK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "洋红" },
+      { id: "whitesC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "whitesK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "白色" },
+      { id: "neutralsC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "neutralsK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "中性色" },
+      { id: "blacksC", label: "青色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksM", label: "洋红", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksY", label: "黄色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+      { id: "blacksK", label: "黑色", min: -100, max: 100, step: 1, def: 0, unit: "%", group: "黑色" },
+    ],
+  },
+  {
+    id: "colorlookup",
+    label: "颜色查找",
+    family: "color",
+    params: [
+      {
+        id: "preset",
+        label: "预设",
+        min: 0,
+        max: 9,
+        step: 1,
+        def: 0,
+        choices: [
+          { label: "暖阳", value: 0 },
+          { label: "冷冽", value: 1 },
+          { label: "胶片", value: 2 },
+          { label: "青橙", value: 3 },
+          { label: "复古", value: 4 },
+          { label: "墨色", value: 5 },
+          { label: "薄荷", value: 6 },
+          { label: "夜幕", value: 7 },
+          { label: "粉彩", value: 8 },
+          { label: "高反差", value: 9 },
+        ],
+      },
+      { id: "intensity", label: "强度", min: 0, max: 100, step: 1, def: 100, unit: "%" },
+    ],
+  },
+  {
+    id: "equalize",
+    label: "均衡",
+    family: "tone",
+    params: [],
+  },
+  {
+    id: "hdtoning",
+    label: "HDR 色调",
+    family: "tone",
+    params: [
+      { id: "radius", label: "半径", min: 1, max: 150, step: 1, def: 40, unit: "px" },
+      { id: "strength", label: "强度", min: 0, max: 100, step: 1, def: 30, unit: "%" },
+      { id: "detail", label: "细节", min: 0, max: 300, step: 1, def: 80, unit: "%" },
+      { id: "gamma", label: "灰度系数", min: 0.5, max: 2, step: 0.01, def: 1, dec: 2 },
+      { id: "exposure", label: "曝光", min: -3, max: 3, step: 0.01, def: 0, dec: 2, unit: " EV" },
+    ],
+  },
+  {
+    id: "matchcolor",
+    label: "匹配颜色",
+    family: "color",
+    params: [
+      { id: "luminance", label: "明亮度", min: 0, max: 200, step: 1, def: 100, unit: "%" },
+      { id: "intensity", label: "颜色强度", min: 0, max: 200, step: 1, def: 100, unit: "%" },
+      { id: "fade", label: "渐隐", min: 0, max: 100, step: 1, def: 0, unit: "%" },
+      { id: "neutralize", label: "中和", min: 0, max: 1, step: 1, def: 0 },
+    ],
+  },
+  {
+    id: "replacecolor",
+    label: "替换颜色",
+    family: "color",
+    params: [
+      { id: "targetHue", label: "目标色相", min: 0, max: 360, step: 1, def: 0, unit: "°", group: "选区" },
+      { id: "fuzziness", label: "颜色容差", min: 0, max: 100, step: 1, def: 40, unit: "%", group: "选区" },
+      { id: "hue", label: "色相", min: -180, max: 180, step: 1, def: 0, unit: "°", group: "替换" },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "替换" },
+      { id: "lightness", label: "明度", min: -100, max: 100, step: 1, def: 0, group: "替换" },
+    ],
+  },
+  {
+    id: "cameraraw",
+    label: "Camera Raw",
+    family: "effect",
+    params: [
+      { id: "temperature", label: "色温", min: -100, max: 100, step: 1, def: 0, group: "白平衡" },
+      { id: "tint", label: "色调", min: -100, max: 100, step: 1, def: 0, group: "白平衡" },
+      { id: "exposure", label: "曝光", min: -5, max: 5, step: 0.01, def: 0, dec: 2, unit: " EV", group: "影调" },
+      { id: "contrast", label: "对比度", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "highlights", label: "高光", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "shadows", label: "阴影", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "whites", label: "白色", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "blacks", label: "黑色", min: -100, max: 100, step: 1, def: 0, group: "影调" },
+      { id: "texture", label: "纹理", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "clarity", label: "清晰度", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "dehaze", label: "去薄雾", min: -100, max: 100, step: 1, def: 0, group: "细节" },
+      { id: "vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
+      { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
+    ],
+  },
+  {
     id: "blur",
     label: "模糊",
     family: "effect",
@@ -339,6 +523,25 @@ export const ADJUST_DEFS = [
       { id: "size", label: "大小", min: 1, max: 12, step: 1, def: 1, unit: "px" },
     ],
   },
+  {
+    /**
+     * 调色台（layer.ts 同款）：参数直接从 GRADE_PARAMS 派生，不手抄。
+     */
+    id: "grade",
+    label: "调色台",
+    family: "color",
+    params: GRADE_PARAMS.map((g) => ({
+      id: g.id,
+      label: g.label,
+      min: g.min,
+      max: g.max,
+      step: g.step,
+      def: g.def,
+      dec: g.dec,
+      unit: g.unit,
+      group: g.group,
+    })),
+  },
 ];
 
 export const ADJUST_IDS = ADJUST_DEFS.map((d) => d.id);
@@ -364,6 +567,10 @@ export const STYLE_DEFS = [
   { id: "innerglow", label: "内发光", size: true, sizeLabel: "大小", sizeMax: 160, offset: false, position: false, color: "#ffffff", size0: 12, opacity0: 70, distance0: 0, angle0: 0, blend0: "screen" },
   { id: "stroke", label: "描边", size: true, sizeLabel: "粗细", sizeMax: 80, offset: false, position: true, color: "#0f76d6", size0: 3, opacity0: 100, distance0: 0, angle0: 0, blend0: "normal" },
   { id: "coloroverlay", label: "颜色叠加", size: false, sizeLabel: "", sizeMax: 0, offset: false, position: false, color: "#6fc0ff", size0: 0, opacity0: 100, distance0: 0, angle0: 0, blend0: "normal" },
+  { id: "bevelemboss", label: "斜面和浮雕", size: true, sizeLabel: "大小", sizeMax: 60, offset: true, position: false, color: "#000000", size0: 8, opacity0: 60, distance0: 4, angle0: 135, blend0: "normal" },
+  { id: "satin", label: "缎纹", size: true, sizeLabel: "大小", sizeMax: 120, offset: true, position: false, color: "#000000", size0: 12, opacity0: 35, distance0: 12, angle0: 135, blend0: "multiply" },
+  { id: "gradientoverlay", label: "渐变叠加", size: false, sizeLabel: "", sizeMax: 0, offset: false, position: false, color: "#ffffff", size0: 0, opacity0: 70, distance0: 0, angle0: 90, blend0: "normal" },
+  { id: "patternoverlay", label: "图案叠加", size: true, sizeLabel: "图案大小", sizeMax: 64, offset: false, position: false, color: "#000000", size0: 12, opacity0: 60, distance0: 0, angle0: 0, blend0: "normal" },
 ];
 
 export const STYLE_IDS = STYLE_DEFS.map((s) => s.id);
@@ -371,9 +578,9 @@ export const STYLE_IDS = STYLE_DEFS.map((s) => s.id);
 /** 描边位置（layer.ts: STROKE_POSITIONS）。 */
 export const STROKE_POSITIONS = ["外", "内", "居中"];
 
-/* ------------------------------------------------ 图层种类 */
+/* ------------------------------------------------ 图层种类（layer.ts: LayerKind） */
 
-export const LAYER_KINDS = ["pixel", "adjust"];
+export const LAYER_KINDS = ["pixel", "adjust", "group"];
 
 /* ------------------------------------------------ 选区模式（selection.ts + i18n） */
 
@@ -401,6 +608,7 @@ export const TOOL_GROUPS = [
   { id: "transform", label: "变换" },
   { id: "select", label: "选择" },
   { id: "shape", label: "形状" },
+  { id: "text", label: "文字" },
   { id: "paint", label: "绘制" },
   { id: "retouch", label: "修饰" },
   { id: "sample", label: "取样" },
@@ -408,18 +616,27 @@ export const TOOL_GROUPS = [
   { id: "nav", label: "导航" },
 ];
 
-/** 工具目录（id / 中文名 / 快捷键 / 分组 / 是否已接入）。 */
+/**
+ * 工具目录（id / 中文名 / 快捷键 / 分组 / 是否已接入）。
+ * 顺序与条目逐字对齐 src/tools/catalog.ts 的 TOOLS，中文名取自 i18n.zh-CN 的 tools。
+ */
 export const TOOLS = [
   { id: "move", label: "移动", shortcut: "V", group: "transform", ready: true },
   { id: "marquee", label: "矩形选框", shortcut: "M", group: "select", ready: true },
   { id: "ellipse", label: "椭圆选框", shortcut: "M", group: "select", ready: true },
+  { id: "singleRow", label: "单行选框", shortcut: "M", group: "select", ready: true },
+  { id: "singleColumn", label: "单列选框", shortcut: "M", group: "select", ready: true },
   { id: "lasso", label: "套索", shortcut: "L", group: "select", ready: true },
+  { id: "polyLasso", label: "多边形套索", shortcut: "L", group: "select", ready: true },
   { id: "wand", label: "魔棒", shortcut: "W", group: "select", ready: true },
   { id: "shapeRect", label: "矩形", shortcut: "U", group: "shape", ready: true },
   { id: "shapeEllipse", label: "椭圆", shortcut: "U", group: "shape", ready: true },
   { id: "shapeLine", label: "直线", shortcut: "U", group: "shape", ready: true },
+  { id: "text", label: "文字", shortcut: "T", group: "text", ready: true },
   { id: "brush", label: "画笔", shortcut: "B", group: "paint", ready: true },
+  { id: "pencil", label: "铅笔", shortcut: "B", group: "paint", ready: true },
   { id: "eraser", label: "橡皮", shortcut: "E", group: "paint", ready: true },
+  { id: "magicEraser", label: "魔术橡皮擦", shortcut: "E", group: "paint", ready: true },
   { id: "bucket", label: "油漆桶", shortcut: "G", group: "paint", ready: true },
   { id: "gradient", label: "渐变", shortcut: "G", group: "paint", ready: true },
   { id: "clone", label: "仿制图章", shortcut: "S", group: "retouch", ready: true },
@@ -430,6 +647,8 @@ export const TOOLS = [
   { id: "burn", label: "加深", shortcut: "O", group: "retouch", ready: true },
   { id: "sponge", label: "海绵", shortcut: "O", group: "retouch", ready: true },
   { id: "eyedropper", label: "吸管", shortcut: "I", group: "sample", ready: true },
+  { id: "ruler", label: "标尺", shortcut: "I", group: "sample", ready: true },
+  { id: "count", label: "计数", shortcut: "N", group: "sample", ready: true },
   { id: "crop", label: "裁剪", shortcut: "C", group: "crop", ready: true },
   { id: "hand", label: "抓手", shortcut: "H", group: "nav", ready: true },
   { id: "zoom", label: "缩放", shortcut: "Z", group: "nav", ready: true },
@@ -465,13 +684,16 @@ export const PROJECT_FORMAT = {
   version: PROJECT_VERSION,
   extension: PROJECT_EXTENSION,
   encoding: "UTF-8（无 BOM）",
-  shape: "{ magic, version, name, width, height, dpi?, active, layers:[FileLayer], selection? }",
+  shape: "{ magic, version, name, width, height, dpi?, active, layers:[FileLayer], selection?, alphaChannels? }",
   layerKind: LAYER_KINDS,
   layerFields: [
     "name", "visible", "opacity", "blend", "locked", "kind",
-    "adjust?", "maskActive", "clip?", "styles?", "surface?", "mask?",
+    "adjust?", "maskActive", "clip?", "styles?", "parent?", "surface?", "mask?", "window?", "smart?",
   ],
-  surfaceNote: "surface 为像素层的 base64 PNG（不含 data: 前缀）；调整层无 surface；mask 同为 base64 PNG。",
+  surfaceNote:
+    "surface 为像素层的 base64 PNG（不含 data: 前缀）；调整层与组无 surface；mask 同为 base64 PNG。" +
+    "parent 为所属组在 layers 数组里的下标（顶层省略）；window 为调色范围几何；smart 为智能对象原始像素 data URL。" +
+    "组图层的 opened（展开状态）只存在于文档模型与 PSD 往返（engine/psd.ts 桥接），.strata 不落盘。",
 };
 
 /** 组装完整能力清单（strata_capabilities 的返回体）。 */
@@ -486,7 +708,11 @@ export function buildCapabilities() {
     adjustFamilies: ADJUST_FAMILIES,
     adjustTypes: ADJUST_DEFS,
     adjustStructures: {
-      curve: { id: "curves", default: DEFAULT_CURVE, note: "控制点按 x 升序，x/y ∈ [0,1]" },
+      curve: {
+        id: "curves",
+        default: DEFAULT_CURVE,
+        note: "控制点按 x 升序，x/y ∈ [0,1]；另有分通道 curveR/curveG/curveB（结构相同，缺省即对角线）",
+      },
       stops: { id: "gradientmap", default: DEFAULT_STOPS, note: "色标按 at 升序，at ∈ [0,1]，color 为 #rrggbb" },
     },
     layerStyles: STYLE_DEFS,
@@ -531,6 +757,19 @@ export function buildCapabilities() {
         { id: "gif", label: "多帧合成 GIF", tool: "strata_make_gif" },
         { id: "droplet", label: "Droplet 配方", tool: "strata_make_droplet" },
         { id: "browse", label: "浏览文件夹", tool: "strata_list_dir" },
+        { id: "palette", label: "调色板提取（中位切分）", tool: "strata_extract_palette" },
+        { id: "channels", label: "通道拆分（R/G/B/Alpha）", tool: "strata_split_channels" },
+        { id: "orient", label: "翻转 / 整倍旋转", tool: "strata_orient_image" },
+        { id: "align", label: "自动对齐偏移估计", tool: "strata_align_shift" },
+        { id: "pdf", label: "多图合成 PDF", tool: "strata_make_pdf" },
+      ],
+      /** 工程级批量操作（对齐 src/core/layerOps.ts / transform.ts 的文件形态） */
+      projectOps: [
+        { id: "deleteHiddenLayers", label: "删除全部隐藏图层", tool: "strata_delete_hidden_layers" },
+        { id: "reverseLayerOrder", label: "反转图层顺序", tool: "strata_reverse_layers" },
+        { id: "transform", label: "翻转 / 整倍旋转（图层或整份文档）", tool: "strata_transform_layer" },
+        { id: "mask", label: "图层蒙版写入 / 清除 / 反相 / 快速新建", tool: "strata_set_layer_mask" },
+        { id: "grayscale", label: "灰度文档（像素层去色）", tool: "strata_grayscale_project" },
       ],
     },
     exportFormats: EXPORT_FORMATS,
@@ -586,6 +825,16 @@ export function buildCapabilities() {
       "strata_doc_add_glow",
       "strata_doc_add_glass",
       "strata_doc_save",
+      "strata_delete_hidden_layers",
+      "strata_reverse_layers",
+      "strata_transform_layer",
+      "strata_set_layer_mask",
+      "strata_grayscale_project",
+      "strata_extract_palette",
+      "strata_split_channels",
+      "strata_orient_image",
+      "strata_align_shift",
+      "strata_make_pdf",
     ],
   };
 }

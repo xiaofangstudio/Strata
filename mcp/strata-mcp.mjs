@@ -37,11 +37,16 @@ import {
   addLayerToFile,
   applyPatch,
   buildProjectFile,
+  deleteHiddenLayersInFile,
   duplicateLayerInFile,
+  grayscaleLayersInFile,
   moveLayerInFile,
   readProjectFile,
   removeLayerFromFile,
+  reverseLayersInFile,
+  setLayerMaskInFile,
   summarizeProject,
+  transformInFile,
   validateProject,
   writeProjectFile,
 } from "./lib/project.mjs";
@@ -448,8 +453,10 @@ import {
   backgroundFloodMask,
   bilinearResize,
   crop as cropImage,
+  flipImage,
   glossLayer,
   outerContour,
+  quarterRotateImage,
   rotateImage,
   compositeOver,
   cutout,
@@ -469,13 +476,17 @@ import {
 import {
   FILTER_DEFS,
   PROFILE_LABELS,
+  applyPalette,
+  buildPdf,
   colorRangeHit,
   contentAwareScale,
   convertProfile,
+  estimateShift,
   focusHit,
   medianCutPalette,
   mlsWarp,
   skyHit,
+  splitChannels,
   subjectHit,
   toBitmap,
   toCmyk,
@@ -855,7 +866,6 @@ server.registerTool(
     if (args.preview === true) {
       payload.previewBase64 = encodeImagePng(resize(s.img, 320)).toString("base64");
     }
-    void medianCutPalette;
     return ok(payload);
   }),
 );
@@ -2598,6 +2608,318 @@ server.registerTool(
       payload.previewBase64 = encodeImagePng(small).toString("base64");
     }
     return ok(payload);
+  }),
+);
+
+/* ==================================================================
+ * 二次补全：工程级批量操作（对齐 src/core/layerOps.ts / transform.ts）
+ * ================================================================== */
+
+server.registerTool(
+  "strata_delete_hidden_layers",
+  {
+    title: "删除全部隐藏图层",
+    description:
+      "把工程里所有 visible=false 的图层删掉（应用「图层 > 删除 > 隐藏图层」的同一语义）：" +
+      "隐藏的组连它里面的可见子层一起删，至少保留一层，active 失效时改指最上层。" +
+      "整理别人交来的多版本工程时先用它瘦身。",
+    inputSchema: { path: pathArg },
+  },
+  guard(async ({ path }) => {
+    const { file } = readProjectFile(path);
+    const res = deleteHiddenLayersInFile(file);
+    if (!res.ok) return fail("删除被拒绝", { errors: res.errors });
+    const out = writeProjectFile(path, res.file);
+    return ok({
+      ok: true,
+      written: true,
+      path: out.abs,
+      bytes: out.bytes,
+      removed: res.removed,
+      layerCount: res.file.layers.length,
+      warnings: res.warnings,
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_reverse_layers",
+  {
+    title: "反转图层顺序",
+    description:
+      "把图层堆叠次序整个反过来（应用「图层 > 排列 > 反转」的同一语义）：" +
+      "只反转最外层顺序，组连同它内部的整块一起搬，组员关系不变。" +
+      "顶层少于两层时原样返回并说明。",
+    inputSchema: { path: pathArg },
+  },
+  guard(async ({ path }) => {
+    const { file } = readProjectFile(path);
+    const res = reverseLayersInFile(file);
+    const out = writeProjectFile(path, res.file);
+    const preview = summarizeProject(res.file, false, { path });
+    return ok({
+      ok: true,
+      written: true,
+      path: out.abs,
+      bytes: out.bytes,
+      reversed: res.reversed,
+      order: preview.layers.map((l) => l.name),
+      warnings: res.warnings,
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_transform_layer",
+  {
+    title: "变换图层 / 整份文档（翻转 / 整倍旋转）",
+    description:
+      "对工程做翻转与 90/180/270 度旋转。scope=layer（默认）：只动指定像素层的像素与蒙版，" +
+      "画布尺寸不变、越界裁掉（与 PS「编辑 > 变换」一致）；调整层与锁定层会被拒绝。" +
+      "scope=document：所有像素层、蒙版、选区一起转，90/270 时画布宽高互换" +
+      "（与「图像 > 图像旋转」一致）。",
+    inputSchema: {
+      path: pathArg,
+      index: indexArg.optional().describe("scope=layer 时的图层下标；scope=document 可省略"),
+      op: z.enum(["flipH", "flipV", "rot90", "rot180", "rot270"]).describe("flipH 水平翻转 / flipV 垂直翻转 / rot* 顺时针旋转"),
+      scope: z.enum(["layer", "document"]).optional().describe("默认 layer"),
+      write: z.boolean().optional().describe("默认 true；false 表示只预览"),
+    },
+  },
+  guard(async ({ path, index, op, scope, write }) => {
+    if ((scope ?? "layer") === "layer" && index === undefined) {
+      return fail("scope=layer 时必须给 index（scope=document 可省略）");
+    }
+    const { file } = readProjectFile(path);
+    const res = transformInFile(file, index, op, scope ?? "layer");
+    if (!res.ok) return fail("变换被拒绝", { errors: res.errors });
+    const preview = summarizeProject(res.file, false, { path });
+    if (write === false) {
+      return ok({ written: false, op, scope: scope ?? "layer", warnings: res.warnings, project: preview });
+    }
+    const out = writeProjectFile(path, res.file);
+    return ok({ ok: true, written: true, path: out.abs, bytes: out.bytes, op, scope: scope ?? "layer", ...res, file: undefined, errors: undefined });
+  }),
+);
+
+server.registerTool(
+  "strata_set_layer_mask",
+  {
+    title: "读写图层蒙版",
+    description:
+      "对指定图层的蒙版做五种操作：set 写入一段 base64 PNG 蒙版（自动启用）；" +
+      "clear 删除蒙版；invert 反相（遮住的显示、显示的遮住，按界面同款 alpha 语义）；" +
+      "reveal / hide 按画布尺寸快速新建全显 / 全遮蒙版。读蒙版用 strata_read_project " +
+      "的 includePixels=true（返回 mask.base64）。",
+    inputSchema: {
+      path: pathArg,
+      index: indexArg,
+      action: z.enum(["set", "clear", "invert", "reveal", "hide"]),
+      mask: z.string().optional().describe("action=set 时的蒙版内容，base64 PNG（不含 data: 前缀）"),
+    },
+  },
+  guard(async ({ path, index, action, mask }) => {
+    if (action === "set" && mask === undefined) {
+      return fail("action=set 时必须给 mask（base64 PNG）");
+    }
+    const { file } = readProjectFile(path);
+    const res = setLayerMaskInFile(file, index, action, mask);
+    if (!res.ok) return fail("蒙版操作被拒绝", { errors: res.errors });
+    const out = writeProjectFile(path, res.file);
+    const layer = summarizeProject(res.file, false, { path }).layers[index];
+    return ok({
+      ok: true,
+      written: true,
+      path: out.abs,
+      bytes: out.bytes,
+      action,
+      layer: layer ? { name: layer.name, maskActive: layer.maskActive, hasMask: layer.hasMask } : null,
+      ...res,
+      file: undefined,
+      errors: undefined,
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_grayscale_project",
+  {
+    title: "灰度文档（全部像素层去色）",
+    description:
+      "把工程里每个像素层的像素按亮度权重（0.299/0.587/0.114）去色，" +
+      "与界面「图像 > 灰度」同一套系数；alpha 与图层属性都不动，调整层跳过。" +
+      "返回被处理的层数。",
+    inputSchema: { path: pathArg },
+  },
+  guard(async ({ path }) => {
+    const { file } = readProjectFile(path);
+    const res = grayscaleLayersInFile(file);
+    if (!res.ok) return fail("灰度化失败", { errors: res.errors });
+    const out = writeProjectFile(path, res.file);
+    return ok({
+      ok: true,
+      written: true,
+      path: out.abs,
+      bytes: out.bytes,
+      touched: res.touched,
+      warnings: res.warnings,
+    });
+  }),
+);
+
+/* ==================================================================
+ * 二次补全：会话级新工具（engines.gen.mjs 里已打包但此前未暴露的纯函数）
+ * ================================================================== */
+
+server.registerTool(
+  "strata_extract_palette",
+  {
+    title: "提取调色板（中位切分）",
+    description:
+      "从会话图片里提取主色调色板：中位切分量化（与应用「索引颜色」同一内核 " +
+      "medianCutPalette），返回 hex 颜色数组。apply=true 时顺带把会话图按这块调色板" +
+      "重新映射（applyPalette 内核，等效「颜色表改完回涂」）。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      colors: z.number().int().min(2).max(256).optional().describe("颜色数，默认 8"),
+      apply: z.boolean().optional().describe("是否把会话图量化到这块调色板（默认 false）"),
+    },
+  },
+  guard(async ({ sessionId, colors, apply }) => {
+    const s = sessionImage(sessionId);
+    const palette = medianCutPalette(s.img, colors ?? 8);
+    const hex = palette.map((c) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`);
+    const payload = {
+      ok: true,
+      sessionId,
+      colors: hex.length,
+      palette: hex,
+    };
+    if (apply === true) {
+      s.img = applyPalette(s.img, palette);
+      payload.applied = true;
+      payload.hint = "会话图已量化到调色板；用 strata_export_image 落盘。";
+    }
+    return ok(payload);
+  }),
+);
+
+server.registerTool(
+  "strata_split_channels",
+  {
+    title: "通道拆分（R/G/B/Alpha）",
+    description:
+      "把会话图拆成四张灰度通道图（应用「多通道」模式同一内核 splitChannels），" +
+      "每张都是 base64 PNG，可单独下载或用 strata_open_image 重新开会话。",
+    inputSchema: { sessionId: z.string().describe("会话 id") },
+  },
+  guard(async ({ sessionId }) => {
+    const s = sessionImage(sessionId);
+    const { channels, names } = splitChannels(s.img);
+    return ok({
+      ok: true,
+      sessionId,
+      channels: channels.map((ch, i) => ({
+        name: names[i],
+        png: encodeImagePng(ch).toString("base64"),
+      })),
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_orient_image",
+  {
+    title: "翻转 / 旋转会话图片",
+    description:
+      "对会话图片做水平/垂直翻转或 90/180/270 度顺时针旋转" +
+      "（对应界面「图像 > 图像旋转」；整倍旋转是精确坐标重排，无采样损失）。" +
+      "任意角度旋转请在滤镜里用其它手段，或用文档工具的 transform。",
+    inputSchema: {
+      sessionId: z.string().describe("会话 id"),
+      op: z.enum(["flipH", "flipV", "rot90", "rot180", "rot270"]),
+    },
+  },
+  guard(async ({ sessionId, op }) => {
+    const s = sessionImage(sessionId);
+    s.img =
+      op === "flipH" || op === "flipV"
+        ? flipImage(s.img, op === "flipH" ? "h" : "v")
+        : quarterRotateImage(s.img, Number(op.slice(3)));
+    return ok({
+      ok: true,
+      sessionId,
+      op,
+      width: s.img.width,
+      height: s.img.height,
+      hint: "改动还在内存里；用 strata_export_image 落盘。",
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_align_shift",
+  {
+    title: "估计两图对齐偏移（堆栈前置）",
+    description:
+      "估算第二张图相对第一张的平移偏移 {dx,dy}（应用「自动对齐」同一内核 " +
+      "estimateShift：降采样 + 平滑亮度 + 粗到细搜索）。拍糊了的一组手持连拍、" +
+      "堆栈合成前，先用它确认每张错位多少像素。",
+    inputSchema: {
+      reference: z
+        .object({ sessionId: z.string().optional(), path: z.string().optional() })
+        .describe("基准图：sessionId 或 path 二选一"),
+      moving: z
+        .object({ sessionId: z.string().optional(), path: z.string().optional() })
+        .describe("要平移的那张：sessionId 或 path 二选一"),
+    },
+  },
+  guard(async ({ reference, moving }) => {
+    const ref = loadOverlay(reference);
+    const mov = loadOverlay(moving);
+    const shift = estimateShift(ref, mov);
+    return ok({
+      ok: true,
+      dx: shift.dx,
+      dy: shift.dy,
+      note: "约定：reference(x,y) ≈ moving(x-dx, y-dy)，即把 moving 沿 (dx,dy) 平移后与基准重合。",
+    });
+  }),
+);
+
+server.registerTool(
+  "strata_make_pdf",
+  {
+    title: "多图合成 PDF",
+    description:
+      "把一批图片按顺序合成一个多页 PDF（应用「多画板导出 PDF」同一内核 buildPdf：" +
+      "每页一张图、页尺寸 = 像素 / dpi 换算成 pt，合法 PDF 1.4，任何预览器都打得开）。",
+    inputSchema: {
+      paths: z.array(z.string()).min(1).describe("图片路径（按页序）"),
+      outPath: z.string().describe("输出 .pdf 绝对路径"),
+      quality: z.number().min(1).max(100).optional().describe("页内 JPEG 画质，默认 92"),
+    },
+  },
+  guard(async ({ paths, outPath, quality }) => {
+    const pages = [];
+    for (const p of paths) {
+      const abs = resolveImagePath(p, true);
+      const img = decodeImage(readFileSync(abs));
+      pages.push({
+        jpeg: encodeImageJpeg(img, quality ?? 92),
+        width: img.width,
+        height: img.height,
+      });
+    }
+    const bytes = buildPdf(pages);
+    const abs = resolveImagePath(outPath, false);
+    writeFileSync(abs, Buffer.from(bytes));
+    return ok({
+      ok: true,
+      path: abs,
+      pages: pages.length,
+      bytes: bytes.length,
+    });
   }),
 );
 

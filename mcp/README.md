@@ -13,7 +13,7 @@ Strata 图像编辑器的 MCP 服务器。让外部 AI（Claude Desktop、Cursor
 ```bat
 cd mcp
 npm install
-node strata-mcp.mjs --selftest   :: 自检：应输出「已注册 35 个工具」
+node strata-mcp.mjs --selftest   :: 自检：应输出「已注册 60 个工具」
 node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 ```
 
@@ -131,12 +131,66 @@ overlay / softLight / darken / lighten / add。文字与形状由 `@napi-rs/canv
 **EXR 压缩支持范围**：NONE / RLE / ZIPS / ZIP（OpenEXR 默认就是 ZIP）。
 PIZ / PXR24 / B44 / DWAA / DWAB 会**明确报错**并建议改用应用内打开，不会解出花屏。
 
-**做不到的两项，说清楚**：
+### 工程级批量操作（对齐 src/core/layerOps.ts / transform.ts）
+
+这一组直接操作 `.strata` 文件，语义与应用菜单一一对应（组的子层整块跟着搬、
+parent 下标自动重排、active 失效自动改指）：
+
+| 工具 | 作用 | 对应应用内功能 |
+| --- | --- | --- |
+| `strata_delete_hidden_layers` | 删除全部隐藏图层（隐藏组连可见子层一起删，至少留一层） | 图层 > 删除 > 隐藏图层 |
+| `strata_reverse_layers` | 反转图层顺序（组整块搬、组员关系不变） | 图层 > 排列 > 反转 |
+| `strata_transform_layer` | 翻转 / 90·180·270 旋转：`scope=layer` 只动单层像素与蒙版（画布不变、越界裁掉），`scope=document` 整份文档连画布宽高与选区一起转 | 编辑 > 变换 / 图像 > 图像旋转 |
+| `strata_set_layer_mask` | 蒙版写入（`set`，校验 PNG）/ 清除 / 反相（按界面同款 alpha 语义）/ 快速新建 `reveal`·`hide`；读蒙版用 `strata_read_project` 的 `includePixels` | 图层 > 图层蒙版 |
+| `strata_grayscale_project` | 全部像素层按亮度权重（0.299/0.587/0.114）去色，调整层跳过 | 图像 > 灰度 |
+
+### 会话补全（此前已打包、这次接成工具的纯函数）
+
+| 工具 | 作用 | 对应应用内功能 |
+| --- | --- | --- |
+| `strata_extract_palette` | 中位切分提取主色调色板（hex 数组）；`apply=true` 顺带把会话图量化到该板 | 索引颜色的调色板 / 颜色表 |
+| `strata_split_channels` | 拆出 R/G/B/Alpha 四张灰度通道 PNG（真内核 `splitChannels`，含 Alpha） | 图像 > 模式 > 多通道 |
+| `strata_orient_image` | 会话图水平/垂直翻转、90/180/270 顺时针旋转（精确坐标重排，无采样损失） | 图像 > 图像旋转 / 翻转画布 |
+| `strata_align_shift` | 估计两图平移偏移 `{dx,dy}`（降采样 + SAD 粗到细，约定 `ref(x,y) ≈ moving(x-dx,y-dy)`） | 堆栈 > 自动对齐的前置 |
+| `strata_make_pdf` | 多张图按页序合成多页 PDF（页尺寸 = 像素/dpi 换算 pt，合法 PDF 1.4） | 多画板导出 PDF |
+
+
+**做不到的，说清楚（MCP 与应用的能力边界）**：
+
+以下能力在应用里是真的，但 MCP 这个独立 Node 进程调不到对应运行时，
+因此**不提供对应工具、也不假装提供**（能力数值一律以 `strata_capabilities` 返回为准）：
+
+- **PSD 读写** —— `src/engine/psd.ts`（ag-psd 桥接层）的图层/蒙版全部落在浏览器
+  canvas 上（`document.createElement`、`drawImage`、`getImageData`），导出还会引入
+  浏览器合成器。MCP 是独立 Node 进程，没有 DOM，`readNode` 一步就会
+  「document is not defined」。这件事有可执行证据：`node mcp/test/psd-boundary.test.mjs`
+  会按 Node 平台打包 psd.ts 并真调一次，证明打包能过、运行必炸。
+  需要 PSD 互转，请先在应用里打开 / 另存。
+- **RAW / HEIC 真解码** —— 走 Tauri/Rust 侧的解码器，MCP 进程调不到；
+  MCP 能打开的只有 `importFormats` 里列出的浏览器可解码格式。
+- **真 ICC（cms_transform）** —— 色彩配置转换依赖 Tauri/Rust 的 ICC 引擎。
+  MCP 侧的 `strata_color_profile` 走 **矩阵近似**（sRGB ↔ 线性 RGB ↔ XYZ(D65) ↔ 目标
+  的 3×3 矩阵），没有 ICC 引擎的查表与黑点补偿 —— 常规转换足够准，但与
+  应用内「真 ICC」的结果可能有细微色差，这一点如实标注。
+- **GPU 加速** —— 应用的合成走 WebGPU / 浏览器 Canvas2D 的 GPU 通路；
+  MCP 在 `@napi-rs/canvas` 上逐像素软件计算，速度不在一个量级（结果一致，只是慢）。
 
 - **WIA 扫描** —— 走的是 Windows COM（`IWiaDevMgr2`），只有应用进程里能用。
   MCP 是独立 Node 进程，没法调系统扫描仪；需要扫描就先在应用里扫成文件，再让 MCP 处理。
 - **脚本事件管理器** —— 它是应用内的「事件 → 配方」绑定，属于界面行为，没有跨进程形态。
   配方本身可以用 `strata_make_droplet` 生成，双击即装载。
+- **自由变换（拖手柄）** —— `src/core/transform.ts` 的 FreeTransform 一族吃的是
+  `HTMLCanvasElement`（实时预览由编辑器浮层逐帧驱动），属于交互行为，没有跨进程形态。
+  等效的翻转 / 整倍旋转已由 `strata_transform_layer`（工程）与 `strata_orient_image`（会话）
+  覆盖；任意角度旋转 / 缩放可走 `strata_doc_transform_layer`（文档层）。
+- **选区修改（羽化 / 扩展 / 收缩 / 边界）** —— `src/core/selection.ts` 全部落在 canvas 上
+  （`featherSelection` 等直接吃 `HTMLCanvasElement`），MCP 不提供独立工具；
+  要「只作用一块」请用 `strata_local_grade` 的 `window` 或 `strata_doc_adjust_layer` 的 `region`。
+- **16 / 32 位深度** —— 渲染管线固定 8 位 sRGB，`quantizeTo8` 只是诚实的模式标记 +
+  向下取整，没有额外精度可存，不值得单独成工具（见 `src/core/colorMode.ts` 的注释）。
+- **图层蒙版的像素级编辑** —— 蒙版内容可以整块读写（`strata_set_layer_mask` +
+  `strata_read_project` 的 `includePixels`），但「拿画笔在蒙版上涂」是应用内绘制行为，
+  MCP 侧请自行改 PNG 字节后用 `set` 写回。
 
 抠图不用 AI，走「边界洪水填充（多种子、Sobel 边缘闸门）+ 最大连通域 + 羽化」；
 背景与主体颜色接近时优先调 `edgeGate` 与 `sides`，仍不干净就换一张对比更强的图 —— 
@@ -169,7 +223,8 @@ mcp/
   lib/imageOps.mjs      图像管线（解码 / 调色算子 / 滤镜 / 抠图 / 合成 / 打光 / 轮廓 / 虚线 / 旋转 / 胶封）
   lib/draw.mjs          矢量路径、光晕、玻璃膜等渲染（@napi-rs/canvas）
   lib/schema.mjs        轻量 schema 校验/补默认值
-  lib/png.mjs           PNG 编解码（生成纯色底图等）
+  lib/png.mjs           PNG 编解码（工程 surface / 蒙版的编解码 + 生成纯色底图等）
+  test/                 单元测试（primitives / gap-tools / exr / psd-boundary）
   package.json
 
 scripts/（仓库根）
@@ -193,6 +248,8 @@ npm run mcp:check     :: 自检 + 冒烟测试（会自己造测试图，跑完�
 ```bat
 node strata-mcp.mjs --selftest        :: 比对「能力清单声明的工具」与「实际注册的工具」，对不上则退出码 1
 npm test                             :: 运行 lib/ 下新增图元单元测试（test/primitives.test.mjs）
+node test/gap-tools.test.mjs         :: 工程级批量操作 / 翻转旋转 / 调色板 / 通道拆分 / PDF 等 16 项
+node test/psd-boundary.test.mjs      :: 在仓库根目录跑：证明 psd.ts 依赖浏览器 API（「不提供 PSD 工具」的证据）
 ```
 
 自检会比对「能力清单声明的工具」与「实际注册的工具」，两边有一处对不上就退出码 1。

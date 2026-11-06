@@ -13,6 +13,8 @@
   color: var(--text-3);
   background: var(--surface);
   border-top: 1px solid var(--border);
+  /* 长语言 + 窄窗口：整条状态栏兜底裁切，不让文字顶出窗口 */
+  overflow: hidden;
 }
 
 .st-item {
@@ -21,6 +23,10 @@
   align-items: center;
   gap: var(--sp-2);
   white-space: nowrap;
+  /* 逐段省略号：data-lang 放开换行会把 24px 行高裁掉第二行，这里统一收回为截断 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .st-key {
@@ -56,4 +62,44 @@
 .st-val {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
+}
+
+/* ---- 质感精修 2026-11-06 ---- */
+
+/* 状态栏：顶部半透明细边 + 顶缘内高光 + 极淡分层渐变，不再是一条死线 */
+.statusbar {
+  border-top-color: color-mix(in srgb, var(--text) 9%, transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--text) 2%, transparent), transparent);
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 排版层级：键名更淡、数值略提字重，主次一眼分明（字号一字未动） */
+.st-key {
+  color: var(--text-3);
+  font-weight: 400;
+}
+.st-val {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/* 尺寸可编辑：点一下改图像大小（打印店改像素直接开打），右键改画布大小 */
+.st-size-edit {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-3) 55%, transparent);
+  color: var(--text-2);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.st-size-edit:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.st-size-edit:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
 }

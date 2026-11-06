@@ -296,3 +296,165 @@ export function applyProof(
   if (exposure !== 0 || gamma !== 1) out = previewTone(out, exposure, gamma);
   return out;
 }
+
+/* ---------------------------------------------------------------- 每帧缓存 */
+
+/**
+ * 预览管线每帧都会调 applyProof / gamutWarning，而校样结果只取决于
+ * 「内容版本 + 尺寸 + proofSet + tone」，逐帧重算是纯浪费。这里给两个纯函数
+ * 各挂一条小型 LRU 缓存（上限 3 条，防内存膨胀），全部仍是纯同步逻辑，
+ * 不碰 Tauri / DOM，可直接单测。
+ */
+
+/** 缓存条数上限：够覆盖「当前文档 + 参考图对比」几个视图，又不至于吃内存 */
+const PROOF_CACHE_LIMIT = 3;
+
+interface ProofCacheEntry {
+  buf: RgbaBuffer;
+  signature: string;
+  /** gamutWarning 专有：色域命中率随缓存一起存 */
+  coverage?: number;
+}
+
+const applyProofCache = new Map<string, ProofCacheEntry>();
+const gamutWarningCache = new Map<string, ProofCacheEntry>();
+
+/** 命中即触碰（删了重插到 Map 尾部），保持 LRU 语义 */
+function proofCacheGet(map: Map<string, ProofCacheEntry>, key: string, signature: string): ProofCacheEntry | undefined {
+  const hit = map.get(key);
+  if (!hit || hit.signature !== signature) return undefined;
+  map.delete(key);
+  map.set(key, hit);
+  return hit;
+}
+
+/** 写入并按上限淘汰最旧条目 */
+function proofCachePut(map: Map<string, ProofCacheEntry>, key: string, entry: ProofCacheEntry): void {
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > PROOF_CACHE_LIMIT) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+/**
+ * 缓存签名：宽高 + proofSet JSON + tone JSON。
+ * 轻量比对，不逐像素 hash —— proofSet / tone 变了必然失效；**像素内容变化
+ * 由调用方通过 key 里的内容版本号（绘制代数 / 修订号）体现**。
+ */
+function proofCacheSignature(
+  src: RgbaBuffer,
+  settings: ProofSettings,
+  extra?: { exposure?: number; gamma?: number },
+): string {
+  return `${src.width}x${src.height}|${JSON.stringify(settings)}|${JSON.stringify(extra ?? null)}`;
+}
+
+/**
+ * 清空全部校样缓存。
+ *
+ * 主线程必须在 **ICC 异步结果回来并接好新的 transform / 掩码之后**调用它：
+ * 缓存里可能还压着矩阵近似（或上一轮 ICC）的旧结果，不清掉的话下一帧
+ * 会继续命中过期画面。
+ */
+export function invalidateProofCache(): void {
+  applyProofCache.clear();
+  gamutWarningCache.clear();
+}
+
+/**
+ * applyProof 的每帧缓存版：key 命中且「宽高 + proofSet + tone」签名一致时
+ * 直接返回缓存结果（**同一引用**，零重算）。
+ *
+ * 用法约定：
+ * - key 由调用方组合，如 `${docId}:${contentRev}:${width}x${height}`；
+ *   **必须包含内容版本**，否则画了一笔之后 key 不变，会拿到过期预览。
+ * - 命中返回的是缓存引用，调用方只读（画到画布 / ImageData）安全，
+ *   不要直接改写它的像素。
+ * - **ICC 异步路径不走缓存**：传了带 transform 的 icc 时直接透传实时计算。
+ *   cms.ts 的 iccSoftProofBestEffort 是异步 invoke，它的结果随时可能刷新；
+ *   正确接法是 —— 每帧同步路径用本函数，ICC 结果回来后更新 icc 上下文并调
+ *   invalidateProofCache()，下一帧自然用真 ICC 像素重算并重建缓存。
+ */
+export function applyProofCached(
+  src: RgbaBuffer,
+  key: string,
+  settings: ProofSettings,
+  extra?: { exposure?: number; gamma?: number },
+  icc?: IccProofContext,
+): RgbaBuffer {
+  if (icc?.transform) return applyProof(src, settings, extra, icc);
+  const signature = proofCacheSignature(src, settings, extra);
+  const hit = proofCacheGet(applyProofCache, key, signature);
+  if (hit) return hit.buf;
+  const buf = applyProof(src, settings, extra, icc);
+  proofCachePut(applyProofCache, key, { buf, signature });
+  return buf;
+}
+
+/**
+ * gamutWarning 的每帧缓存版：思路同 applyProofCached（LRU 3 条、命中返回
+ * 同一 buf 引用、coverage 随缓存一起返回）。
+ *
+ * **ICC 掩码路径不走缓存**：传了 outOfGamutMask 时直接透传实时计算——
+ * 掩码由异步 ICC 生成、随时可能刷新。异步结果回来后同样先
+ * invalidateProofCache() 再继续用同步路径。
+ */
+export function gamutWarningCached(
+  src: RgbaBuffer,
+  key: string,
+  settings: ProofSettings,
+  icc?: IccProofContext,
+): { buf: RgbaBuffer; coverage: number } {
+  if (icc?.outOfGamutMask) return gamutWarning(src, settings, icc);
+  const signature = proofCacheSignature(src, settings);
+  const hit = proofCacheGet(gamutWarningCache, key, signature);
+  if (hit && hit.coverage !== undefined) {
+    return { buf: hit.buf, coverage: hit.coverage };
+  }
+  const res = gamutWarning(src, settings, icc);
+  proofCachePut(gamutWarningCache, key, { buf: res.buf, signature, coverage: res.coverage });
+  return res;
+}
+
+/* ---------------------------------------------------------- 重算节流判定 */
+
+/**
+ * 「平移 / 缩放停止后重算」的推荐间隔（毫秒）。比一帧慢一个数量级，
+ * 交互过程中最多 8 次/秒的节流重算，停止后最多再等一个间隔就收敛。
+ */
+export const PROOF_RECOMPUTE_INTERVAL_MS = 120;
+
+/** shouldRecomputeProof 的输入状态：由主线程持有并逐帧回传 */
+export interface ProofRecomputeState {
+  /** 上次真正重算的时间戳（performance.now()）；从未算过传 0 */
+  lastRunAt: number;
+  /** 上次重算时的状态签名；从未算过传空字符串 */
+  lastSignature: string;
+}
+
+/**
+ * 是否该在这一帧重算校样（纯函数，主线程每帧问一次）。
+ *
+ * 判定规则：
+ * - 从未算过（lastSignature 为空）→ 立即算，不等间隔；
+ * - 状态签名没变 → 画旧结果即可，不算；
+ * - 签名变了且距上次重算已到间隔 → 算（这就是节流：拖动过程中最多
+ *   每 120ms 收敛一次，停止后最多再等一个间隔就重算到位）。
+ *
+ * signature 由调用方组合视口/文档状态，如
+ * `${docId}:${contentRev}:${zoom}:${panX}:${panY}` —— 平移缩放会改变它，
+ * 纯重绘（同一视口再来一帧）不会。
+ */
+export function shouldRecomputeProof(
+  state: ProofRecomputeState,
+  now: number,
+  signature: string,
+  intervalMs: number = PROOF_RECOMPUTE_INTERVAL_MS,
+): boolean {
+  if (state.lastSignature === "") return true;
+  if (signature === state.lastSignature) return false;
+  return now - state.lastRunAt >= intervalMs;
+}

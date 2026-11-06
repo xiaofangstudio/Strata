@@ -1,0 +1,32 @@
+/**
+ * macOS 顶栏重设计：系统标题栏 / 菜单栏融合。
+ * titleBarStyle=Overlay 后内容延伸进系统栏，系统红绿灯浮在最左；
+ * 菜单条挪到红绿灯右侧贴顶，而窗口顶部的快捷按钮（亮暗切换、偏好设置、
+ * 导出、缩放、工作区切换…）一个不少，留在右侧 —— 顶上不会空。
+ */
+:root[data-os="macos"] .editor-top {
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  padding-top: 6px;
+  -webkit-app-region: drag;
+}
+:root[data-os="macos"] .editor-top button,
+:root[data-os="macos"] .editor-top [role="button"],
+:root[data-os="macos"] .editor-top-actions,
+:root[data-os="macos"] .editor-ws {
+  -webkit-app-region: no-drag;
+}
+:root[data-os="macos"] .menubar {
+  padding-left: 78px;
+  background: transparent;
+  border: 0;
+}
+:root[data-os="macos"] .menubar button {
+  -webkit-app-region: no-drag;
+}
+/* 快捷按钮区永远可见、不被融合吞掉 */
+:root[data-os="macos"] .editor-top-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}

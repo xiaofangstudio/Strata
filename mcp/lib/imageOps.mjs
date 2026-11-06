@@ -1464,6 +1464,87 @@ export function rotateImage(img, deg = 0) {
 }
 
 /**
+ * 水平 / 垂直翻转（尺寸不变）。
+ *
+ * 对应界面「编辑 > 变换 > 水平/垂直翻转」与「图像 > 图像旋转 > 翻转画布」
+ * 的像素学：坐标镜像，RGBA 原样搬。与 src/core/transform.ts 的 flipSurface
+ * 同一语义，但这里是纯 RGBA 缓冲，Node 里能直接跑。
+ */
+export function flipImage(img, axis = "h") {
+  const { width: w, height: h, data } = img;
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const sx = axis === "h" ? w - 1 - x : x;
+      const sy = axis === "v" ? h - 1 - y : y;
+      const si = (sy * w + sx) * 4;
+      const di = (y * w + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return { width: w, height: h, data: out };
+}
+
+/**
+ * 90 / 180 / 270 度顺时针整倍旋转（90/270 交换宽高）。
+ *
+ * 精确的坐标重排，不走插值 —— 与 rotateImage(任意角度) 不同，
+ * 整倍旋转不该有采样损失。对应界面「图像 > 图像旋转」的 90/180/270。
+ */
+export function quarterRotateImage(img, deg = 90) {
+  const { width: w, height: h, data } = img;
+  const d = ((Math.round(deg) % 360) + 360) % 360;
+  if (d === 0) return { width: w, height: h, data: new Uint8ClampedArray(data) };
+  const swap = d === 90 || d === 270;
+  const nw = swap ? h : w;
+  const nh = swap ? w : h;
+  const out = new Uint8ClampedArray(nw * nh * 4);
+  for (let y = 0; y < nh; y += 1) {
+    for (let x = 0; x < nw; x += 1) {
+      // 目标 (x,y) ← 源：顺时针整倍旋转的精确逆映射
+      let sx;
+      let sy;
+      if (d === 90) {
+        sx = y;
+        sy = h - 1 - x;
+      } else if (d === 180) {
+        sx = w - 1 - x;
+        sy = h - 1 - y;
+      } else {
+        sx = w - 1 - y;
+        sy = x;
+      }
+      const si = (sy * w + sx) * 4;
+      const di = (y * nw + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return { width: nw, height: nh, data: out };
+}
+
+/**
+ * 灰度化（ITU-R BT.601 亮度权重，与界面 grayscaleDocument 同一套系数）。
+ * alpha 不动。
+ */
+export function grayscaleImage(img) {
+  const { data } = img;
+  const out = new Uint8ClampedArray(data);
+  for (let i = 0; i < out.length; i += 4) {
+    const v = Math.round(out[i] * 0.299 + out[i + 1] * 0.587 + out[i + 2] * 0.114);
+    out[i] = v;
+    out[i + 1] = v;
+    out[i + 2] = v;
+  }
+  return { width: img.width, height: img.height, data: out };
+}
+
+/**
  * 从 alpha 通道提取主体轮廓（marching squares）。
  *
  * 之前试过「边界像素集合 + 贪心走环」：胡须、毛发孔洞和对角接触会让走环

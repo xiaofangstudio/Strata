@@ -33,7 +33,7 @@ describe("prefs · 个性化字段默认回退", () => {
     expect(p.bgFrost).toBe(80);
     expect(p.globalFrost).toBe(false);
     expect(p.windowFrost).toBe(false);
-    expect(p.frostColor).toBe("#3d6bff");
+    expect(p.frostColor).toBe("#e8edf5");
     expect(p.uiFont).toBe("");
     expect(p.uiScale).toBe(100);
   });

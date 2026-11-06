@@ -8,20 +8,14 @@
 //!
 //! 没接扫描仪时这些都是空操作：枚举到 0 台设备就如实返回，
 //! 不会假装扫了一张图出来。
+//!
+//! **平台边界（三平台「一次成功」的前提）**：WIA 是 Windows 独有的 COM API，
+//! `windows` crate 在 Cargo.toml 里按 `cfg(windows)` 门控。macOS / Linux 上
+//! 三个命令仍然存在（否则 `generate_handler!` 的注册表会随平台变化），
+//! 但一律返回明确的「不支持」错误 —— 不静默降级、不假装扫描成功。
+//! macOS / Linux 请用系统自带的「图像捕捉 / SANE」把图片存成文件再打开。
 
 use serde::Serialize;
-use windows::core::BSTR;
-use windows::Win32::Devices::ImageAcquisition::{
-    IWiaDevMgr2, WIA_DEVINFO_ENUM_LOCAL, WIA_DEVINFO_ENUM_ALL,
-};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
-};
-
-/// WIA 2.0 设备管理器的 CLSID（本机注册表 WIA.DeviceManager\CLSID）。
-const CLSID_WIADEVMGR2: windows::core::GUID =
-    windows::core::GUID::from_u128(0xE1C5D730_7E97_4D8A_9E42_BBAE87C2059F);
 
 /// 一台采集设备的概要。
 #[derive(Serialize)]
@@ -31,6 +25,30 @@ pub struct WiaDevice {
     pub id: String,
 }
 
+#[cfg(not(target_os = "windows"))]
+const WIA_UNSUPPORTED: &str = "WIA 扫描仅支持 Windows；macOS / Linux 请用系统扫描工具保存图片后再打开";
+
+/* ------------------------------- Windows：真实现 ------------------------------- */
+
+#[cfg(target_os = "windows")]
+use windows::core::BSTR;
+#[cfg(target_os = "windows")]
+use windows::Win32::Devices::ImageAcquisition::{
+    IWiaDevMgr2, WIA_DEVINFO_ENUM_ALL, WIA_DEVINFO_ENUM_LOCAL,
+};
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::HWND;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+};
+
+/// WIA 2.0 设备管理器的 CLSID（本机注册表 WIA.DeviceManager\CLSID）。
+#[cfg(target_os = "windows")]
+const CLSID_WIADEVMGR2: windows::core::GUID =
+    windows::core::GUID::from_u128(0xE1C5D730_7E97_4D8A_9E42_BBAE87C2059F);
+
+#[cfg(target_os = "windows")]
 fn dev_mgr() -> Result<IWiaDevMgr2, String> {
     unsafe {
         // 已按别的模式初始化过 COM 就直接用（RPC_E_CHANGED_MODE），不强求
@@ -41,6 +59,7 @@ fn dev_mgr() -> Result<IWiaDevMgr2, String> {
 }
 
 /// 列出本机可用的采集设备（扫描仪 / 相机）。
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn wia_devices() -> Result<Vec<WiaDevice>, String> {
     let mgr = dev_mgr()?;
@@ -64,6 +83,7 @@ pub fn wia_devices() -> Result<Vec<WiaDevice>, String> {
 }
 
 /// 检查有没有（本机或网络上的）采集设备。`all = true` 时连同离线设备一起数。
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn wia_device_count(all: Option<bool>) -> Result<u32, String> {
     let mgr = dev_mgr()?;
@@ -80,6 +100,7 @@ pub fn wia_device_count(all: Option<bool>) -> Result<u32, String> {
 /// 打开 WIA 的采集对话框（设备选择 + 厂商扫描界面），扫好的文件落到 `folder`。
 ///
 /// 返回本次扫描新落到文件夹里的文件路径。用户在对话框里点取消时返回空表。
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn wia_acquire(
     window: tauri::WebviewWindow,
@@ -145,4 +166,29 @@ pub async fn wia_acquire(
         .into_iter()
         .filter(|p| !before.contains(p))
         .collect())
+}
+
+/* --------------------- macOS / Linux：明确不支持，不假装有 --------------------- */
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn wia_devices() -> Result<Vec<WiaDevice>, String> {
+    Err(WIA_UNSUPPORTED.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn wia_device_count(_all: Option<bool>) -> Result<u32, String> {
+    Err(WIA_UNSUPPORTED.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn wia_acquire(
+    window: tauri::WebviewWindow,
+    folder: String,
+    base_name: String,
+) -> Result<Vec<String>, String> {
+    let _ = (window, folder, base_name);
+    Err(WIA_UNSUPPORTED.to_string())
 }

@@ -6,6 +6,7 @@ import "./styles/tokens.css";
 import "./styles/themes.css";
 import "./styles/global.css";
 import "./styles/personal.css";
+import "./styles/platform.css";
 import "./styles/motion.css";
 
 const container = document.getElementById("root");
