@@ -893,6 +893,7 @@ touchpadNaturalScrollHint: "Le défilement à deux doigts déplace le canevas da
     workspacePhoto: "Retouche",
     workspacePaint: "Peinture",
     workspaceHint: "Changer d'espace de travail ne modifie que les outils et panneaux par défaut ; la toile et l'historique sont entièrement partagés",
+    needDesktop: "Cette fonction nécessite l'application de bureau (Strata Desktop)",
   },
 
   status: {

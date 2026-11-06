@@ -897,6 +897,7 @@ touchpadNaturalScrollHint: "Two-finger scrolling pans the canvas in the system d
     workspacePhoto: "Retouch",
     workspacePaint: "Paint",
     workspaceHint: "Switching workspace only changes default tools and panels; canvas and history are fully shared",
+    needDesktop: "This feature requires the desktop app (Strata Desktop)",
   },
 
   status: {

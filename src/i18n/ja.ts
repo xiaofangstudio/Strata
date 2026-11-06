@@ -893,6 +893,7 @@ touchpadNaturalScrollHint: "二本指スクロールでシステム方向にカ�
     workspacePhoto: "レタッチ",
     workspacePaint: "ペイント",
     workspaceHint: "ワークスペースを切り替えても既定のツールとパネルが変わるだけで、キャンバスと履歴は完全に共有されます",
+    needDesktop: "この機能はデスクトップ版（Strata デスクトップ）が必要です",
   },
 
   status: {

@@ -85,6 +85,22 @@
   color: var(--text);
 }
 
+/* 贝塔徽标：标识磨砂玻璃等仍在测试的功能（深浅主题下都用琥珀色保持可读） */
+.beta-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, #ffc24d, var(--text) 22%);
+  background: color-mix(in srgb, #ffb020 16%, transparent);
+  border: 1px solid color-mix(in srgb, #ffb020 45%, transparent);
+  border-radius: 999px;
+  vertical-align: 2px;
+}
+
 .pref-note {
   margin: 0;
   font-size: var(--fs-xs);

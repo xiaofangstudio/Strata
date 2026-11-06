@@ -811,7 +811,10 @@ export default function Preferences({
               </section>
 
               <section className="pref-sec">
-                <h3 className="pref-h">{zh.preferences.personal.globalFrost}</h3>
+                <h3 className="pref-h">
+                  {zh.preferences.personal.globalFrost}{" "}
+                  <span className="beta-badge">{zh.preferences.personal.beta}</span>
+                </h3>
                 <div className="pref-seg">
                   <button
                     type="button"
@@ -833,7 +836,10 @@ export default function Preferences({
 
               {!prefs.globalFrost && (
                 <section className="pref-sec">
-                  <h3 className="pref-h">{zh.preferences.personal.windowFrost}</h3>
+                  <h3 className="pref-h">
+                    {zh.preferences.personal.windowFrost}{" "}
+                    <span className="beta-badge">{zh.preferences.personal.beta}</span>
+                  </h3>
                   <div className="pref-seg">
                     <button
                       type="button"

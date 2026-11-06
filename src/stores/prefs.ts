@@ -192,7 +192,10 @@ export interface Prefs {
 
 /** UI 字体族选项：id → 完整的 font-family 回退栈。空 id 即系统默认。 */
 export const UI_FONT_STACKS: Record<string, string> = {
-  "": '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif',
+  // 默认字体栈：Windows / macOS 优先用各自系统字体；Linux 上这些不存在，
+  // 顺序落到 Noto / Source Han / 文泉驿 等常见 CJK 回退，最后兜底 system-ui / sans-serif，
+  // 避免云 Linux 没装 CJK 字体时中文显示成方框（tofu）。
+  "": '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK JP", "Source Han Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif',
   yahei: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
   pingfang: '"PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif',
   segoe: '"Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI", sans-serif',
@@ -295,7 +298,7 @@ export const DEFAULT_PREFS: Prefs = {
   /* 界面动效：默认完整 */
   motion: "full",
   touchpadNaturalScroll: true,
-  hoverGlow: true,
+  hoverGlow: false,
 };
 
 const MAX_CUSTOM_BRUSHES = 24;

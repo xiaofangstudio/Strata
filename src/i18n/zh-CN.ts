@@ -927,6 +927,7 @@ touchpadNaturalScrollHint: "两指滚动按系统方向平移画布；关闭后�
     workspacePhoto: "修图",
     workspacePaint: "绘画",
     workspaceHint: "切换工作区只改变默认工具与面板，画布与历史完全共用",
+    needDesktop: "此功能需要桌面版（Strata 桌面应用）",
   },
 
   /** 状态栏。 */

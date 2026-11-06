@@ -893,6 +893,7 @@ touchpadNaturalScrollHint: "Zwei-Finger-Bildlauf verschiebt die Leinwand in Syst
     workspacePhoto: "Retusche",
     workspacePaint: "Malen",
     workspaceHint: "Das Wechseln des Arbeitsbereichs ändert nur Standardwerkzeuge und -bedienfelder; Leinwand und Historie sind voll geteilt",
+    needDesktop: "Diese Funktion benötigt die Desktop-App (Strata Desktop)",
   },
 
   status: {

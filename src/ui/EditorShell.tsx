@@ -3480,6 +3480,11 @@ export default function EditorShell({
 
   /** 文件 > 打开 / 打开为：图片与 .strata 工程共用同一个对话框。 */
   const openImage = useCallback(async () => {
+    // Web 版没有 Tauri 对话框 / 文件系统：明确告诉用户需桌面版，而不是抛原始报错。
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setToast(zh.editor.needDesktop);
+      return;
+    }
     try {
       const { STRATA_EXTENSION } = await import("../engine/project");
       const picked = await open({
@@ -3544,6 +3549,10 @@ export default function EditorShell({
 
   /** 保存工程：整份文档（含蒙版与调整图层）写成一个 .strata 文件。 */
   const saveProject = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setToast(zh.editor.needDesktop);
+      return;
+    }
     try {
       const { STRATA_EXTENSION, encodeProject, isStrataPath } = await import(
         "../engine/project"
@@ -3570,6 +3579,10 @@ export default function EditorShell({
    * 与保存工程不同，这里是单向导出，不改 sourcePath / dirty。
    */
   const exportPsd = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setToast(zh.editor.needDesktop);
+      return;
+    }
     try {
       const { encodeDocToPsd, PSD_EXTENSION } = await import("../engine/psd");
       const target = await save({
@@ -9111,10 +9124,12 @@ export default function EditorShell({
       setPrefsOpen((v) => !v);
       return;
     }
-    // F5：画笔设置面板（PS 的 F5 同义）
-    if (e.key === "F5" && usesBrush(tool)) {
+    // F5：画笔设置面板（PS 的 F5 同义）。
+    // 无论是否画笔工具都先 preventDefault —— Web / 桌面 webview 里 F5 默认整页刷新，
+    // 会丢掉未保存的工作；只在画笔工具下额外切换画笔面板。
+    if (e.key === "F5") {
       e.preventDefault();
-      setBrushPanelOpen((v) => !v);
+      if (usesBrush(tool)) setBrushPanelOpen((v) => !v);
       return;
     }
     // Shift + [ / ]：调硬度（PS 的老习惯），画笔与修饰工具共用同一套按键

@@ -893,6 +893,7 @@ touchpadNaturalScrollHint: "Прокрутка двумя пальцами па�
     workspacePhoto: "Ретушь",
     workspacePaint: "Живопись",
     workspaceHint: "Переключение среды меняет только инструменты и панели по умолчанию; холст и история полностью общие",
+    needDesktop: "Эта функция требует настольное приложение (Strata Desktop)",
   },
 
   status: {

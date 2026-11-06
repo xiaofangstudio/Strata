@@ -8,6 +8,8 @@
   background: transparent;
   border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   padding-top: 6px;
+  /* 避让 macOS 红绿灯（约 x=12–78），否则左侧 BrandMark 会压在灯上 */
+  padding-left: 80px;
   -webkit-app-region: drag;
 }
 :root[data-os="macos"] .editor-top button,
@@ -17,7 +19,8 @@
   -webkit-app-region: no-drag;
 }
 :root[data-os="macos"] .menubar {
-  padding-left: 78px;
+  /* 避让改由 .editor-top 的 padding-left:80px 统一处理，避免双重偏移 */
+  padding-left: 0;
   background: transparent;
   border: 0;
 }
