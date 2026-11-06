@@ -47,6 +47,11 @@ jobs:
           workspaces: "src-tauri -> target"
 
       - run: npm ci
+      # mcp/ 是独立 Node 工程（自带 package.json + lock），根目录 npm ci 装不到
+      # 它的依赖（@napi-rs/canvas、jpeg-js），vitest 的 MCP 测试会 ERR_MODULE_NOT_FOUND。
+      - name: MCP dependencies
+        run: npm ci
+        working-directory: mcp
       - run: npx tsc --noEmit
       - run: npx vitest run
       # Rust 层也要在三平台各跑一遍：WIA 这类平台专属模块一旦门控漏了，
