@@ -39,7 +39,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+          # fonts-noto-cjk：runner 默认无 CJK 字体，缺了它中文渲染测试
+          # （renderText「橘猫」栅格化宽度）会拿到兜底字形而失败。
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev fonts-noto-cjk
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
