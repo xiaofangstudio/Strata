@@ -8,11 +8,24 @@
  *
  * 所有函数都返回 { width, height, data }，与 imageOps 的图格式一致。
  */
+import { existsSync } from "node:fs";
 import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 
 /** 中文字体回退链：优先思源/雅黑，再退黑体，最后 sans-serif。 */
 const ZH_STACK = '"Noto Sans SC","Noto Sans CJK SC","Microsoft YaHei","SimHei",sans-serif';
 const EN_STACK = '"Inter","Segoe UI",Arial,sans-serif';
+
+// 无头 Linux 服务器（CI / 部署机）上 fontdb 扫描可能漏掉 .ttc 集合，
+// 这里把常见 CJK 字体显式注册进 GlobalFonts，路径不存在则跳过。
+for (const [p, alias] of [
+  ["/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", "Droid Sans Fallback"],
+  ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK SC"],
+  ["/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "WenQuanYi Micro Hei"],
+]) {
+  try {
+    if (existsSync(p)) GlobalFonts.registerFromPath(p, alias);
+  } catch { /* 注册失败则退回系统扫描 */ }
+}
 
 /** 是否装了中文字体（决定默认字体栈）。 */
 let zhProbe = null;
@@ -22,7 +35,7 @@ function hasChineseFont() {
     // Linux（fonts-noto-cjk 包）的家族名是「Noto Sans CJK SC」，与 Google 版
     // 「Noto Sans SC」不是同一个名字，探测必须两种都认，否则误判无中文字体。
     zhProbe = GlobalFonts.families.some((f) =>
-      /Noto Sans (CJK )?SC|Microsoft YaHei|SimHei|SimSun/i.test(f.family),
+      /Noto Sans (CJK )?SC|Microsoft YaHei|SimHei|SimSun|Droid Sans Fallback|WenQuanYi/i.test(f.family),
     );
   } catch {
     zhProbe = false;

@@ -41,7 +41,10 @@ jobs:
           sudo apt-get update
           # fonts-noto-cjk：runner 默认无 CJK 字体，缺了它中文渲染测试
           # （renderText「橘猫」栅格化宽度）会拿到兜底字形而失败。
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev fonts-noto-cjk
+          # fonts-droid-fallback：纯 .ttf 的 CJK 字体，@napi-rs/canvas 老版
+          # fontdb 若扫不到 .ttc 集合时由它兜底。
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev fonts-noto-cjk fonts-droid-fallback
+          fc-list | grep -iE 'cjk|droid|wqy' | head -3 || true
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -54,6 +57,10 @@ jobs:
       - name: MCP dependencies
         run: npm ci
         working-directory: mcp
+      # 诊断：runner 上 GlobalFonts 到底看到了什么字体、量到的宽度是多少。
+      - name: Font diagnosis (Linux)
+        if: runner.os == 'Linux'
+        run: node -e "const {createCanvas,GlobalFonts}=require('./mcp/node_modules/@napi-rs/canvas');console.log('total families:',GlobalFonts.families.length);console.log('CJK-ish:',GlobalFonts.families.map(f=>f.family).filter(f=>/cjk|noto|droid|wenquanyi|yahei|hei|song|kai/i.test(f)).join(' | ')||'(none)');const c=createCanvas(400,120),x=c.getContext('2d');x.font='700 64px \"Noto Sans CJK SC\",\"Droid Sans Fallback\",sans-serif';console.log('measure 64px:',x.measureText('橘猫').width)"
       - run: npx tsc --noEmit
       - run: npx vitest run
       # Rust 层也要在三平台各跑一遍：WIA 这类平台专属模块一旦门控漏了，
