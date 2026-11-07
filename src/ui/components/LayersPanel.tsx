@@ -94,10 +94,13 @@ import {
   deleteChannel,
   duplicateChannel,
   loadChannelAsSelection,
+  saveChannelAsAlpha,
 } from "../../core/channelOps";
+import { combineSelection, type SelectionMode } from "../../core/selection";
 import ColorChip from "./ColorChip";
 import RangeInput from "./RangeInput";
 import MiniHistogram from "./MiniHistogram";
+import LevelsEditor from "./LevelsEditor";
 import Popover from "./Popover";
 import "./LayersPanel.css";
 
@@ -277,17 +280,46 @@ function ChannelTab({
   const channels = alphaChannelsOf(doc);
   const current = viewAlpha ? channels.find((c) => c.id === viewAlpha) : undefined;
 
-  /** 把当前通道的明暗当作选区载入 —— 与 PS 的「载入通道作为选区」同一口径。 */
-  const loadChannel = () => {
+  /** 修饰键 → 选区组合模式（与 PS 通道页同义）：
+   *  Ctrl / Cmd    = 加选（add）
+   *  Alt           = 减选（subtract）
+   *  Ctrl+Alt      = 交叠（intersect）
+   *  无修饰键       = 替换（new）
+   *  Mac 上用 Cmd 等同 Ctrl，避免「明明按了组合键却只切换了查看」的别扭。 */
+  const loadModeOf = (e: React.MouseEvent): SelectionMode =>
+    (e.ctrlKey || e.metaKey) && e.altKey
+      ? "intersect"
+      : e.ctrlKey || e.metaKey
+        ? "add"
+        : e.altKey
+          ? "subtract"
+          : "new";
+
+  /** 把某个通道的明暗当作选区载入 —— 与 PS 的「载入通道作为选区」同一口径。
+   *  支持修饰键组合：Ctrl 加选 / Alt 减选 / Ctrl+Alt 交叠（之前只有「替换」）。 */
+  const loadChannelAsSel = (id: ChannelId, mode: SelectionMode) => {
     if (!flat) return;
+    const mask = channelToSelection(flat, id);
     onChange(
-      setSelection(doc, channelToSelection(flat, active)),
+      mode === "new"
+        ? setSelection(doc, mask)
+        : setSelection(doc, combineSelection(doc.selection, mask, mode)),
       zh.panel.channelLoad,
     );
   };
 
+  const loadChannel = (e: React.MouseEvent) => loadChannelAsSel(active, loadModeOf(e));
+
   const duplicateSelected = () => {
-    if (current) onChange(duplicateChannel(doc, current.id), zh.panel.channelDuplicate);
+    if (viewAlpha && current) {
+      // 复制一个已存在的 Alpha 通道（存储的选区）
+      onChange(duplicateChannel(doc, current.id), zh.panel.channelDuplicate);
+    } else if (active !== "rgb" && flat) {
+      // 复制当前查看的颜色通道（蓝 / 红 / 绿 / 透明度）成可编辑的 Alpha 副本
+      // —— PS 通道抠图第一步就是「复制一个对比度高的颜色通道」，之前颜色通道是
+      // 只读视图、复制按钮一直灰着，所以抠图卡在这一步。
+      onChange(saveChannelAsAlpha(doc, active, flat), zh.panel.channelDuplicate);
+    }
   };
   const deleteSelected = () => {
     if (!current) return;
@@ -308,6 +340,7 @@ function ChannelTab({
               vis={vis}
               active={active}
               onChannel={onChannel}
+              onLoad={(e) => loadChannelAsSel(id, loadModeOf(e))}
             />
           ))}
         </div>
@@ -326,7 +359,9 @@ function ChannelTab({
                   channel={c}
                   viewed={viewAlpha === c.id}
                   onView={(on) => onViewAlpha(on ? c.id : null)}
-                  onLoad={() => onChange(loadChannelAsSelection(doc, c.id, "new"), zh.dialog.channelLoadDone)}
+                  onLoad={(e) =>
+                    onChange(loadChannelAsSelection(doc, c.id, loadModeOf(e)), zh.dialog.channelLoadDone)
+                  }
                   onDelete={() => {
                     onChange(deleteChannel(doc, c.id), zh.panel.channelDelete);
                     if (viewAlpha === c.id) onViewAlpha(null);
@@ -358,7 +393,7 @@ function ChannelTab({
           disabled={!flat}
           title={zh.panel.channelLoadHint}
           aria-label={zh.panel.channelLoadHint}
-          onClick={loadChannel}
+          onClick={(e) => loadChannel(e)}
         >
           <IconEye />
         </button>
@@ -396,7 +431,7 @@ function ChannelTab({
         <button
           type="button"
           className="ch-act is-icon"
-          disabled={!current}
+          disabled={!flat || (active === "rgb" && !viewAlpha)}
           title="复制当前查看的通道"
           aria-label="复制通道"
           onClick={duplicateSelected}
@@ -442,7 +477,7 @@ function AlphaChannelRow({
   channel: AlphaChannel;
   viewed: boolean;
   onView: (on: boolean) => void;
-  onLoad: () => void;
+  onLoad: (e: React.MouseEvent) => void;
   onDelete: () => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -472,8 +507,8 @@ function AlphaChannelRow({
         width={36}
         height={36}
         className="ly-thumb ch-mono"
-        title="点击把该通道载入选区"
-        onClick={onLoad}
+        title="点击把该通道载入选区（Ctrl 加选 / Alt 减选 / Ctrl+Alt 交叠）"
+        onClick={(e) => onLoad(e)}
       />
 
       <button
@@ -498,19 +533,22 @@ function AlphaChannelRow({
   );
 }
 
-/** 通道行：眼睛管「是否参与合成」，点名字管「单独查看」。 */
+/** 通道行：眼睛管「是否参与合成」，点名字管「单独查看」；
+ *  Ctrl/Alt/Ctrl+Alt 点名字或缩略图则把该通道载入选区（加选 / 减选 / 交叠）。 */
 function ChannelRow({
   id,
   flat,
   vis,
   active,
   onChannel,
+  onLoad,
 }: {
   id: ChannelId;
   flat: HTMLCanvasElement | null;
   vis: ChannelVis;
   active: ChannelId;
   onChannel: (vis: ChannelVis, active: ChannelId) => void;
+  onLoad?: (e: React.MouseEvent) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -527,6 +565,12 @@ function ChannelRow({
   // 复合通道的「眼睛」是红绿蓝的总开关：三个都亮才算亮着。
   const on = id === "rgb" ? vis.red && vis.green && vis.blue : vis[id];
   const viewed = id === active;
+
+  // 普通点击 = 单独查看；按住修饰键 = 把该通道载入选区（与 PS 通道页一致）
+  const handlePick = (e: React.MouseEvent) => {
+    if ((e.ctrlKey || e.metaKey || e.altKey) && onLoad) onLoad(e);
+    else onChannel(vis, id);
+  };
 
   return (
     <div className={viewed ? "ch-row is-viewed" : "ch-row"}>
@@ -545,13 +589,15 @@ function ChannelRow({
         width={36}
         height={36}
         className={id === "rgb" ? "ly-thumb" : "ly-thumb ch-mono"}
+        title="点击单独查看（Ctrl 加选 / Alt 减选 / Ctrl+Alt 交叠 载入选区）"
+        onClick={handlePick}
       />
 
       <button
         type="button"
         className="ch-name"
-        title={zh.panel.channelHint}
-        onClick={() => onChannel(vis, id)}
+        title="点击单独查看（Ctrl 加选 / Alt 减选 / Ctrl+Alt 交叠 载入选区）"
+        onClick={handlePick}
       >
         {channelName(id)}
       </button>
@@ -1013,12 +1059,21 @@ export function AdjustProps({
   if (!st) return null;
   const def = adjustDef(st.id);
 
+  /** 最近一次实时预览的文档：松手写历史时用它，避免拿「拖动前的旧 st」回退掉刚拖的改动。
+   *  (预览只走 ref、不进 React 状态，所以这里的 st 仍是拖动前的旧值，
+   *    直接用 setAdjust(doc, layer.id, st) 会在松手时把拖动结果冲掉。) */
+  const lastPreviewRef = useRef<StrataDoc | null>(null);
+  const preview = (next: StrataDoc) => {
+    lastPreviewRef.current = next;
+    onPreview(next);
+  };
+
   /** 只动一个数值，曲线 / 色标原样带走。 */
   const setParam = (id: string, value: number) =>
-    onPreview(setAdjust(doc, layer.id, { ...st, params: { ...st.params, [id]: value } }));
+    preview(setAdjust(doc, layer.id, { ...st, params: { ...st.params, [id]: value } }));
 
-  /** 松手时把当前这份状态写进历史。 */
-  const commit = () => onChange(setAdjust(doc, layer.id, st), zh.layers.adjustParams);
+  /** 松手时把「当前这份（已预览的）状态」写进历史，而不是直接用旧的 st 重建。 */
+  const commit = () => onChange(lastPreviewRef.current ?? setAdjust(doc, layer.id, st), zh.layers.adjustParams);
 
   // 带 group 的参数按 group 分段显示（色彩平衡、通道混合器参数多，不分段会糊成一片）
   const sections: { title?: string; items: AdjustParam[] }[] = [];
@@ -1042,23 +1097,33 @@ export function AdjustProps({
         </button>
       </div>
 
-      {/* 色阶类调整先给一张亮度直方图：不看分布盲调滑杆很难受 */}
-      {(st.id === "levels" || st.id === "channellevels" || st.id === "bc") && (
+      {/* 亮度 / 对比度：给一张亮度直方图，参数走通用滑杆 */}
+      {st.id === "bc" && (
         <MiniHistogram
           source={compSource ?? null}
           version={compVersion}
-          black={st.params.black}
-          white={st.params.white}
-          gamma={st.params.gamma}
           height={62}
         />
       )}
 
+      {/* 色阶 / 通道色阶：专用编辑器（顶部可拖数字 + 直方图拖手柄，双向联动）。
+         不再用底部那套和顶部数字重复的黑场滑杆。 */}
+      {(st.id === "levels" || st.id === "channellevels") && (
+        <LevelsEditor
+          id={st.id}
+          params={st.params}
+          source={compSource ?? null}
+          version={compVersion}
+          setParam={setParam}
+          commit={commit}
+        />
+      )}
+
       {st.id === "curves" && (
-        <CurveEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={onPreview} />
+        <CurveEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={preview} commit={commit} />
       )}
       {st.id === "gradientmap" && (
-        <GradientEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={onPreview} />
+        <GradientEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={preview} />
       )}
 
       {/* 调色台有五十多个参数，塞进这里会糊成一片 —— 指到专门的调色台面板 */}
@@ -1069,7 +1134,7 @@ export function AdjustProps({
         </p>
       )}
 
-      {st.id !== "grade" &&
+      {st.id !== "grade" && st.id !== "levels" && st.id !== "channellevels" &&
         sections.map((sec, si) => (
         <Fragment key={sec.title ?? `s${si}`}>
           {sec.title && <span className="ly-group">{sec.title}</span>}
@@ -1368,12 +1433,15 @@ function CurveEditor({
   st,
   onChange,
   onPreview,
+  commit,
 }: {
   doc: StrataDoc;
   layer: StrataLayer;
   st: AdjustState;
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
+  /** 松手写历史：用「最近一次预览的文档」，避免拿旧的 st 把拖动的曲线冲掉 */
+  commit?: () => void;
 }) {
   const [channel, setChannel] = useState<CurveChannel>("rgb");
   // 当前编辑的是哪条曲线：切通道等于换一组点，写回也写到对应那一组
@@ -1535,7 +1603,9 @@ function CurveEditor({
     dragRef.current = null;
     const touched = freshRef.current;
     freshRef.current = null;
-    if (touched === null) onChange(setAdjust(doc, layer.id, st), zh.layers.adjustParams);
+    // 松手落一条：走 commit（用最近一次预览的文档），不要拿旧的 st 重建 ——
+    // 否则会把刚才拖动的曲线点冲掉。
+    if (touched === null) (commit ?? (() => onChange(setAdjust(doc, layer.id, st), zh.layers.adjustParams)))();
   };
 
   const onDbl = (e: ReactPointerEvent<HTMLCanvasElement>) => {

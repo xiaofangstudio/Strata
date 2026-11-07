@@ -536,3 +536,16 @@ button.motion-press:active {
     inset 0 -1px 0 rgba(255, 255, 255, 0.10),
     0 0 14px rgba(255, 255, 255, 0.16);
 }
+
+/* ---- 调色区域永久豁免光效 ----
+   白色反光带 / 跟随光斑盖在 SV 渐变与色相条上，会让「看到的颜色」和
+   「取到的颜色」不一致（偏色）—— 取色区域里任何光斑都不能有，与全局
+   光效开关无关。.cp-panel = 右侧常驻调色面板；:has(.cp) 兜住对话框 /
+   浮层里的自绘拾色器（:has 不支持时该条自动失效，不影响其余规则）。 */
+[data-glow="on"] .cp-panel::after,
+[data-glow="on"] .cp-panel button::after,
+[data-glow="on"] .modal:has(.cp)::after,
+[data-glow="on"] .optbar-pop:has(.cp)::after,
+[data-glow="on"] .menu-pop:has(.cp)::after {
+  content: none;
+}

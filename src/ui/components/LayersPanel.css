@@ -1222,3 +1222,120 @@
   border-color: color-mix(in srgb, var(--text) 10%, transparent);
   box-shadow: inset 0 1px 0 var(--fx-hi-soft);
 }
+
+/* ---------- 色阶编辑器（替代通用滑杆） ---------- */
+
+.ly-levels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* 通道色阶的 RGB 页签：复用曲线页签的语汇，选中那条带本色标记 */
+.lv-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.lv-tab {
+  flex: 1;
+  height: 24px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--r-sm) - 1px);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.lv-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.lv-tab.is-on {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--lv-hue, var(--accent)), inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 顶部可拖数字：标签 + 数值，数值本身左右拖改值 */
+.lv-top,
+.lv-out-top {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.lv-num {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.lv-num-label {
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+
+/* 数值：光标变成左右拖，悬停提示可拖；按下时数值压在指尖下 */
+.lv-num-val {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.lv-num-val:hover {
+  background: var(--hover);
+}
+
+.lv-num-val:active {
+  background: var(--pressed);
+}
+
+/* 直方图：带手柄的画布，拖手柄改黑/灰/白场 */
+.lv-hist {
+  width: 100%;
+  height: 110px;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  cursor: ew-resize;
+  touch-action: none;
+  box-shadow: inset 0 1px 0 var(--fx-hi-soft);
+}
+
+/* 输出色阶小条 */
+.lv-out {
+  width: 100%;
+  height: 20px;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  cursor: ew-resize;
+  touch-action: none;
+}

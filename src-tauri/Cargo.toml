@@ -1,6 +1,6 @@
 [package]
 name = "strata"
-version = "2.6.2"
+version = "2.6.3"
 description = "Strata · Windows 优先、全中文、永久免费开源（MIT）的修图与绘画工具"
 authors = ["小方工作室"]
 license = "MIT"

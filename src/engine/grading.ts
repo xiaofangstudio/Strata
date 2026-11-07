@@ -220,7 +220,9 @@ interface WheelBank {
 function wheelVector(x: number, y: number): [number, number, number] {
   const len = Math.hypot(x, y);
   if (len < 1e-6) return [0, 0, 0];
-  // 屏幕坐标：右 = 红 0°，上 = 黄绿；色相角按 12 点钟为红顺时针排
+  // 屏幕坐标：x = 右(正)，y = 下(正)。hue = atan2(x, -y)：
+  // 正上 = 0°(红)、右 = 90°(黄绿)、正下 = 180°(青)、左 = 270°(紫)，
+  // 顺时针色相递增 —— 与 CSS 色轮（from 0deg，正上=红）严格对齐。
   const hue = ((Math.atan2(x, -y) / (Math.PI * 2)) % 1 + 1) % 1;
   const [r, g, b] = hslToRgb(hue, 1, 0.5);
   const amp = Math.min(1, len) * 0.28;

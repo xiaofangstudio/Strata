@@ -135,6 +135,19 @@ export default function GradePanel({
     layer.window ? "secondary" : "primary",
   );
   /**
+   * level 是纯 UI 状态，但它必须跟着层走：切换到别的层、当前层新建或移除
+   * 范围时，按与初始化相同的规则重算。否则会停在过期的档位上 ——
+   * 典型现象是「钢笔画完范围，面板还停在一级，范围栏整个消失，
+   * 效果在画面上生效却找不到入口」。
+   *
+   * 依赖只有「层 id + 有没有范围」：用户在带范围的层上手动点一级，
+   * 不会被打回二级（那两个依赖都没变），一级页照常可用。
+   */
+  const hasWin = Boolean(layer.window);
+  useEffect(() => {
+    setLevel(hasWin ? "secondary" : "primary");
+  }, [layer.id, hasWin]);
+  /**
    * 范围列表默认**收起**。
    *
    * 范围一多，这一列会越堆越长，把下面的调色参数（基础/色轮/切片器/曲线）
@@ -295,6 +308,22 @@ export default function GradePanel({
           二级
         </button>
       </div>
+
+      {/*
+        一级页上带范围的层的「回路」：一级按设计收起范围栏 / 范围列表，
+        但范围本身还在生效（画面上照常打光），不能让入口凭空消失 ——
+        留一条一键回二级的提示，参数一个都不动。
+      */}
+      {level === "primary" && layer.window && (
+        <button
+          type="button"
+          className="grade-level-back"
+          onClick={() => setLevel("secondary")}
+          title="范围还在生效，去二级编辑羽化 / 停用 / 移除"
+        >
+          此层带范围 · 回二级编辑 ↩
+        </button>
+      )}
 
       {level === "secondary" && (
         <>

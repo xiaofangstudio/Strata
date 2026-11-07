@@ -18,7 +18,7 @@ import {
   type SelectionMode,
 } from "./selection";
 import { createSurface, readPixels, writePixels } from "../engine/surface";
-import type { AlphaChannel } from "./channels";
+import { channelToSelection, type AlphaChannel, type ChannelId } from "./channels";
 import type { StrataDoc } from "./document";
 
 /** 通道运算的三种混合，语义与选区布尔运算一致。 */
@@ -184,6 +184,45 @@ export function duplicateChannel(doc: StrataDoc, channelId: string): StrataDoc {
     mask: cloneSelection(src.mask),
   });
   return withChannels(doc, channels);
+}
+
+/**
+ * 把当前查看的颜色通道（红 / 绿 / 蓝 / 透明度）存成一张可编辑的 Alpha 通道副本
+ * （PS 的「复制通道」）。颜色通道本是派生视图、不能直接编辑，复制后就变成一份
+ * 独立灰度遮罩，可以接着做色阶 / 载入选区 / 通道运算。
+ * `flat` 是合成结果的整图画布，从中现算该通道的灰度；RGB 复合通道不复制。
+ */
+export function saveChannelAsAlpha(
+  doc: StrataDoc,
+  id: ChannelId,
+  flat: HTMLCanvasElement,
+  name?: string,
+): StrataDoc {
+  if (id === "rgb") return doc;
+  const mask = channelToSelection(flat, id);
+  const channels = alphaChannelsOf(doc).slice();
+  channels.push({
+    id: nextAlphaChannelId(),
+    name: name?.trim() || nextChannelName(doc, `${channelLabel(id)} 副本`),
+    mask,
+  });
+  return withChannels(doc, channels);
+}
+
+/** 颜色通道的简短中文标签（用于复制副本的命名）。 */
+function channelLabel(id: ChannelId): string {
+  switch (id) {
+    case "red":
+      return "红";
+    case "green":
+      return "绿";
+    case "blue":
+      return "蓝";
+    case "alpha":
+      return "透明";
+    default:
+      return "通道";
+  }
 }
 
 /** 删除通道（至少不是破坏性的：通道只是数据，删了不碰画面）。 */

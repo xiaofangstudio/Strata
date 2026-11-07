@@ -282,7 +282,7 @@ import {
 } from "../core/channels";
 import { autoOn } from "../engine/auto";
 import { composeDoc } from "../engine/compositor";
-import { composeForDisplay } from "../engine/displayCompose";
+import { composeForDisplay, shrinkSurfaceForDisplay } from "../engine/displayCompose";
 import { inpaint } from "../engine/inpaint";
 import { asRaster, createRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
@@ -1125,6 +1125,14 @@ export default function EditorShell({
     return composeDoc(doc, c);
   }, [doc]);
   const scratchRef = useRef<HTMLCanvasElement | null>(null);
+  /**
+   * 拖动图层的预览专用：这一层的「显示比例缩略图」缓存 + 按显示尺寸的暂存画布。
+   * 拖动期间源画布不变，缩略图只缩一次；每帧只搬缩略图，不再碰整幅文档像素。
+   */
+  const moveSmallRef = useRef<{ src: HTMLCanvasElement; s: number; out: HTMLCanvasElement } | null>(
+    null,
+  );
+  const moveScratchRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /** 正在拖动的参考线：axis 是线的方向（"x" 竖线 / "y" 横线），from 是被拖那条的下标 */
   const guideDragRef = useRef<{ axis: "x" | "y"; index: number; pos: number } | null>(null);
@@ -1527,6 +1535,51 @@ export default function EditorShell({
         mctx.restore();
       }
       composeForDisplay(docNow, comp, dispScale, { index: at, layer: { ...act, mask } });
+      present();
+      return;
+    }
+
+    /**
+     * 拖动图层的实时预览：只在缩小时走这条"按显示分辨率搬层"的路径。
+     *
+     * 原路径每帧都要在一张整幅文档大小的暂存画布上 clear + drawImage，再交给
+     * 合成器缩一遍 —— 文字层这类整幅画布的大图层等于每帧读一遍 24MP 级像素，
+     * 拖起来就是"卡"。这里改成：
+     *   · 这一层按显示比例缩一份，源画布不变就复用缓存（一次拖拽只缩一次）；
+     *   · 每帧只在显示尺寸的暂存画布上搬缩略图，偏移量按同一比例折算。
+     * 蒙版层仍走下面的原路径（蒙版不能被烘进表面，否则跟着一起动就错了）。
+     */
+    if (offset && !stroke && act.kind !== "adjust" && !act.mask && dispScale < 0.999) {
+      let small = moveSmallRef.current;
+      if (!small || small.src !== act.surface || small.s !== dispScale) {
+        small = {
+          src: act.surface,
+          s: dispScale,
+          out: shrinkSurfaceForDisplay(act.surface, dispScale),
+        };
+        moveSmallRef.current = small;
+      }
+      let mv = moveScratchRef.current;
+      if (!mv || mv.width !== compW || mv.height !== compH) {
+        mv = createSurface(compW, compH);
+        moveScratchRef.current = mv;
+      }
+      const mctx = mustCtx(mv);
+      mctx.setTransform(1, 0, 0, 1, 0, 0);
+      mctx.globalAlpha = 1;
+      mctx.globalCompositeOperation = "source-over";
+      mctx.filter = "none";
+      mctx.clearRect(0, 0, mv.width, mv.height);
+      mctx.drawImage(
+        small.out,
+        Math.round(moving.dx * dispScale),
+        Math.round(moving.dy * dispScale),
+      );
+      composeForDisplay(docNow, comp, dispScale, {
+        index: at,
+        layer: { ...act, surface: mv },
+        prescaled: true,
+      });
       present();
       return;
     }
@@ -2672,8 +2725,10 @@ export default function EditorShell({
   const onMove = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
       syncCursor(e.clientX, e.clientY);
-      // 正在连续画：续一下"交互中"的计时，避免画到一半就退回全质量
-      if (strokeRef.current || retouchRef.current) markInteracting();
+      // 正在连续画 / 拖图层：续一下"交互中"的计时，避免操作到一半就退回全质量
+      // （移动工具以前漏了这一条，拖动时每帧都按视图全分辨率整档重合成，
+      //  文字层这种整幅画布的大图层尤其明显；补上后走既有降档 + 停手 300ms 补全）
+      if (strokeRef.current || retouchRef.current || dragRef.current) markInteracting();
       // 套索进行中：记下光标位置，覆盖层的 RAF 循环会读它画橡皮筋
       if (polyPts) polyHoverRef.current = docXY(e.clientX, e.clientY);
       const from = panRef.current;
@@ -8992,6 +9047,15 @@ export default function EditorShell({
       if (k === "d") {
         e.preventDefault();
         doDeselect();
+        return;
+      }
+      // Ctrl+L：色阶（PS 老习惯，等同 图像 > 调整 > 色阶）。
+      // adjustLayer 定义在 menuGroups 的 useMemo 工厂内、键盘 handler 拿不到，
+      // 这里内联它的逻辑：新建色阶调整层 + 打开属性面板。
+      if (k === "l" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        onCommit(addAdjustLayer(doc, newAdjustState("levels")), zh.layers.adjustAdd);
+        setDockOpen((prev) => ({ ...prev, props: true }));
         return;
       }
       if (k === "i" && e.shiftKey) {

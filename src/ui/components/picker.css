@@ -57,7 +57,9 @@
 
 .cp-inline {
   flex-direction: row;
-  gap: 6px;
+  /* 色相条是独立控件，间距拉大：贴着 SV 方块会被看成一块、滑块还压边，
+     精确点选色相就难（用户实测反馈）。 */
+  gap: 10px;
   align-items: stretch;
   width: 100%;
   min-width: 0;
@@ -73,7 +75,8 @@
 .cp-hue-v {
   position: relative;
   flex: none;
-  width: 12px;
+  /* 12px 太窄，点不准；16px 配合 10px 间距才是一条「独立」的色相条 */
+  width: 16px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   cursor: ns-resize;
@@ -92,10 +95,11 @@
 
 .cp-knob-huev {
   left: 50%;
+  /* 与 16px 条同宽：滑块刚好落在条内，不再压到 SV 方块上 */
   width: 16px;
-  height: 10px;
-  margin: -5px 0 0 -8px;
-  border-radius: 3px;
+  height: 12px;
+  margin: -6px 0 0 -8px;
+  border-radius: 4px;
 }
 
 .cp-foot {

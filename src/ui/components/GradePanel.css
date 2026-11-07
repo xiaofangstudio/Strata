@@ -424,23 +424,25 @@
 /*
   外圈色相环：细、颜色够亮 —— 它是"这是个色轮"唯一的识别符，
   所以宁可窄也要准。用 mask 挖掉内圈，不额外占位。
+
+  色相分布必须与内核 wheelVector 严格对齐：hue = angle/360（以正上=红 0°、
+  顺时针递增），所以这里从 0deg 起、按等角度均匀取色，保证"拖向哪个颜色、
+  画面就偏那个颜色"。之前 from -90deg + 不均匀档位会把整圈错开 90°，
+  导致"拖过去取到的颜色不对"。
 */
 .gw-halo {
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background: conic-gradient(
-    from -90deg,
-    hsl(0 88% 60%),
-    hsl(40 92% 58%),
-    hsl(80 82% 55%),
-    hsl(140 72% 50%),
-    hsl(185 80% 52%),
-    hsl(225 88% 62%),
-    hsl(270 82% 62%),
-    hsl(315 85% 62%),
-    hsl(345 88% 60%),
-    hsl(360 88% 60%)
+    from 0deg,
+    hsl(0 85% 60%),
+    hsl(60 90% 58%),
+    hsl(120 65% 52%),
+    hsl(180 75% 52%),
+    hsl(240 88% 60%),
+    hsl(300 80% 62%),
+    hsl(360 85% 60%)
   );
   -webkit-mask: radial-gradient(
     closest-side,
@@ -463,22 +465,20 @@
 /*
   内部色域：中心干净、越靠外越带色 —— 与内核「向量越远越浓」的语义一致。
   透明度压得很低，是"氛围"而不是"颜色样本"，拖动时不会看花眼。
+  色相分布与外圈 halo 同源（from 0deg + 均匀），保证内外观感一致。
 */
 .gw-field {
   position: absolute;
   inset: 9px;
   border-radius: 50%;
   background: conic-gradient(
-    from -90deg,
+    from 0deg,
     hsl(0 80% 60%),
-    hsl(40 85% 60%),
-    hsl(80 75% 58%),
-    hsl(140 65% 55%),
-    hsl(185 72% 56%),
-    hsl(225 80% 64%),
-    hsl(270 75% 64%),
-    hsl(315 78% 64%),
-    hsl(345 80% 62%),
+    hsl(60 85% 60%),
+    hsl(120 72% 58%),
+    hsl(180 72% 56%),
+    hsl(240 80% 64%),
+    hsl(300 78% 64%),
     hsl(360 80% 60%)
   );
   opacity: 0.3;
@@ -882,6 +882,22 @@
 .grade-level.is-on {
   color: var(--accent-ink);
   background: var(--accent);
+}
+
+/* 一级页上的「回二级」提示：层带范围但范围 UI 被一级收起时，留一条回来的路 */
+.grade-level-back {
+  flex: none;
+  height: 24px;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+.grade-level-back:hover {
+  background: var(--hover);
 }
 
 /* ---------- 范围列表（常驻，不隐藏） ---------- */

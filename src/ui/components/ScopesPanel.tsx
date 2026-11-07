@@ -14,7 +14,6 @@ import {
   binIntensity,
   computeParade,
   computeVectorscope,
-  computeWaveform,
   type ScopeBins,
 } from "../../engine/scopes";
 import { readPixels } from "../../engine/surface";
@@ -107,8 +106,12 @@ export default function ScopesPanel({ source, version }: Props) {
     }
 
     if (mode === "waveform") {
-      const wf = computeWaveform(data, "luma", Math.max(64, Math.round(cssW)));
-      paintBins(ctx, wf, cssW, cssH, [232, 236, 244], false);
+      // 波形图默认叠加 R/G/B 三条（各自本色），一眼看出偏色与通道溢出——
+      // 之前只画亮度，三个通道看着都是同一根「单色调」曲线，毫无参考意义。
+      const { r, g, b } = computeParade(data, Math.max(96, Math.round(cssW * 3)));
+      paintBins(ctx, r, cssW, cssH, [255, 92, 92], false, 0);
+      paintBins(ctx, g, cssW, cssH, [92, 220, 120], false, 0);
+      paintBins(ctx, b, cssW, cssH, [110, 170, 255], false, 0);
       // 0 / 100 IRE 参考线
       paintIre(ctx, cssW, cssH, grid);
       return;

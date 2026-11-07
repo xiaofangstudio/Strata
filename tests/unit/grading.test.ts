@@ -128,7 +128,8 @@ describe("饱和度与色相", () => {
 
 describe("色轮按亮度分档", () => {
   it("暗部色轮偏红：暗像素被拉红，亮像素几乎不动", () => {
-    const p = { ...neutralGrade(), darkX: 90, darkY: 0 };
+    // 色轮「上 = 红」，所以指针在正上方（y 为负）时才是偏红
+    const p = { ...neutralGrade(), darkX: 0, darkY: -90 };
     const out = applyGrade(strip([[30, 30, 30], [230, 230, 230]]), p);
     const darkDelta = px(out, 0)[0] - 30;
     const lightDelta = px(out, 1)[0] - 230;
@@ -141,6 +142,43 @@ describe("色轮按亮度分档", () => {
     const out = applyGrade(strip([[30, 30, 30], [200, 200, 200]]), p);
     expect(px(out, 0)[0]).toBeGreaterThan(30);
     expect(px(out, 1)[0]).toBeGreaterThan(200);
+  });
+});
+
+describe("色轮方向与色相环一致", () => {
+  /** 中性灰过一遍色轮，返回三通道相对 128 的增量。 */
+  const shift = (patch: Record<string, number>): [number, number, number] => {
+    const out = run([[128, 128, 128]], patch);
+    const [r, g, b] = px(out, 0);
+    return [r - 128, g - 128, b - 128];
+  };
+
+  // 指针坐标：x 向右正、y 向下正。hue = atan2(x, -y)，即上=0°(红)、
+  // 右=90°(黄绿)、下=180°(青)、左=270°(紫)。这四条断言就是色相环的
+  // 视觉方向与内核数值方向的对照表 —— 任何一边被改反都会在这里失败。
+  it("上 = 红：红通道最高，绿蓝同时被压低", () => {
+    const [r, g, b] = shift({ globX: 0, globY: -80 });
+    expect(r).toBeGreaterThan(g);
+    expect(r).toBeGreaterThan(b);
+    expect(Math.abs(g - b)).toBeLessThanOrEqual(1);
+  });
+
+  it("右 = 黄绿：绿通道最高，红次之，蓝被压低", () => {
+    const [r, g, b] = shift({ globX: 80, globY: 0 });
+    expect(g).toBeGreaterThan(r);
+    expect(r).toBeGreaterThan(b);
+  });
+
+  it("下 = 青：绿蓝同升，红被压低", () => {
+    const [r, g, b] = shift({ globX: 0, globY: 80 });
+    expect(g).toBeGreaterThan(r);
+    expect(b).toBeGreaterThan(r);
+  });
+
+  it("左 = 紫：蓝通道最高，绿最低", () => {
+    const [r, g, b] = shift({ globX: -80, globY: 0 });
+    expect(b).toBeGreaterThan(r);
+    expect(r).toBeGreaterThan(g);
   });
 });
 

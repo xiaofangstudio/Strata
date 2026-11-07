@@ -53,6 +53,17 @@ function grab(w: number, h: number): HTMLCanvasElement {
   return c;
 }
 
+/**
+ * 供「拖动图层」的实时预览复用：把源画布按 s 缩一份并缓存。
+ *
+ * 预览每帧都要搬动这一层，若每帧重新把整幅 24MP 表面缩一遍，缩本身就成了
+ * 主要开销；而拖动期间源画布根本不变，所以缩一次、之后每帧只搬缩略图。
+ * 返回的画布由缓存持有，**调用方只能读，不要往上面画**。
+ */
+export function shrinkSurfaceForDisplay(src: HTMLCanvasElement, s: number): HTMLCanvasElement {
+  return shrink(src, s, true);
+}
+
 /** 把一张画布等比缩到 s 倍，返回池里的画布（下次合成会被覆盖，别长期持有）。 */
 function shrinkToPool(
   src: CanvasImageSource & { width: number; height: number },
@@ -154,7 +165,11 @@ export function composeForDisplay(
   doc: StrataDoc,
   target: HTMLCanvasElement,
   viewScale: number,
-  override?: LayerOverride | null,
+  /**
+   * prescaled：override.layer.surface 已经按显示比例缩好（并且偏移也已经烘进去），
+   * 这里只补缩蒙版 / 范围，不再缩表面。拖动图层时用它省掉每帧的整幅重缩。
+   */
+  override?: (LayerOverride & { prescaled?: boolean }) | null,
 ): { width: number; height: number } {
   const s = Math.min(1, Math.max(MIN_SCALE, viewScale));
 
@@ -172,7 +187,14 @@ export function composeForDisplay(
   const dispOverride = override
     ? {
         index: override.index,
-        layer: shrinkLayer(override.layer, s, false),
+        layer:
+          override.prescaled && override.layer.surface
+            ? {
+                ...override.layer,
+                mask: override.layer.mask ? shrink(override.layer.mask, s, false) : override.layer.mask,
+                window: override.layer.window ? shrinkWindow(override.layer.window, s) : override.layer.window,
+              }
+            : shrinkLayer(override.layer, s, false),
       }
     : null;
   const dispDoc: StrataDoc = {
