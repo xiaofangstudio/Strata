@@ -59,6 +59,11 @@ interface Props {
   onChange: (next: GradeWindow, commit: boolean) => void;
   /** 钢笔逐点绘制（非空时这一层进入"画形状"状态） */
   pen?: PenState | null;
+  /**
+   * 只读轮廓：「显示全部线框」时，非当前层的范围只画形状、不画手柄、不吃事件。
+   * 否则多个 SVG 的抓取区会互相盖住，画布上点哪儿都在拖别人的范围。
+   */
+  readOnly?: boolean;
 }
 
 
@@ -88,7 +93,15 @@ function doubleArrow(c: { x: number; y: number }, dir: { x: number; y: number },
   return `${arrowHead(p1, dir, size * 0.7)} ${arrowHead(p2, { x: -ux, y: -uy }, size * 0.7)}`;
 }
 
-export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, pen }: Props) {
+export default function GradeWindowOverlay({
+  docW,
+  docH,
+  scale,
+  win,
+  onChange,
+  pen,
+  readOnly = false,
+}: Props) {
   const [live, setLive] = useState<GradeWindow | null>(null);
   const drag = useRef<{
     id: HandleId;
@@ -116,6 +129,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
   };
 
   const begin = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (readOnly) return;
     const p = toDoc(e);
     // 没命中任何手柄也按住不放：整块范围当作"整体拖动"。
     // 否则这一下会漏到画布上，在调整图层里落笔 → 弹「调整图层没有像素」。
@@ -211,7 +225,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
   return (
     <svg
       ref={svgRef}
-      className={pen ? "gwf is-pen" : "gwf"}
+      className={`gwf${pen ? " is-pen" : ""}${readOnly ? " is-readonly" : ""}`}
       viewBox={`0 0 ${docW} ${docH}`}
       preserveAspectRatio="none"
       onPointerDown={(e) => {
@@ -249,7 +263,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
        * 手滑落在手柄旁边时，这一下会被当成"整块拖动"，而不是漏到画布上
        * 在调整图层里落笔（那会弹「调整图层没有像素」）。
        */}
-      {!pen &&
+      {!pen && !readOnly &&
         (() => {
           const b = windowBounds(cur);
           if (b.w < 2 || b.h < 2) return null;
@@ -411,7 +425,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
       )}
 
       {/* 中心锚点：十字 + 圆点，比单纯一个圆点好认 */}
-      {hs
+      {!readOnly && hs
         .filter((h) => h.id === "move")
         .map((h) => (
           <g key="anchor" className="gwf-anchor">
@@ -422,7 +436,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
         ))}
 
       {/* 浮在外面的把手用虚线连回形状 —— 否则看着像随手画上去的一个点 */}
-      {(cur.kind === "ellipse" || cur.kind === "quad" || cur.kind === "poly") &&
+      {!readOnly && (cur.kind === "ellipse" || cur.kind === "quad" || cur.kind === "poly") &&
         (() => {
           const anchorPt =
             cur.kind === "poly" || cur.kind === "quad" ? centroidOf(cur.points) : { x: cur.cx, y: cur.cy };
@@ -440,7 +454,7 @@ export default function GradeWindowOverlay({ docW, docH, scale, win, onChange, p
           );
         })()}
 
-      {hs.map((h) =>
+      {!readOnly && hs.map((h) =>
         // 线性：羽化把手画成双箭头（"拉它改淡出宽度"一眼可读，不再像个误画的点）
         cur.kind === "line" && h.id === "feather" ? (
           <g key={h.id}>

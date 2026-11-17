@@ -7,14 +7,20 @@
  *
  * - **位图**：阈值二值化（可选半调网点），黑/白两色，没有灰阶。
  * - **双色调**：把亮度映射到「深色墨 → 浅色墨」的双色渐变（PS 的双色调本质）。
- * - **索引颜色**：中位切分（median cut）量化出 N 色调色板，再按最近色映射，
- *   可开 Floyd–Steinberg 抖动 —— 和 GIF/PNG-8 的成像一致。
+ * - **索引颜色**：Lab 感知中位切分 + k-means 建调色板（可选 Selective/Adaptive/
+ *   Web/Uniform/Exact），再按最近色映射，支持无/误差扩散/图案/杂色四种抖动。
  * - **CMYK**：真的走一遍 RGB→CMYK→RGB，含油墨总量限制（ink limit）与
  *   底色去除（UCR），因此高饱和暗部会像印刷品一样掉饱和。
  * - **Lab**：RGB→XYZ(D65)→Lab→限色域→回 RGB，极端色会被轻微收色。
  * - **多通道**：拆出四张灰度通道图（由调用方写进 alpha 通道）。
  */
 import { makeBuffer, type RgbaBuffer } from "../engine/filters/kernels";
+import {
+  buildPalette,
+  quantizeRgba,
+  type DitherKind,
+  type PaletteKind,
+} from "../engine/algos/quantize";
 
 const clamp255 = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
 
@@ -196,61 +202,33 @@ function nearest(palette: Rgb[], r: number, g: number, b: number): number {
   return best;
 }
 
+export interface IndexedOptions {
+  /** 默认 perceptual；PhotoCraft 口径的 exact/web/uniform/perceptual/selective/adaptive。 */
+  paletteKind?: PaletteKind;
+  /** 抖动强度 0~100。 */
+  amount?: number;
+  /** 强制包含的调色板色（黑白/原色等）。 */
+  forced?: Rgb[];
+}
+
 /**
- * 索引颜色：把图量化到 n 色。dither 打开时用 Floyd–Steinberg 误差扩散。
+ * 索引颜色：把图量化到 n 色。dither 兼容旧布尔（true = 误差扩散）；
  * 返回量化后的图与调色板（调色板供「颜色表」编辑）。
  */
 export function toIndexed(
   src: RgbaBuffer,
   colors: number,
-  dither: boolean,
+  dither: boolean | DitherKind,
+  opts: IndexedOptions = {},
 ): { buf: RgbaBuffer; palette: Rgb[] } {
-  const palette = medianCutPalette(src, colors);
-  const { width: w, height: h, data } = src;
-  const out = makeBuffer(w, h);
-  const work = new Float32Array(w * h * 3);
-  for (let p = 0; p < w * h; p += 1) {
-    const i = p * 4;
-    work[p * 3] = data[i];
-    work[p * 3 + 1] = data[i + 1];
-    work[p * 3 + 2] = data[i + 2];
-  }
-  for (let y = 0; y < h; y += 1) {
-    for (let x = 0; x < w; x += 1) {
-      const p = y * w + x;
-      const o = p * 4;
-      if (data[o + 3] < 8) continue;
-      const r = work[p * 3];
-      const g = work[p * 3 + 1];
-      const b = work[p * 3 + 2];
-      const idx = nearest(palette, r, g, b);
-      const pr = palette[idx][0];
-      const pg = palette[idx][1];
-      const pb = palette[idx][2];
-      out.data[o] = pr;
-      out.data[o + 1] = pg;
-      out.data[o + 2] = pb;
-      out.data[o + 3] = data[o + 3];
-      if (!dither) continue;
-      const er = r - pr;
-      const eg = g - pg;
-      const eb = b - pb;
-      const spread = (dx: number, dy: number, k: number): void => {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
-        const np = ny * w + nx;
-        work[np * 3] += er * k;
-        work[np * 3 + 1] += eg * k;
-        work[np * 3 + 2] += eb * k;
-      };
-      spread(1, 0, 7 / 16);
-      spread(-1, 1, 3 / 16);
-      spread(0, 1, 5 / 16);
-      spread(1, 1, 1 / 16);
-    }
-  }
-  return { buf: out, palette };
+  const kind: DitherKind = dither === true ? "diffusion" : dither === false ? "none" : dither;
+  const palette = buildPalette(src, opts.paletteKind ?? "perceptual", colors, opts.forced);
+  const { buf } = quantizeRgba(src, palette, {
+    dither: kind,
+    amount: opts.amount ?? 100,
+    seed: 12345,
+  });
+  return { buf, palette };
 }
 
 /** 按调色板重新映射（「颜色表」改完色后回涂用）。 */

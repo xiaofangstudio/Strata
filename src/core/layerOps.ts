@@ -6,7 +6,7 @@
  */
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
 import { contentAwareScale } from "./seamCarve";
-import { mlsWarp, type MlsMode, type WarpPin } from "../engine/meshWarp";
+import { warpImage, type WarpMode, type WarpPin } from "../engine/meshWarp";
 import { composeDoc, paintSurface } from "../engine/compositor";
 import { clipBaseOf, paintStyledLayer } from "../engine/styles";
 import { isPixelAdjust, applyPixelAdjust } from "../engine/adjustPixels";
@@ -1563,14 +1563,14 @@ export function contentAwareScaleDocument(
 export function meshWarpActiveLayer(
   doc: StrataDoc,
   pins: readonly WarpPin[],
-  mode: MlsMode = "similarity",
+  mode: WarpMode = "similarity",
 ): StrataDoc {
   const cur = activeLayer(doc);
   if (!cur || cur.kind !== "pixel" || cur.locked) return doc;
-  const minPins = mode === "affine" ? 3 : 2;
+  const minPins = mode === "similarity" ? 2 : 3;
   if (pins.length < minPins) return doc;
   const img = readPixels(cur.surface);
-  const warped = mlsWarp(
+  const warped = warpImage(
     { data: img.data, width: img.width, height: img.height },
     pins,
     mode,
@@ -1580,7 +1580,7 @@ export function meshWarpActiveLayer(
   let mask = cur.mask;
   if (mask) {
     const mimg = readPixels(mask);
-    const mwarped = mlsWarp(
+    const mwarped = warpImage(
       { data: mimg.data, width: mimg.width, height: mimg.height },
       pins,
       mode,

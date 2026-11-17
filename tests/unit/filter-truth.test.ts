@@ -149,7 +149,7 @@ const WHITELIST: Record<string, string> = {
 
 /** 白名单 / 默认态近恒等滤镜的复核参数（必须是「对该滤镜合理」的取值）。 */
 const RETRY_PARAMS: Record<string, Record<string, number>> = {
-  "filter.lensCorrection": { distortion: 80, vertical: 0, horizontal: 0, ca: 3, vignette: -60, midpoint: 50 },
+  "filter.lensCorrection": { distortion: 80, vertical: 0, horizontal: 0, ca: 3, vignette: -60, midpoint: 50, focal: 24 },
   "filter.other.custom": {
     // 盒式模糊核：[ 1×9 ]，除数 9 —— 非平凡且核和为正（负和核会把 alpha 夹成 0）
     k0: 1, k1: 1, k2: 1, k3: 1, k4: 1, k5: 1, k6: 1, k7: 1, k8: 1,

@@ -13,6 +13,7 @@
  *   而不是随便拉一个经验曲线。
  */
 import { makeBuffer, type RgbaBuffer } from "./kernels";
+import { applyLensProfile, genericProfile } from "../algos/lensDistortion";
 
 /** 单通道双线性采样（越界夹边）。 */
 function sampleChannel(src: RgbaBuffer, x: number, y: number, ch: number): number {
@@ -43,6 +44,10 @@ function sampleRgba(src: RgbaBuffer, x: number, y: number, out: Uint8ClampedArra
  * - vertical / horizontal：透视校正（keystone），正负决定收哪一头
  * - ca：横向色差校正半径（像素），正值把红通道外扩、蓝通道内收
  * - vignette：负值去暗角、正值加暗角；midpoint 是晕影起始半径百分比
+ *
+ * 传入 opts.focal（35mm 等效焦距，>0）时改走更完整的 Brown–Conrady 模型：
+ * 通用镜头配置文件的二阶径向/切向畸变与晕影衰减 + 手动微调；焦距 0 时保持
+ * 老路径与原有中性恒等语义。
  */
 export function lensCorrection(
   src: RgbaBuffer,
@@ -52,7 +57,22 @@ export function lensCorrection(
   ca: number,
   vignette: number,
   midpoint: number,
+  opts: { focal?: number; k2?: number; p1?: number; p2?: number } = {},
 ): RgbaBuffer {
+  if ((opts.focal ?? 0) > 0) {
+    const profile = genericProfile(opts.focal as number);
+    profile.k1 += (distortion / 100) * 0.5;
+    return applyLensProfile(src, profile, {
+      k2: opts.k2,
+      p1: opts.p1,
+      p2: opts.p2,
+      ca,
+      vignette,
+      midpoint,
+      vertical: (vertical / 100) * 0.5,
+      horizontal: (horizontal / 100) * 0.5,
+    });
+  }
   const { width: w, height: h } = src;
   const out = makeBuffer(w, h);
   const cx = (w - 1) / 2;

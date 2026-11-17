@@ -9,6 +9,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+build-*.log
 
 # ---- Rust / Tauri ----
 src-tauri/target/

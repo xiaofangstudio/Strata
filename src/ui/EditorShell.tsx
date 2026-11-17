@@ -25,6 +25,7 @@ import {
   readFileBytes,
   writeFileBytes,
 } from "../engine/image";
+import { mergeAndTone } from "../engine/algos/hdr";
 import {
   INTENT_LABELS,
   convertDocumentBestEffort,
@@ -155,8 +156,8 @@ import {
   colorRangeMask,
   focusMask,
   growByColor,
-  skyMask,
-  subjectMask,
+  skyRobustMask,
+  subjectSaliencyMask,
 } from "../core/smartSelect";
 import { hexToRgb } from "./color-utils";
 import {
@@ -167,13 +168,15 @@ import {
   revealAll,
   setColorMode,
   setLayerSelection,
+  applyDataSet,
 } from "../core/imageOps";
 import ImageOpsDialog, { type ImageOpsKind } from "./components/ImageOpsDialog";
 import TextPanel, { type TextPanelTab } from "./components/TextPanel";
 import UtilityPanel, { type PanelKind } from "./components/UtilityPanel";
 import CompareView, { type CompareLayout } from "./components/CompareView";
-import GradePanel from "./components/GradePanel";
+import GradePanel, { type GradeOverlayState } from "./components/GradePanel";
 import GradeWindowOverlay from "./components/GradeWindowOverlay";
+import AdjustDialog from "./components/AdjustDialog";
 import { DEFAULT_FEATHER } from "../core/gradeWindow";
 import BrowseDialog from "./components/BrowseDialog";
 import ExrDialog from "./components/ExrDialog";
@@ -283,7 +286,7 @@ import {
 import { autoOn } from "../engine/auto";
 import { composeDoc } from "../engine/compositor";
 import { composeForDisplay, shrinkSurfaceForDisplay } from "../engine/displayCompose";
-import { inpaint } from "../engine/inpaint";
+import { completeInpaint } from "../engine/algos/inpaintComplete";
 import { asRaster, createRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
 import {
@@ -637,6 +640,8 @@ export default function EditorShell({
   const [gallery, setGallery] = useState(false);
   /** 滤镜参数弹窗：值为滤镜菜单 id（filter.blur.gaussianBlur 等），null 关闭 */
   const [filterFx, setFilterFx] = useState<string | null>(null);
+  /** 调整参数弹窗：值为 AdjustId（levels / curves / cameraraw …），null 关闭 */
+  const [adjustFx, setAdjustFx] = useState<AdjustId | null>(null);
   /** 上一次应用的滤镜 id（滤镜 > 上次滤镜）。 */
   const lastFilterRef = useRef<string | null>(null);
   /** 上一次自由变换的相对参数（编辑 > 变换 > 再次）。 */
@@ -671,7 +676,7 @@ export default function EditorShell({
   } | null>(null);
   /** 液化：面板内自己拖着涂，确定才把形变后的像素写回图层 */
   const [liquify, setLiquify] = useState(false);
-  const [puppet, setPuppet] = useState<"similarity" | "affine" | null>(null);
+  const [puppet, setPuppet] = useState<"similarity" | "affine" | "arap" | null>(null);
   /** 视图 > 网格：纯装饰浮层，不影响像素，也不进历史 */
   const [showGrid, setShowGrid] = useState(false);
   /* ---------------- 视图：像素长宽比 / 屏幕模式 / 显示开关 ---------------- */
@@ -1005,6 +1010,44 @@ export default function EditorShell({
     [doc.layers],
   );
 
+  /** 调色台报上来的「一级 / 二级」档位（只管档位，不管总览开关）。 */
+  const [gradeOverlay, setGradeOverlay] = useState<GradeOverlayState>({
+    level: "primary",
+  });
+
+  /**
+   * 「全部线框」总览开关由**编辑壳**持有。
+   * 它是独立于一级/二级档位的显示开关：唯一职责就是把文档里所有二级范围
+   * 的蚂蚁线一起叠到画布上，不切层、不跳一级、不调参数，也永远不会回一级。
+   * 放在编辑壳里是为了面板重挂载时状态不丢（本地 state 一丢就是「点了没反应」）。
+   */
+  const [gradeShowAll, setGradeShowAll] = useState(false);
+  /** 用户主动切到一级时收起总览：一级是整张画面调色，不该残留二级线框。 */
+  useEffect(() => {
+    if (gradeOverlay.level === "primary") setGradeShowAll(false);
+  }, [gradeOverlay.level]);
+
+  /**
+   * 画布上要画的范围线框。
+   *
+   * 用户实测反馈的规则：
+   *  · 点「全部线框」→ **无条件**叠出所有带范围且可见的二级层，与档位无关；
+   *  · 总览关着时，二级默认只画当前层那一圈（可拖手柄）；
+   *  · 切到一级 → 总览自动收起，一块二级线框都不画；
+   *  · 总览里非当前层只读（只画轮廓），当前层排最后压在最上面，手柄才点得到。
+   */
+  const gradeOverlays = useMemo(() => {
+    const usable = (l: (typeof gradeAll)[number]) =>
+      Boolean(l.window) && l.visible !== false;
+    if (gradeShowAll) {
+      const others = gradeAll.filter((l) => l.id !== gradeLayer?.id && usable(l));
+      const cur = gradeLayer && usable(gradeLayer) ? [gradeLayer] : [];
+      return [...others, ...cur];
+    }
+    if (!gradeLayer || gradeOverlay.level !== "secondary") return [];
+    return usable(gradeLayer) ? [gradeLayer] : [];
+  }, [gradeLayer, gradeAll, gradeOverlay.level, gradeShowAll]);
+
   const { items: recentItems, push: pushRecent, clear: clearRecent } = useRecentFiles();
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -1129,10 +1172,24 @@ export default function EditorShell({
    * 拖动图层的预览专用：这一层的「显示比例缩略图」缓存 + 按显示尺寸的暂存画布。
    * 拖动期间源画布不变，缩略图只缩一次；每帧只搬缩略图，不再碰整幅文档像素。
    */
-  const moveSmallRef = useRef<{ src: HTMLCanvasElement; s: number; out: HTMLCanvasElement } | null>(
-    null,
-  );
+  const moveSmallRef = useRef<{
+    src: HTMLCanvasElement;
+    s: number;
+    out: HTMLCanvasElement;
+    /** 蒙版不随图层移动（见 translateLayer），缩一份整段拖拽复用即可 */
+    maskSrc?: HTMLCanvasElement;
+    maskOut?: HTMLCanvasElement;
+  } | null>(null);
   const moveScratchRef = useRef<HTMLCanvasElement | null>(null);
+  /**
+   * 一次拖拽期间**锁定**的合成比例档位。
+   *
+   * 自适应降档会在拖动中随帧耗时上下跳，dispScale 一变，按尺寸建立的缓存
+   * （comp 合成画布、图层缩略图、移动暂存画布）就全部失效，等于每帧把整幅
+   * 24MP 表面重缩一次 —— 文字层这种整幅透明大画布尤其明显，越卡越降档、
+   * 越降档越重建，形成恶性循环。按下时取一次档位，整段拖动固定用它。
+   */
+  const moveCapRef = useRef<number | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /** 正在拖动的参考线：axis 是线的方向（"x" 竖线 / "y" 横线），from 是被拖那条的下标 */
   const guideDragRef = useRef<{ axis: "x" | "y"; index: number; pos: number } | null>(null);
@@ -1348,7 +1405,9 @@ export default function EditorShell({
      * 「按视图比例合成」解决了缩小视图下的浪费，但 100% 视图下比例本来就是 1 ——
      * 而大图上 100% 依然要算整幅。拖动期间稍微降一档，停手 300ms 补齐全质量。
      */
-    const cap = interactingRef.current ? CAP_STEPS[capIdxRef.current] : 1;
+    // 拖图层期间用按下时锁定的档位，别让自适应降档把整条缓存链抖散
+    const cap =
+      moveCapRef.current ?? (interactingRef.current ? CAP_STEPS[capIdxRef.current] : 1);
     const dispScale = Math.min(cap, Math.max(0.06, scale * (window.devicePixelRatio || 1)));
     const compW = Math.max(1, Math.round(docW * dispScale));
     const compH = Math.max(1, Math.round(docH * dispScale));
@@ -1413,7 +1472,8 @@ export default function EditorShell({
        * 一帧超过 ~34ms（约 30fps 掉队）就降一档，回到 14ms 以内就升一档。
        * 只在"交互中"调 —— 静止画面必须是全质量，那是用户停下来端详的那一帧。
        */
-      if (interactingRef.current) {
+      // 拖图层期间档位已锁定，调了也不生效，只会让性能读数乱跳
+      if (interactingRef.current && moveCapRef.current === null) {
         if (dt > 34 && capIdxRef.current > 0) capIdxRef.current -= 1;
         else if (dt < 14 && capIdxRef.current < CAP_STEPS.length - 1) capIdxRef.current += 1;
       }
@@ -1547,15 +1607,27 @@ export default function EditorShell({
      * 拖起来就是"卡"。这里改成：
      *   · 这一层按显示比例缩一份，源画布不变就复用缓存（一次拖拽只缩一次）；
      *   · 每帧只在显示尺寸的暂存画布上搬缩略图，偏移量按同一比例折算。
-     * 蒙版层仍走下面的原路径（蒙版不能被烘进表面，否则跟着一起动就错了）。
+     * 蒙版单独缩一份、不随位移（translateLayer 落库时也只搬 surface，蒙版本来
+     * 就不动），所以带蒙版的层同样能吃这条快路径 —— 以前它们被整体踢回全
+     * 分辨率慢路径，正是「文字图层拖起来特别卡」的另一半原因。
      */
-    if (offset && !stroke && act.kind !== "adjust" && !act.mask && dispScale < 0.999) {
+    if (offset && !stroke && act.kind !== "adjust" && dispScale < 0.999) {
+      const maskSrc = act.mask ?? undefined;
       let small = moveSmallRef.current;
-      if (!small || small.src !== act.surface || small.s !== dispScale) {
+      if (
+        !small ||
+        small.src !== act.surface ||
+        small.s !== dispScale ||
+        small.maskSrc !== maskSrc
+      ) {
         small = {
           src: act.surface,
           s: dispScale,
           out: shrinkSurfaceForDisplay(act.surface, dispScale),
+          maskSrc,
+          // 蒙版单独缩一份、且不跟着位移：translateLayer 落库时也只搬 surface，
+          // 预览必须和结果完全一致。这样带蒙版的层（文字层常见）也能走快路径。
+          maskOut: maskSrc ? shrinkSurfaceForDisplay(maskSrc, dispScale) : undefined,
         };
         moveSmallRef.current = small;
       }
@@ -1577,8 +1649,13 @@ export default function EditorShell({
       );
       composeForDisplay(docNow, comp, dispScale, {
         index: at,
-        layer: { ...act, surface: mv },
+        layer: {
+          ...act,
+          surface: mv,
+          ...(small.maskOut ? { mask: small.maskOut } : {}),
+        },
         prescaled: true,
+        prescaledMask: Boolean(small.maskOut),
       });
       present();
       return;
@@ -1822,6 +1899,7 @@ export default function EditorShell({
     dragRef.current = null;
     gradRef.current = null;
     moveRef.current = { dx: 0, dy: 0 };
+    moveCapRef.current = null;
     selRef.current = null;
     shapeRef.current = null;
     setSelDragging(false);
@@ -2689,6 +2767,8 @@ export default function EditorShell({
       if (tool === "move") {
         dragRef.current = p;
         moveRef.current = { dx: 0, dy: 0 };
+        // 整段拖拽锁一个合成档位：档位一抖，所有按尺寸建的缓存就得重建
+        moveCapRef.current = CAP_STEPS[capIdxRef.current];
       }
     },
     [
@@ -3985,15 +4065,52 @@ export default function EditorShell({
     setToast(`已按对齐结果拼接，画布扩到 ${w}×${h}`);
   }, [doc, onCommit]);
 
-  /** Merge to HDR（平均值合成，并说明不是真 32 位）。 */
+  /**
+   * Merge to HDR：多曝光真合并（Debevec 响应曲线 + hat 加权辐射 + ghost removal）。
+   *
+   * 参与层取多选（≥2）或全部可见像素层，每层当作一张不同曝光的照片，
+   * 从图层自身估计相对曝光；结果经 Reinhard 高光压缩映射回 8 位写进顶层。
+   * 移植自 PhotoCraft hdr.rs（MIT / Apache-2.0），纯函数内核见 algos/hdr.ts。
+   */
   const mergeToHdr = useCallback(() => {
-    const next = applyStackModeToDoc(doc, "mean", applyStackMode);
-    if (next === doc) {
-      setToast("至少要两层可见像素层");
+    const ids = doc.selectedLayerIds ?? [];
+    const pool =
+      ids.length >= 2
+        ? doc.layers.filter((l) => ids.includes(l.id) && l.kind === "pixel")
+        : doc.layers.filter((l) => l.kind === "pixel" && l.visible);
+    if (pool.length < 2) {
+      setToast("HDR 合并至少要两层可见像素层（当作不同曝光）");
       return;
     }
-    onCommit(next, "合并到 HDR（平均值合成）");
-    setToast("已按平均值合成。Strata 是 8 位管线，这不是真正的 32 位 HDR");
+    const imgs = pool.map((l) => {
+      const img = readPixels(l.surface);
+      return { data: img.data, width: img.width, height: img.height };
+    });
+    // 尺寸不一致时以文档尺寸为准缩放到统一尺寸（简化对齐，MTB 平移对齐留给后续）
+    const dw = doc.width;
+    const dh = doc.height;
+    const aligned = imgs.map((im, k) => {
+      if (im.width === dw && im.height === dh) return im;
+      const cv = createSurface(dw, dh);
+      mustCtx(cv).drawImage(pool[k].surface, 0, 0, dw, dh);
+      const img = readPixels(cv);
+      return { data: img.data, width: dw, height: dh };
+    });
+    try {
+      const { image, hdr } = mergeAndTone(aligned, { removeGhosts: true });
+      const top = pool[pool.length - 1];
+      const surface = createSurface(dw, dh);
+      const out = readPixels(surface);
+      out.data.set(image.data);
+      writePixels(surface, out);
+      const layers = doc.layers.map((l) => (l.id === top.id ? { ...l, surface } : l));
+      onCommit({ ...doc, layers, dirty: true }, "合并到 HDR（Debevec 响应曲线）");
+      const stops = hdr.stops.toFixed(1);
+      const ghosts = Math.round(hdr.ghostFraction * 100);
+      setToast(`HDR 合并完成：动态范围约 ${stops} 档，去鬼影 ${ghosts}%（8 位预览，已色调映射）`);
+    } catch (e) {
+      setToast(`HDR 合并失败：${e instanceof Error ? e.message : String(e)}`);
+    }
   }, [doc, onCommit]);
 
   /* ------------------------------------------------------ 文件（收尾五） */
@@ -4231,7 +4348,6 @@ export default function EditorShell({
     if (!dir || Array.isArray(dir)) return;
     let n = 0;
     for (const set of sets) {
-      const { applyDataSet } = await import("../core/imageOps");
       const next = applyDataSet(doc, set.name);
       const canvas = createSurface(docW, docH);
       composeDoc(next ?? doc, canvas);
@@ -4998,7 +5114,7 @@ export default function EditorShell({
 
     // 大区域少迭代几轮：PatchMatch 的收益随轮数递减，先保住不卡。
     const area = rw * rh;
-    const filled = inpaint(sub, subMask, {
+    const filled = completeInpaint(sub, subMask, {
       iterations: area > 1_500_000 ? 2 : 4,
       search: area > 1_500_000 ? 32 : 64,
     });
@@ -5479,14 +5595,17 @@ export default function EditorShell({
    * 不做「看得见点得动但什么也不发生」的假按钮。
    */
   const menuGroups = useMemo<MenuGroup[]>(() => {
-    /** 对话框式调整统一落到「新建调整图层」，参数随时可回改。 */
+    /**
+     * 调整类菜单统一进参数弹窗：实时预览、确定才落库、可取消。
+     *
+     * 以前这里直接 `addAdjustLayer` —— 新建层会抢走 activeLayerId，调色台随即
+     * 退回「新建调色台」引导页，用户看到的就是「历史调色全没了」；而且插进去的
+     * 是**中性参数**的层，画面不变、参数还藏在属性面板里，成了「起效了又没起效」。
+     * 现在两批菜单（图像 > 调整 / 图层 > 新建调整图层）都只开弹窗，真正的图层
+     * 只在用户点「确定」时生成，且不会抢活动层。
+     */
     const adjustLayer = (kind: AdjustId): MenuState => ({
-      run: () => {
-        onCommit(addAdjustLayer(doc, newAdjustState(kind)), zh.layers.adjustAdd);
-        // 建完必须把属性面板露出来：曲线 / 色阶 / 渐变映射这些编辑器都藏在里面，
-        // 不主动打开的话用户只会看到「菜单点了像没反应」，以为功能不存在。
-        setDockOpen((prev) => ({ ...prev, props: true }));
-      },
+      run: () => setAdjustFx(kind),
     });
 
     /**
@@ -6530,16 +6649,8 @@ export default function EditorShell({
           return { run: () => setShowToolRail((v) => !v), checked: showToolRail };
         case "window.panel.options":
           return { run: () => setShowOptionsBar((v) => !v), checked: showOptionsBar };
-        case "window.panel.layers":
-          return {
-            run: () => setDockOpen((d) => ({ ...d, layers: true })),
-            checked: dockOpen.layers,
-          };
-        case "window.panel.history":
-          return {
-            run: () => setDockOpen((d) => ({ ...d, history: true })),
-            checked: dockOpen.history,
-          };
+        // window.panel.layers / history 的统一切换实现在下方「窗口」段（toggleDock），
+        // 这里不再重复定义——重复 case 会让 switch 只命中第一处，导致面板关不掉。
         case "window.panel.channels":
           return {
             run: () => {
@@ -6887,6 +6998,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "workingCmyk" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：工作 CMYK");
             },
             checked: proofActive && proofSet.kind === "workingCmyk",
@@ -6896,6 +7008,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "plateCyan" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：青色版");
             },
             checked: proofActive && proofSet.kind === "plateCyan",
@@ -6905,6 +7018,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "plateMagenta" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：品红版");
             },
             checked: proofActive && proofSet.kind === "plateMagenta",
@@ -6914,6 +7028,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "plateYellow" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：黄色版");
             },
             checked: proofActive && proofSet.kind === "plateYellow",
@@ -6923,6 +7038,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "plateBlack" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：黑色版");
             },
             checked: proofActive && proofSet.kind === "plateBlack",
@@ -6932,6 +7048,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "plateCmy" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：CMY 合版");
             },
             checked: proofActive && proofSet.kind === "plateCmy",
@@ -6941,6 +7058,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "legacyMacintoshRgb" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：旧版 Macintosh RGB");
             },
             checked: proofActive && proofSet.kind === "legacyMacintoshRgb",
@@ -6950,6 +7068,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "internetStandardRgb" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：Internet 标准 RGB（sRGB 管线下等价于不改变）");
             },
             checked: proofActive && proofSet.kind === "internetStandardRgb",
@@ -6959,6 +7078,7 @@ export default function EditorShell({
             run: () => {
               setProofSet((p) => ({ ...p, kind: "monitorRgb" as ProofKind }));
               setProofActive(true);
+              setProofOn(false); // Proof Setup 单选：选 ICC 校样时关掉色盲模拟
               setToast("校样：监视器 RGB（sRGB 管线下等价于不改变）");
             },
             checked: proofActive && proofSet.kind === "monitorRgb",
@@ -6973,6 +7093,14 @@ export default function EditorShell({
         case "view.proofColors":
           return {
             run: () => {
+              // 色盲模拟走 SVG feColorMatrix（proofOn），ICC 校样走像素管线（proofActive）。
+              // Ctrl+Y 必须切「当前生效的那一套」，否则色盲模拟开着时按它关不掉。
+              if (proof !== "none") {
+                const on = !proofOn;
+                setProofOn(on);
+                setToast(on ? `校样颜色：${proof === "protanopia" ? "红色盲" : "绿色盲"}模拟 开` : "校样颜色：关");
+                return;
+              }
               if (proofSet.kind === "none" && !preview32.on) {
                 setToast("先在「视图 > 校样设置」里选一个校样条件");
                 return;
@@ -6981,7 +7109,7 @@ export default function EditorShell({
               setProofActive(on);
               setToast(on ? "校样颜色：开" : "校样颜色：关");
             },
-            checked: proofActive,
+            checked: proof !== "none" ? proofOn : proofActive,
           };
         case "view.gamutWarning":
           return {
@@ -7182,6 +7310,7 @@ export default function EditorShell({
             run: () => {
               setProof("protanopia");
               setProofOn(true);
+              setProofActive(false); // Proof Setup 单选：色盲模拟与 ICC 校样互斥
               setToast("校样：红色盲（Protanopia）模拟");
             },
             checked: proofOn && proof === "protanopia",
@@ -7191,18 +7320,13 @@ export default function EditorShell({
             run: () => {
               setProof("deuteranopia");
               setProofOn(true);
+              setProofActive(false); // Proof Setup 单选：色盲模拟与 ICC 校样互斥
               setToast("校样：绿色盲（Deuteranopia）模拟");
             },
             checked: proofOn && proof === "deuteranopia",
           };
-        case "view.proofColors":
-          return {
-            run: () => {
-              if (proof === "none") { setToast("先选一个校样方式（视图 > 校样设置 > 色盲模拟）"); return; }
-              setProofOn((v) => !v);
-            },
-            checked: proofOn,
-          };
+        /* view.proofColors 的统一实现在上方「View 校样」段：
+           它同时管 ICC 校样与色盲模拟两套状态，这里不再重复定义。 */
 
         /* ---------------------- 第十一批：Type 组（可编辑文本层） */
         case "type.panels.character":
@@ -8149,7 +8273,7 @@ export default function EditorShell({
           if (!subLayer || subLayer.kind !== "pixel") return undefined;
           return {
             run: () => {
-              const next = subjectMask(subLayer.surface);
+              const next = subjectSaliencyMask(subLayer.surface);
               if (!next || isSelectionEmpty(next)) {
                 setError(zh.selection.subjectEmpty);
                 return;
@@ -8163,7 +8287,7 @@ export default function EditorShell({
           if (!skyLayer || skyLayer.kind !== "pixel") return undefined;
           return {
             run: () => {
-              const next = skyMask(skyLayer.surface);
+              const next = skyRobustMask(skyLayer.surface);
               if (!next || isSelectionEmpty(next)) {
                 setError(zh.selection.skyEmpty);
                 return;
@@ -9050,12 +9174,11 @@ export default function EditorShell({
         return;
       }
       // Ctrl+L：色阶（PS 老习惯，等同 图像 > 调整 > 色阶）。
-      // adjustLayer 定义在 menuGroups 的 useMemo 工厂内、键盘 handler 拿不到，
-      // 这里内联它的逻辑：新建色阶调整层 + 打开属性面板。
+      // 与菜单走同一个参数弹窗：以前这里内联新建了一个中性色阶层，既抢活动层
+      // 让调色台"变脸"，又看不到参数，就是「Ctrl+L 调不出色阶」的来源。
       if (k === "l" && !e.shiftKey && !e.altKey) {
         e.preventDefault();
-        onCommit(addAdjustLayer(doc, newAdjustState("levels")), zh.layers.adjustAdd);
-        setDockOpen((prev) => ({ ...prev, props: true }));
+        setAdjustFx("levels");
         return;
       }
       if (k === "i" && e.shiftKey) {
@@ -9150,10 +9273,10 @@ export default function EditorShell({
         if (mergeOk) onCommit(mergeDown(doc), zh.menu.mergeDown);
         return;
       }
-      // Ctrl+Shift+A：Camera Raw（滤镜菜单里印了快捷键，按下就得有反应）
+      // Ctrl+Shift+A：Camera Raw（与菜单一致，开参数弹窗而不是直接插中性层）
       if (k === "a" && e.shiftKey) {
         e.preventDefault();
-        onCommit(addAdjustLayer(doc, newAdjustState("cameraraw")), zh.layers.adjustAdd);
+        setAdjustFx("cameraraw");
         return;
       }
       if (k === "backspace") {
@@ -9536,33 +9659,38 @@ export default function EditorShell({
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
 
               {/**
-               * 调色范围手柄：只在「调色台开着 + 当前调色层带范围」时出现。
-               * 拖动中按 100ms 节流重算蒙版（整幅 blur 是重活），松手才落一条历史。
+               * 调色范围手柄：总览开关打开时无条件叠出所有二级范围轮廓；
+               * 否则只在二级页画当前层，一级页一块都不画。
+               * 只有当前层可拖手柄（其余只读）。拖动中按 100ms 节流重算蒙版，松手才落历史。
                */}
-              {gradeLayer?.window && gradeLayer.visible !== false && (
-                <GradeWindowOverlay
-                  docW={docW}
-                  docH={docH}
-                  scale={scale}
-                  win={gradeLayer.window}
-                  onChange={(w, commit) => {
-                    const next = applyGradeWindow(doc, gradeLayer.id, w);
-                    if (commit) onCommit(next, "调整调色范围");
-                    else previewDoc(next);
-                  }}
-                  pen={
-                    penDraw && penDraw.layerId === gradeLayer.id
-                      ? {
-                          points: penDraw.points,
-                          cursor: penDraw.cursor,
-                          onAdd: (p) =>
-                            setPenDraw((st) => (st ? { ...st, points: [...st.points, p] } : st)),
-                          onCursor: movePenCursor,
-                          onClose: closePen,
-                        }
-                      : null
-                  }
-                />
+              {gradeOverlays.map((gl) =>
+                gl.window ? (
+                  <GradeWindowOverlay
+                    key={gl.id}
+                    docW={docW}
+                    docH={docH}
+                    scale={scale}
+                    win={gl.window}
+                    readOnly={gl.id !== gradeLayer?.id}
+                    onChange={(w, commit) => {
+                      const next = applyGradeWindow(doc, gl.id, w);
+                      if (commit) onCommit(next, "调整调色范围");
+                      else previewDoc(next);
+                    }}
+                    pen={
+                      gl.id === gradeLayer?.id && penDraw && penDraw.layerId === gl.id
+                        ? {
+                            points: penDraw.points,
+                            cursor: penDraw.cursor,
+                            onAdd: (p) =>
+                              setPenDraw((st) => (st ? { ...st, points: [...st.points, p] } : st)),
+                            onCursor: movePenCursor,
+                            onClose: closePen,
+                          }
+                        : null
+                    }
+                  />
+                ) : null,
               )}
               {/* 校样层：把合成结果按校样条件重算后盖在上面（纯显示） */}
               <canvas
@@ -9872,6 +10000,9 @@ export default function EditorShell({
                 onDeleteLayer={(id) => onCommit(removeLayers(doc, [id]), "删除调色层")}
                 onChange={onCommit}
                 onPreview={previewDoc}
+                onOverlayChange={setGradeOverlay}
+                showAll={gradeShowAll}
+                onToggleShowAll={() => setGradeShowAll((v) => !v)}
               />
             ) : (
               <div className="grade-create">
@@ -11748,6 +11879,20 @@ export default function EditorShell({
             onCommit(next, filterDef(filterFx)?.label ?? zh.dialog.filterTitle);
           }}
           onClose={() => setFilterFx(null)}
+        />
+      )}
+      {adjustFx && (
+        <AdjustDialog
+          doc={doc}
+          adjustId={adjustFx}
+          compSource={compRef.current}
+          compVersion={panelTick}
+          onPreview={previewDoc}
+          onApply={(next) => {
+            setAdjustFx(null);
+            onCommit(next, adjustDef(adjustFx).label);
+          }}
+          onClose={() => setAdjustFx(null)}
         />
       )}
       {liquify && (

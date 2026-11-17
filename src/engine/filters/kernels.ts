@@ -9,6 +9,7 @@
  * 缓冲统一用 { data, width, height } 结构而不是 ImageData —— 这样 node
  * 环境（vitest）可以直接对 4×4 固定像素做断言，UI 层再包一层即可。
  */
+import { reduceNoiseGuided } from "../algos/guidedFilter";
 
 export interface RgbaBuffer {
   data: Uint8ClampedArray;
@@ -400,8 +401,26 @@ export function dustAndScratch(src: RgbaBuffer, radius: number, threshold: numbe
   return out;
 }
 
-/** 减少杂色：中值滤波与原图按强度混合（保边降噪的轻量近似）。 */
+/**
+ * 减少杂色：PhotoCraft guided filter 管线（亮度自导引 + 色度导引）。
+ *
+ * 旧 UI 只有一个 0..100 的 strength 参数；按原实现的单位映射到
+ * PhotoCraft 的 strength 0..10 / color noise / preserve details。
+ * 细节参数需要单独控制时请直接调用 `reduceNoiseGuided`。
+ */
 export function reduceNoise(src: RgbaBuffer, strength: number): RgbaBuffer {
+  const k = Math.min(100, Math.max(0, strength));
+  return reduceNoiseGuided(src, {
+    strength: (k / 100) * 10,
+    preserve: 35,
+    color: k * 0.55,
+    sharpen: 0,
+    jpeg: false,
+  });
+}
+
+/** 旧版中值混合降噪，保留给需要对照/复现历史结果的地方。 */
+export function reduceNoiseLegacy(src: RgbaBuffer, strength: number): RgbaBuffer {
   const med = median(src, 1);
   const k = Math.min(100, Math.max(0, strength)) / 100;
   const out = cloneBuffer(src);

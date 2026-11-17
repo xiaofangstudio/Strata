@@ -20,6 +20,7 @@ import {
   type ColorModeOptions,
 } from "../../core/imageOps";
 import { zh } from "../../i18n";
+import type { DitherKind, PaletteKind } from "../../engine/algos/quantize";
 import Modal from "./Modal";
 
 export type ImageOpsKind =
@@ -77,6 +78,22 @@ const BLEND_LABELS: [BlendId, string][] = [
 /** 测量结果表可选列（选择数据点）。 */
 const MEASURE_FIELDS = ["面积", "宽度", "高度", "周长", "像素面积"];
 
+/** 索引颜色：调色板与抖动方式（PhotoCraft quantize.rs 的口径）。 */
+const PALETTE_KINDS: readonly (readonly [PaletteKind, string])[] = [
+  ["perceptual", "感知（Lab）"],
+  ["selective", "选择（Web 吸附）"],
+  ["adaptive", "自适应（频率）"],
+  ["exact", "精确"],
+  ["web", "Web 安全 216"],
+  ["uniform", "均匀"],
+];
+const DITHER_KINDS: readonly (readonly [DitherKind, string])[] = [
+  ["diffusion", "误差扩散"],
+  ["none", "无"],
+  ["pattern", "图案"],
+  ["noise", "杂色"],
+];
+
 function px(n: number): string {
   return `${Math.round(n)} px`;
 }
@@ -89,7 +106,9 @@ export default function ImageOpsDialog({ kind, doc, onApply, onToast, onClose }:
   const [light, setLight] = useState("#f2d9a0");
   const [strength, setStrength] = useState("100");
   const [colors, setColors] = useState(String(doc.palette?.length ?? 64));
-  const [dither, setDither] = useState(true);
+  const [paletteKind, setPaletteKind] = useState<PaletteKind>("perceptual");
+  const [ditherKind, setDitherKind] = useState<DitherKind>("diffusion");
+  const [ditherAmount, setDitherAmount] = useState("100");
   const [inkLimit, setInkLimit] = useState("300");
   const [ucr, setUcr] = useState("40");
   const [chroma, setChroma] = useState("110");
@@ -135,7 +154,16 @@ export default function ImageOpsDialog({ kind, doc, onApply, onToast, onClose }:
         applyMode("duotone", { dark, light, strength: Number(strength) || 100 }, "双色调");
         break;
       case "indexed":
-        applyMode("indexed", { colors: Number(colors) || 64, dither }, "索引颜色");
+        applyMode(
+          "indexed",
+          {
+            colors: Number(colors) || 64,
+            dither: ditherKind,
+            paletteKind,
+            ditherAmount: Number(ditherAmount) || 100,
+          },
+          "索引颜色",
+        );
         break;
       case "cmyk":
         applyMode("cmyk", { inkLimit: Number(inkLimit) || 300, ucr: Number(ucr) || 40 }, "CMYK 颜色");
@@ -300,7 +328,7 @@ export default function ImageOpsDialog({ kind, doc, onApply, onToast, onClose }:
 
       {kind === "indexed" && (
         <>
-          <p className="isz-hint">中位切分量化到指定颜色数；抖动用弗洛伊德–斯坦伯格误差扩散，渐变更顺但会有颗粒。</p>
+          <p className="isz-hint">Lab 感知调色板 + k-means 细化；可选 Web-safe 吸附或频率加权，抖动支持误差扩散/图案/杂色。</p>
           <div className="isz-row">
             <label className="field">
               <span className="field-label">颜色数</span>
@@ -308,9 +336,27 @@ export default function ImageOpsDialog({ kind, doc, onApply, onToast, onClose }:
                 <input type="number" min={2} max={256} value={colors} onChange={(e) => setColors(e.target.value)} />
               </span>
             </label>
-            <label className="isz-check">
-              <input type="checkbox" checked={dither} onChange={(e) => setDither(e.target.checked)} />
-              抖动
+            <label className="field">
+              <span className="field-label">调色板</span>
+              <span className="field-input">
+                <select value={paletteKind} onChange={(e) => setPaletteKind(e.target.value as PaletteKind)}>
+                  {PALETTE_KINDS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                </select>
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">抖动</span>
+              <span className="field-input">
+                <select value={ditherKind} onChange={(e) => setDitherKind(e.target.value as DitherKind)}>
+                  {DITHER_KINDS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                </select>
+              </span>
+            </label>
+            <label className="field">
+              <span className="field-label">强度</span>
+              <span className="field-input">
+                <input type="number" min={0} max={100} value={ditherAmount} onChange={(e) => setDitherAmount(e.target.value)} />
+              </span>
             </label>
           </div>
         </>

@@ -1,15 +1,15 @@
 /**
- * 内容识别填充内核（扩散打底 + PatchMatch 样本块合成）。
+ * 内容识别填充内核（Poisson 调和打底 + PatchMatch 样本块合成）。
  *
  * 目标：把一块选中的像素"抹掉"，再用**图里别处的纹理**把洞补上 ——
  * 不是模糊、不是拉伸边缘，而是真的搬一块长得像的图案过来。
  *
  * 分两步，缺一不可：
  *
- *   第一步「打底」：先用扩散（Gauss–Seidel 反复求邻域平均）把洞里填成一片
- *   由边界向内过渡的平滑色。没有这一步，洞的正中央周围一个已知像素都没有，
- *   相似度无从计算，那些像素就只能原封不动留着 —— 于是"填充"完洞里还是
- *   原来那坨东西。这一步保证无论洞多大，每个像素都有个像样的起点。
+ *   第一步「打底」：用 Poisson 膜的调和插值（Δv=0，洞外像素是 Dirichlet 边界）
+ *   把洞里填成由边界向内过渡的平滑色。没有这一步，洞的正中央周围一个已知
+ *   像素都没有，相似度无从计算，那些像素就只能原封不动留着 —— 于是"填充"
+ *   完洞里还是原来那坨东西。这一步保证无论洞多大，每个像素都有个像样的起点。
  *
  *   第二步「长纹理」：PatchMatch。
  *     a. 给洞里每个像素先随便认一个"参考位置"（随机初始化，种子固定，
@@ -22,11 +22,12 @@
  *        众多参考块各投一票，取加权平均。逐像素硬抄会有明显颗粒感，
  *        投票出来的填充既保纹理又不见缝。
  *
- * 相似度里，目标侧的已知像素算满分权重，扩散打底出来的像素只算 0.35 ——
+ * 相似度里，目标侧的已知像素算满分权重，调和打底出来的像素只算 0.35 ——
  * 后者是猜的，不该和真实像素平起平坐，但也不能当它不存在。
  *
  * 与 `liquify.ts` / `auto.ts` 一致：只认「RGBA 字节 + 宽高」，不碰画布与 DOM。
  */
+import { membraneFillRgba } from "./algos/poisson";
 import { createRaster, type Raster } from "./raster";
 
 export interface InpaintOptions {
@@ -38,6 +39,10 @@ export interface InpaintOptions {
   search?: number;
   /** 随机种子；固定后同样的输入必得同样的输出 */
   seed?: number;
+  /** true = 源图洞内已有粗层结果，不再用 Poisson 调和覆盖它（多尺度细层用） */
+  skipBase?: boolean;
+  /** Image Melding：按洞边已知像素做 gain/bias 颜色适应后再投票 */
+  meld?: boolean;
 }
 
 const DEFAULTS = { patch: 3, iterations: 4, search: 64, seed: 0x5eed };
@@ -91,107 +96,10 @@ function buildSat(mask: Uint8Array, w: number, h: number): Int32Array {
 }
 
 /**
- * 扩散打底：把洞内像素反复替换成四邻均值，直到从边界"渗"到洞心。
- * 用 Gauss–Seidel 正反两遍扫，一次横扫就能把边界信息推进一整行/列，
- * 所以轮数取「洞的最大厚度」即可，无需等到完全收敛。
+ * 打底改为 Poisson 调和插值（crates/algo/src/poisson.rs 的 membrane_fill）：
+ * 以洞外像素为 Dirichlet 边界解 Δv=0，比逐轮扩散更准确，细长划痕不会
+ * 在洞心留下“原物体的模糊轮廓”。后续 PatchMatch 仍负责长纹理。
  */
-function diffuseBase(
-  out: Raster,
-  mask: Uint8Array,
-  w: number,
-  h: number,
-  rounds: number,
-): void {
-  const d = out.data;
-  const at = (x: number, y: number) => (y * w + x) * 4;
-  for (let r = 0; r < rounds; r += 1) {
-    // 正向：左上 → 右下。左邻 / 上邻必是「已知像素或本轮的更早结果」，
-    // 所以一次横扫就能把边界色往洞里推进一整行。
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        const i = y * w + x;
-        if (!mask[i]) continue;
-        const l = x > 0 ? at(x - 1, y) : at(x, y);
-        const u = y > 0 ? at(x, y - 1) : at(x, y);
-        const o = at(x, y);
-        for (let c = 0; c < 4; c += 1) {
-          d[o + c] = (d[l + c] + d[u + c]) * 0.5;
-        }
-      }
-    }
-    // 反向：右下 → 左上
-    for (let y = h - 1; y >= 0; y -= 1) {
-      for (let x = w - 1; x >= 0; x -= 1) {
-        const i = y * w + x;
-        if (!mask[i]) continue;
-        const rr = x < w - 1 ? at(x + 1, y) : at(x, y);
-        const dn = y < h - 1 ? at(x, y + 1) : at(x, y);
-        const o = at(x, y);
-        for (let c = 0; c < 4; c += 1) {
-          d[o + c] = (d[o + c] + d[rr + c] + d[dn + c]) / 3;
-        }
-      }
-    }
-  }
-}
-
-/**
- * 洞内像素到最近已知像素的曼哈顿距离（BFS），返回洞的最大厚度。
- * 厚度用来决定扩散打底要扫几轮：横扫一次推进一行/列，够厚就够用。
- */
-function holeThickness(
-  mask: Uint8Array,
-  w: number,
-  h: number,
-  targets: readonly number[],
-): number {
-  const dist = new Int32Array(w * h);
-  const queue = new Int32Array(targets.length);
-  let head = 0;
-  let tail = 0;
-  for (const i of targets) dist[i] = -1;
-  // 种子：与已知像素相邻的洞像素，距离为 1
-  for (const i of targets) {
-    const x = i % w;
-    const y = (i / w) | 0;
-    const nb = [
-      x > 0 ? i - 1 : -1,
-      x < w - 1 ? i + 1 : -1,
-      y > 0 ? i - w : -1,
-      y < h - 1 ? i + w : -1,
-    ];
-    for (const n of nb) {
-      if (n >= 0 && !mask[n]) {
-        dist[i] = 1;
-        queue[tail] = i;
-        tail += 1;
-        break;
-      }
-    }
-  }
-  let max = 1;
-  while (head < tail) {
-    const i = queue[head];
-    head += 1;
-    const x = i % w;
-    const y = (i / w) | 0;
-    const cur = dist[i];
-    if (cur > max) max = cur;
-    const nb = [
-      x > 0 ? i - 1 : -1,
-      x < w - 1 ? i + 1 : -1,
-      y > 0 ? i - w : -1,
-      y < h - 1 ? i + w : -1,
-    ];
-    for (const n of nb) {
-      if (n < 0 || !mask[n] || dist[n] !== -1) continue;
-      dist[n] = cur + 1;
-      queue[tail] = n;
-      tail += 1;
-    }
-  }
-  return max;
-}
 
 /**
  * 内容识别填充。
@@ -217,10 +125,12 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
   if (targets.length >= w * h) return out; // 整张都选上了，没有可借的样本
   const isMask = (i: number) => mask[i] !== 0;
 
-  // ---- 第一步：扩散打底 ----
-  // 轮数取「洞的最大厚度」：横扫一次推进一行/列，厚度够了就能渗到洞心。
-  const thickness = holeThickness(mask, w, h, targets);
-  diffuseBase(out, mask, w, h, Math.min(192, Math.max(12, thickness)));
+  // ---- 第一步：Poisson 调和打底 ----
+  // 以洞外像素为边界解 Δv=0；cascadic multigrid 让大洞/细长洞都有稳定起点。
+  if (!opts.skipBase) {
+    const base = membraneFillRgba(out, mask);
+    out.data.set(base.data);
+  }
 
   // ---- 第二步：PatchMatch 长纹理 ----
   const sat = buildSat(mask, w, h);
@@ -361,6 +271,47 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
     const y = (i / w) | 0;
     const sx = nnx[i];
     const sy = nny[i];
+
+    // Image Melding：用补丁里「目标侧已知像素 vs 对应源像素」做最小二乘，
+    // 得到局部 gain/bias，把借来的纹理adapt到洞边的明暗与色温上。
+    let gain = 1;
+    let bias = 0;
+    if (opts.meld) {
+      let nk = 0;
+      let sumX = 0;
+      let sumY = 0;
+      let sumXX = 0;
+      let sumXY = 0;
+      for (let dy = -patch; dy <= patch; dy += 1) {
+        const tyy = y + dy;
+        if (tyy < 0 || tyy >= h) continue;
+        for (let dx = -patch; dx <= patch; dx += 1) {
+          const txx = x + dx;
+          if (txx < 0 || txx >= w) continue;
+          const ti = tyy * w + txx;
+          if (isMask(ti)) continue;
+          const si = ((sy + dy) * w + sx + dx) * 4;
+          const tj = ti * 4;
+          const sv = (sd[si] + sd[si + 1] + sd[si + 2]) / 3;
+          const tv = (out.data[tj] + out.data[tj + 1] + out.data[tj + 2]) / 3;
+          nk += 1;
+          sumX += sv;
+          sumY += tv;
+          sumXX += sv * sv;
+          sumXY += sv * tv;
+        }
+      }
+      if (nk >= 4) {
+        const den = sumXX - (sumX * sumX) / nk;
+        if (den > 1) {
+          gain = (sumXY - (sumX * sumY) / nk) / den;
+          gain = Math.max(0.7, Math.min(1.3, Number.isFinite(gain) ? gain : 1));
+          bias = (sumY - gain * sumX) / nk;
+          bias = Math.max(-48, Math.min(48, Number.isFinite(bias) ? bias : 0));
+        }
+      }
+    }
+
     // 置信度：均方差越小这一票越算数（+8 防止除零，也压住逆天权重）
     const wgt = 1 / (nnc[i] + 8);
     if (!(wgt > 0)) continue;
@@ -373,9 +324,9 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
         const ti = tyy * w + txx;
         if (!isMask(ti)) continue;
         const si = ((sy + dy) * w + sx + dx) * 4;
-        accR[ti] += sd[si] * wgt;
-        accG[ti] += sd[si + 1] * wgt;
-        accB[ti] += sd[si + 2] * wgt;
+        accR[ti] += (gain * sd[si] + bias) * wgt;
+        accG[ti] += (gain * sd[si + 1] + bias) * wgt;
+        accB[ti] += (gain * sd[si + 2] + bias) * wgt;
         accA[ti] += sd[si + 3] * wgt;
         accW[ti] += wgt;
       }

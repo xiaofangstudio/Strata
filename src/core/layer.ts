@@ -549,6 +549,11 @@ export const ADJUST_DEFS: readonly AdjustDef[] = [
       { id: "dehaze", label: "去薄雾", min: -100, max: 100, step: 1, def: 0, group: "细节" },
       { id: "vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
       { id: "saturation", label: "饱和度", min: -100, max: 100, step: 1, def: 0, group: "色彩" },
+      { id: "curve", label: "色调曲线预设", min: 0, max: 4, step: 1, def: 0, group: "曲线" },
+      { id: "mixerPreset", label: "8 色带混色预设", min: 0, max: 4, step: 1, def: 0, group: "色彩" },
+      { id: "vignette", label: "后期暗角", min: -100, max: 100, step: 1, def: 0, group: "效果" },
+      { id: "vignetteMidpoint", label: "暗角中点", min: 5, max: 95, step: 1, def: 50, group: "效果" },
+      { id: "vignetteHighlights", label: "暗角高光保护", min: 0, max: 100, step: 1, def: 0, group: "效果" },
     ],
   },
 

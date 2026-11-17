@@ -14,8 +14,13 @@
  *   对背景干净的图片（证件照、商品图）效果最好。
  * - 天空：蓝色相 + 一定亮度的候选像素，只保留与图像上缘连通的部分，
  *   避免把蓝色的衣服、招牌一起选进来。
- * - 焦点区域：局部对比度（3×3 拉普拉斯能量）超过阈值的区域视为合焦。
+ * - 焦点区域：modified Laplacian 聚焦测度 + 彩色引导滤波（PhotoCraft focus.rs）。
  */
+import { focusAreaHit } from "../engine/algos/focusArea";
+import { BG, FG, grabcut, PR_FG } from "../engine/algos/grabcut";
+import { subjectSaliencyHit } from "../engine/algos/subject";
+import { skyRobustHit } from "../engine/algos/sky";
+import type { RgbaBuffer } from "../engine/filters/kernels";
 import { createSurface, mustCtx, readPixels } from "../engine/surface";
 
 /* ------------------------------------------------------------ 纯判定函数 */
@@ -205,28 +210,13 @@ export function skyHit(d: Uint8ClampedArray, w: number, h: number): Uint8Array |
   return keep;
 }
 
-/** 焦点区域：null 表示没有足够的高对比像素。 */
+/**
+ * 焦点区域：null 表示没有足够的合焦像素。
+ * 算法已升级为 PhotoCraft 的 modified Laplacian + 99 分位归一化 +
+ * 彩色引导滤波 + 小岛清理；threshold 语义为 In-Focus Range（0..100，越大范围越宽）。
+ */
 export function focusHit(d: Uint8ClampedArray, w: number, h: number, threshold: number): Uint8Array | null {
-  const lum = new Float32Array(w * h);
-  for (let p = 0; p < w * h; p += 1) {
-    const i = p * 4;
-    lum[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  }
-  const t = Math.max(1, threshold);
-  const hit = new Uint8Array(w * h);
-  let any = 0;
-  for (let y = 1; y < h - 1; y += 1) {
-    for (let x = 1; x < w - 1; x += 1) {
-      const p = y * w + x;
-      const lap = 4 * lum[p] - lum[p - 1] - lum[p + 1] - lum[p - w] - lum[p + w];
-      if (Math.abs(lap) > t) {
-        hit[p] = 1;
-        any += 1;
-      }
-    }
-  }
-  if (any < 4) return null;
-  return hit;
+  return focusAreaHit(d, w, h, threshold);
 }
 
 /* ------------------------------------------------------------ canvas 落版 */
@@ -280,18 +270,111 @@ export function growByColor(
   return maskFrom(w, h, growHit(sel, readPixels(surface).data, w, h, tolerance));
 }
 
-/** 主体蒙版。 */
+/** 主体蒙版（原始边框背景启发式，保留作兜底）。 */
 export function subjectMask(surface: HTMLCanvasElement): HTMLCanvasElement | null {
   const { width: w, height: h } = surface;
   const hit = subjectHit(readPixels(surface).data, w, h);
   return hit ? maskFrom(w, h, hit) : null;
 }
 
-/** 天空蒙版。 */
+/**
+ * 主体蒙版（GrabCut 版）：先用边框背景启发式找粗范围，再用图割精修边缘。
+ * 工作分辨率压到约 3 万像素，避免大图在主线程卡顿。
+ */
+export function subjectGrabcutMask(surface: HTMLCanvasElement): HTMLCanvasElement | null {
+  const { width: w, height: h } = surface;
+  const full = readPixels(surface).data;
+  const rough = subjectHit(full, w, h);
+  if (!rough) return null;
+
+  let x0 = w;
+  let y0 = h;
+  let x1 = 0;
+  let y1 = 0;
+  for (let i = 0; i < rough.length; i += 1) {
+    if (!rough[i]) continue;
+    const x = i % w;
+    const y = (i / w) | 0;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (x1 <= x0 || y1 <= y0) return null;
+  const pad = Math.max(4, Math.round(Math.max(w, h) * 0.04));
+  x0 = Math.max(0, x0 - pad);
+  y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(w - 1, x1 + pad);
+  y1 = Math.min(h - 1, y1 + pad);
+
+  const step = Math.max(1, Math.ceil(Math.sqrt((w * h) / 30000)));
+  const sw = Math.ceil(w / step);
+  const sh = Math.ceil(h / step);
+  const sub = new Uint8ClampedArray(sw * sh * 4);
+  for (let y = 0; y < sh; y += 1) {
+    const sy = Math.min(h - 1, y * step);
+    for (let x = 0; x < sw; x += 1) {
+      const sx = Math.min(w - 1, x * step);
+      const from = (sy * w + sx) * 4;
+      const to = (y * sw + x) * 4;
+      sub[to] = full[from];
+      sub[to + 1] = full[from + 1];
+      sub[to + 2] = full[from + 2];
+      sub[to + 3] = 255;
+    }
+  }
+
+  const trimap = new Uint8Array(sw * sh).fill(BG);
+  for (let y = Math.floor(y0 / step); y <= Math.min(sh - 1, Math.ceil(y1 / step)); y += 1) {
+    for (let x = Math.floor(x0 / step); x <= Math.min(sw - 1, Math.ceil(x1 / step)); x += 1) {
+      trimap[y * sw + x] = PR_FG;
+      const roughIndex = Math.min(h - 1, y * step) * w + Math.min(w - 1, x * step);
+      if (rough[roughIndex]) trimap[y * sw + x] = FG;
+    }
+  }
+
+  const img: RgbaBuffer = { data: sub, width: sw, height: sh };
+  const result = grabcut(img, trimap, 5);
+  const out = new Uint8Array(w * h);
+  let count = 0;
+  for (let y = 0; y < h; y += 1) {
+    const sy = Math.min(sh - 1, Math.floor(y / step));
+    for (let x = 0; x < w; x += 1) {
+      const sx = Math.min(sw - 1, Math.floor(x / step));
+      const label = result.trimap[sy * sw + sx];
+      if (label === FG || label === PR_FG) {
+        out[y * w + x] = 1;
+        count += 1;
+      }
+    }
+  }
+  return count >= 4 ? maskFrom(w, h, out) : null;
+}
+
+/**
+ * 主体蒙版（SLIC 显著性 + GrabCut，PhotoCraft subject.rs）。
+ * 失败时依次回退到 P1 的 GrabCut 版和原始边框启发式，保证菜单不会空手而归。
+ */
+export function subjectSaliencyMask(surface: HTMLCanvasElement): HTMLCanvasElement | null {
+  const { width: w, height: h } = surface;
+  const hit = subjectSaliencyHit(readPixels(surface).data, w, h);
+  if (hit) return maskFrom(w, h, hit);
+  return subjectGrabcutMask(surface) ?? subjectMask(surface);
+}
+
+/** 天空蒙版（原始色相 + 上缘连通启发式，保留作兜底）。 */
 export function skyMask(surface: HTMLCanvasElement): HTMLCanvasElement | null {
   const { width: w, height: h } = surface;
   const hit = skyHit(readPixels(surface).data, w, h);
   return hit ? maskFrom(w, h, hit) : null;
+}
+
+/** 天空蒙版（颜色先验 + 区域生长 + GMM 补洞 + 引导滤波，PhotoCraft sky.rs）。 */
+export function skyRobustMask(surface: HTMLCanvasElement): HTMLCanvasElement | null {
+  const { width: w, height: h } = surface;
+  const hit = skyRobustHit(readPixels(surface).data, w, h);
+  if (hit) return maskFrom(w, h, hit);
+  return skyMask(surface);
 }
 
 /** 焦点区域蒙版。 */

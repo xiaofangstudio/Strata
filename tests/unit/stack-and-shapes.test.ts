@@ -12,7 +12,7 @@ function buf(values: number[]): RgbaBuffer {
     data[i * 4] = v;
     data[i * 4 + 1] = v;
     data[i * 4 + 2] = v;
-    data[i * 4 + 3] = v === 0 ? 0 : 255;
+    data[i * 4 + 3] = 255;
   });
   return { data, width: values.length, height: 1 };
 }
@@ -91,11 +91,12 @@ describe("堆栈模式", () => {
     expect(out.data[0]).toBe(0);
   });
 
-  it("alpha 取平均（统计量只作用于颜色）", () => {
+  it("透明层不贡献样本，alpha 取最大值", () => {
     const a: RgbaBuffer = { data: new Uint8ClampedArray([100, 100, 100, 255]), width: 1, height: 1 };
-    const b: RgbaBuffer = { data: new Uint8ClampedArray([100, 100, 100, 0]), width: 1, height: 1 };
+    const b: RgbaBuffer = { data: new Uint8ClampedArray([0, 0, 0, 0]), width: 1, height: 1 };
     const out = applyStackMode([a, b], "mean");
-    expect(out.data[3]).toBe(128);
+    expect(out.data[0]).toBe(100);
+    expect(out.data[3]).toBe(255);
   });
 
   it("所有模式都能跑通且不越界", () => {

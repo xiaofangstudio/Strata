@@ -36,8 +36,12 @@ export interface ColorModeOptions {
   strength?: number;
   /** 索引颜色：颜色数 */
   colors?: number;
-  /** 索引颜色：是否抖动 */
-  dither?: boolean;
+  /** 索引颜色：是否抖动（兼容旧布尔）或具体抖动方式 */
+  dither?: boolean | "none" | "diffusion" | "pattern" | "noise";
+  /** 索引颜色：调色板构建方式 */
+  paletteKind?: "exact" | "web" | "uniform" | "perceptual" | "selective" | "adaptive";
+  /** 索引颜色：抖动强度 0~100 */
+  ditherAmount?: number;
   /** CMYK：油墨总量上限 % */
   inkLimit?: number;
   /** CMYK：底色去除 % */
@@ -101,7 +105,10 @@ export function setColorMode(
       return surfaceFromData(img.width, img.height, out.data);
     }
     if (mode === "indexed") {
-      const res = toIndexed(src, colors, dither);
+      const res = toIndexed(src, colors, dither, {
+        paletteKind: opts.paletteKind,
+        amount: opts.ditherAmount,
+      });
       palette = res.palette.map((p) => [p[0], p[1], p[2]] as [number, number, number]);
       return surfaceFromData(img.width, img.height, res.buf.data);
     }

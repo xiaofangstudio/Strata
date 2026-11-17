@@ -23,7 +23,13 @@
   }
 }
 
-.cp {
+/**
+ * 必须限定在 .cp-mask 里：拾色器（ColorPicker）的根也叫 `.cp`。
+ * 裸 `.cp` 会把 `overflow:hidden` / `max-height` 泄漏到右侧常驻颜色面板，
+ * 而 overflow!=visible 会让 flex item 的 min-height:auto 解析成 0，
+ * 于是 SV 方块在 Dock 的弹性列里被压成一条边框线（用户实测截图）。
+ */
+.cp-mask > .cp {
   width: min(560px, 92vw);
   max-height: 62vh;
   display: flex;
@@ -118,7 +124,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.cp-foot {
+/* 同样撞名：拾色器也有 .cp-foot（十六进制行），这里只作用于命令面板 */
+.cp-mask .cp-foot {
   flex: none;
   padding: var(--sp-2) var(--sp-4);
   font-size: var(--fs-xs);

@@ -15,7 +15,7 @@ import {
   type RecipeOp,
 } from "../../core/recipe";
 import { openFileToDoc } from "../../engine/openFile";
-import { encodePng } from "../../engine/image";
+import { encodePng, writeFileBytes } from "../../engine/image";
 import { isOpenablePath } from "../../core/launch";
 import BrandMark from "./BrandMark";
 import "./DropletRunner.css";
@@ -75,12 +75,10 @@ export default function DropletRunner({ recipe, onClose }: Props) {
             if (ex.op === "exportPng") {
               const bytes = await encodePng(canvas);
               const target = `${outDir.replace(/[\\/]+$/, "")}/${stem}.png`;
-              const { writeFileBytes } = await import("../../engine/image");
               await writeFileBytes(target, bytes);
             } else if (ex.op === "exportJpg") {
               const bytes = await encodeJpeg(canvas, ex.quality);
               const target = `${outDir.replace(/[\\/]+$/, "")}/${stem}.jpg`;
-              const { writeFileBytes } = await import("../../engine/image");
               await writeFileBytes(target, bytes);
             }
           }

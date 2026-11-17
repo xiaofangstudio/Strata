@@ -119,3 +119,28 @@
   pointer-events: auto;
   cursor: crosshair;
 }
+
+/*
+  「显示全部线框」时的非当前层：只留一圈轮廓做总览。
+  手柄 / 抓取区组件里已经不渲染，这里只是再兜一层，保证绝不吃指针。
+
+  轮廓必须**看得清**：早期 opacity 0.48 + 白色虚线叠在亮画面上几乎看不见，
+  用户的直观感受就是「点了没把线框全显示出来」。改成强调色实轮廓、不压暗。
+*/
+.gwf.is-readonly {
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.gwf.is-readonly * {
+  pointer-events: none;
+}
+
+.gwf.is-readonly .gwf-edge {
+  stroke: var(--accent, #6fc0ff);
+}
+
+/* 总览只画范围本体，羽化参考线留着会糊成一片 */
+.gwf.is-readonly .gwf-feather-edge {
+  display: none;
+}

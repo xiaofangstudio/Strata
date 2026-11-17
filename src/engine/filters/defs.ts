@@ -730,9 +730,27 @@ const LENS_DEFS: FilterDef[] = [
       { id: "ca", label: "色差校正", min: -20, max: 20, step: 1, def: 0, unit: " 像素" },
       { id: "vignette", label: "晕影", min: -100, max: 100, step: 1, def: 0, unit: "%" },
       { id: "midpoint", label: "晕影中点", min: 1, max: 98, step: 1, def: 50, unit: "%" },
+      { id: "focal", label: "镜头焦距（0=不启用配置文件）", min: 0, max: 200, step: 1, def: 0, unit: "mm" },
+      { id: "k2", label: "二阶径向畸变", min: -100, max: 100, step: 1, def: 0 },
+      { id: "p1", label: "切向畸变 P1", min: -100, max: 100, step: 1, def: 0 },
+      { id: "p2", label: "切向畸变 P2", min: -100, max: 100, step: 1, def: 0 },
     ],
     apply: (b, p) =>
-      lensCorrection(b, p.distortion, p.vertical, p.horizontal, p.ca, p.vignette, p.midpoint),
+      lensCorrection(
+        b,
+        p.distortion ?? 0,
+        p.vertical ?? 0,
+        p.horizontal ?? 0,
+        p.ca ?? 0,
+        p.vignette ?? 0,
+        p.midpoint ?? 50,
+        {
+          focal: p.focal ?? 0,
+          k2: (p.k2 ?? 0) / 1000,
+          p1: (p.p1 ?? 0) / 10000,
+          p2: (p.p2 ?? 0) / 10000,
+        },
+      ),
   },
   {
     id: "filter.adaptiveWideAngle",

@@ -13,6 +13,7 @@
  * 整份文档、是一段临时范围，用完即弃（可撤销）。两者数值语义相同，但
  * 生命周期与归属完全不同，因此各存一份。
  */
+import { refineMask, type MattingParams } from "../engine/algos/matting";
 import { cloneSurface, createSurface, mustCtx, readPixels } from "../engine/surface";
 
 export interface Point {
@@ -339,6 +340,42 @@ export function smoothSelection(mask: SelectionMask, radius: number): SelectionM
   const d = img.data;
   for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 128 ? 255 : 0;
   ctx.putImageData(img, 0, 0);
+  return out;
+}
+
+/**
+ * 选择并遮住：用原图做导引图精修选区边缘。
+ *
+ * 纯算法在 engine/algos/matting.ts；这里只负责 canvas ↔ 纯数组转换。
+ * 输出仍是一张标准 SelectionMask（白色 + alpha = 选中程度）。
+ */
+export function refineSelectionWithImage(
+  mask: SelectionMask,
+  image: HTMLCanvasElement,
+  params: MattingParams,
+): SelectionMask {
+  if (mask.width !== image.width || mask.height !== image.height) return cloneSelection(mask);
+  const n = mask.width * mask.height;
+  const md = readPixels(mask).data;
+  const id = readPixels(image).data;
+  const alpha = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) alpha[i] = md[i * 4 + 3] / 255;
+  const refined = refineMask(
+    { data: new Uint8ClampedArray(id), width: image.width, height: image.height },
+    alpha,
+    params,
+  );
+
+  const out = createSurface(mask.width, mask.height);
+  const img = mustCtx(out).createImageData(mask.width, mask.height);
+  for (let i = 0; i < n; i += 1) {
+    const p = i * 4;
+    img.data[p] = 255;
+    img.data[p + 1] = 255;
+    img.data[p + 2] = 255;
+    img.data[p + 3] = refined[i] * 255;
+  }
+  mustCtx(out).putImageData(img, 0, 0);
   return out;
 }
 

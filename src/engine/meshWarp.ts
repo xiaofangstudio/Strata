@@ -17,6 +17,7 @@
  * 确定时才在全分辨率上跑一次 —— 见 PuppetWarpDialog。
  */
 import { makeBuffer, sampleBilinear, type RgbaBuffer } from "./filters/kernels";
+import { arapWarp } from "./algos/arap";
 
 /** 一个变形钉：原始位置 + 当前位置（同一坐标系，通常是画布坐标）。 */
 export interface WarpPin {
@@ -27,6 +28,8 @@ export interface WarpPin {
 }
 
 export type MlsMode = "similarity" | "affine";
+/** 木偶变形全部模式：两种 MLS + 保面积的 ARAP。 */
+export type WarpMode = MlsMode | "arap";
 
 const EPS = 1e-8;
 
@@ -157,6 +160,15 @@ export function mlsWarp(
     }
   }
   return out;
+}
+
+/** 统一变形入口：MLS 两种模式保持原行为，arap 走三角网格保面积求解。 */
+export function warpImage(
+  src: RgbaBuffer,
+  pins: readonly WarpPin[],
+  mode: WarpMode = "similarity",
+): RgbaBuffer {
+  return mode === "arap" ? arapWarp(src, pins) : mlsWarp(src, pins, mode);
 }
 
 /** 钉点必须有空间分布（全挤在一个点上没有定义）。 */

@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activeLayer, type StrataDoc } from "../../core/document";
 import { meshWarpActiveLayer } from "../../core/layerOps";
-import { mlsWarp, type MlsMode, type WarpPin } from "../../engine/meshWarp";
+import { warpImage, type WarpMode, type WarpPin } from "../../engine/meshWarp";
 import { cloneSurface, createSurface, mustCtx } from "../../engine/surface";
 import { zh } from "../../i18n";
 import type { ThemeMode } from "../../stores/theme";
@@ -28,7 +28,7 @@ interface Props {
   doc: StrataDoc;
   themeMode: ThemeMode;
   /** 入口默认模式：木偶 = 刚性（相似变换），透视 = 仿射 */
-  defaultMode: MlsMode;
+  defaultMode: WarpMode;
   /** 确定：把形变后的像素写回当前图层，进历史 */
   onApply: (next: StrataDoc) => void;
   onClose: () => void;
@@ -68,7 +68,7 @@ export default function PuppetWarpDialog({
     baseRef.current = cloneSurface(act.surface);
   }
 
-  const [mode, setMode] = useState<MlsMode>(defaultMode);
+  const [mode, setMode] = useState<WarpMode>(defaultMode);
   const [pins, setPins] = useState<WarpPin[]>(() => {
     // 网格拆分过：按 (cols+1)×(rows+1) 铺一排「原地不动」的钉子当起始网格
     if (!grid || (grid.cols <= 1 && grid.rows <= 1)) return [];
@@ -113,7 +113,7 @@ export default function PuppetWarpDialog({
     backdropRef.current = bd;
   }
 
-  const minPins = mode === "affine" ? 3 : 2;
+  const minPins = mode === "similarity" ? 2 : 3;
 
   /* ------------------------------------------------------------ 绘制 */
 
@@ -170,7 +170,7 @@ export default function PuppetWarpDialog({
       pins.length >= minPins
         ? pins.map((p) => ({ ox: p.ox * k, oy: p.oy * k, x: p.x * k, y: p.y * k }))
         : [];
-    const warped = mlsWarp(
+    const warped = warpImage(
       { data: img.data, width: img.width, height: img.height },
       previewPins,
       mode,
@@ -324,7 +324,13 @@ export default function PuppetWarpDialog({
   const apply = useCallback(() => {
     if (!usable) return;
     if (pins.length < minPins) {
-      setToastText(minPins === 3 ? "仿射模式至少需要 3 个图钉" : "至少需要 2 个图钉");
+      setToastText(
+        minPins === 3
+          ? mode === "arap"
+            ? "保面积模式至少需要 3 个图钉"
+            : "仿射模式至少需要 3 个图钉"
+          : "至少需要 2 个图钉",
+      );
       return;
     }
     onApply(meshWarpActiveLayer(doc, pins, mode));
@@ -403,6 +409,15 @@ export default function PuppetWarpDialog({
             onChange={() => setMode("affine")}
           />
           仿射（斜切 / 拉伸）
+        </label>
+        <label className="lq-mode">
+          <input
+            type="radio"
+            name="puppet-mode"
+            checked={mode === "arap"}
+            onChange={() => setMode("arap")}
+          />
+          保面积（ARAP 旋转最小化）
         </label>
         <button
           type="button"

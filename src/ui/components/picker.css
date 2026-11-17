@@ -56,6 +56,12 @@
 /* ---------- 横排形态：大 SV 方块 + 竖色相条 ---------- */
 
 .cp-inline {
+  /* 右侧 Dock 是 flex column 且 min-height:0：这里必须钉死高度 + 不参与收缩。
+     否则一旦有别的规则给它加上 overflow:hidden（例如同名 .cp 泄漏），
+     min-height:auto 会解析成 0，整块拾色器会被压成一条线。 */
+  flex: none;
+  height: 84px;
+  min-height: 84px;
   flex-direction: row;
   /* 色相条是独立控件，间距拉大：贴着 SV 方块会被看成一块、滑块还压边，
      精确点选色相就难（用户实测反馈）。 */

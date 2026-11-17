@@ -1190,3 +1190,21 @@
 .gp-wheel-sliders {
   gap: 2px;
 }
+
+/* ---------- 二级：范围列表里的「全部线框」总览行 ---------- */
+
+/*
+  固定首行：它不对应任何图层，纯粹是「显示所有二级蚂蚁线」的开关，
+  不切层、不跳一级。用强调色 + 加粗跟下面一条条真实范围区分开。
+*/
+.gr-overview .gr-item-icon {
+  color: var(--accent);
+}
+
+.gr-overview .gr-item-name {
+  font-weight: 600;
+}
+
+.gr-overview.is-on .gr-item-off {
+  color: var(--accent);
+}

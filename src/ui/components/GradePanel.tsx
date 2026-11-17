@@ -58,6 +58,24 @@ interface Props {
   onChange: (next: StrataDoc, label: string) => void;
   /** 只改画面不入栈（拖动过程中） */
   onPreview: (next: StrataDoc) => void;
+  /** 只把「一级 / 二级」档位上报给编辑壳；线框显隐由编辑壳自己持有 */
+  onOverlayChange: (state: GradeOverlayState) => void;
+  /** 「全部线框」开关：受控，由编辑壳持有（面板重挂载也不会丢状态） */
+  showAll: boolean;
+  /** 切换「全部线框」。这一行只干这一件事，不切层、不跳一级 */
+  onToggleShowAll: () => void;
+}
+
+/** 一级 / 二级档位。 */
+export type GradeLevel = "primary" | "secondary";
+
+/**
+ * 面板上报给编辑壳的档位。
+ * 「全部线框」**不在这里**：它是独立的总览开关，跟一级/二级档位无关，
+ * 混进这个状态里会被「一级不画线框」的规则顺手掐掉（用户实测：点了没反应）。
+ */
+export interface GradeOverlayState {
+  level: GradeLevel;
 }
 
 type Tab = "primary" | "wheel" | "slicer" | "curve";
@@ -123,6 +141,9 @@ export default function GradePanel({
   onDeleteLayer,
   onChange,
   onPreview,
+  onOverlayChange,
+  showAll,
+  onToggleShowAll,
 }: Props) {
   const [tab, setTab] = useState<Tab>("primary");
   /**
@@ -131,9 +152,24 @@ export default function GradePanel({
    * 范围的「新建」与「范围列表」只在二级出现 —— 一级就是整张画面，
    * 放一堆画范围的按钮在那儿反而让人以为一级也要先圈范围。
    */
-  const [level, setLevel] = useState<"primary" | "secondary">(
+  const [level, setLevel] = useState<GradeLevel>(
     layer.window ? "secondary" : "primary",
   );
+  /**
+   * 「全部线框」是受控开关，状态放在编辑壳里（props `showAll`）。
+   *
+   * 为什么不放本地 state：
+   *  · 面板会随 Dock / 活动层重挂载，本地 state 一丢就是「点了没反应」；
+   *  · 这行的**唯一职责**是把所有二级范围的蚂蚁线一起显示出来，
+   *    它不对应任何图层、不切层、不调参数，也**不存在「回到一级」这个动作**。
+   *    以前把它塞进 `GradeOverlayState` 跟 level 一起上报，结果被
+   *    「一级不画线框」的门槛连带掐掉 —— 这正是用户两次反馈的「点了不出现」。
+   *  · 用户主动切到一级时由编辑壳关掉总览，符合「一级不该残留线框」。
+   */
+  /** 只把档位上报给编辑壳，画布上的线框由它来画。 */
+  useEffect(() => {
+    onOverlayChange({ level });
+  }, [level, onOverlayChange]);
   /**
    * level 是纯 UI 状态，但它必须跟着层走：切换到别的层、当前层新建或移除
    * 范围时，按与初始化相同的规则重算。否则会停在过期的档位上 ——
@@ -293,7 +329,7 @@ export default function GradePanel({
           aria-selected={level === "primary"}
           className={`grade-level${level === "primary" ? " is-on" : ""}`}
           onClick={() => setLevel("primary")}
-          title="整张画面一起调"
+          title="整张画面一起调（会隐藏所有二级范围线框）"
         >
           一级
         </button>
@@ -342,7 +378,9 @@ export default function GradePanel({
                   ▸
                 </span>
                 <span className="gr-drop-title">范围</span>
-                <span className="gr-drop-count">{layers.length}</span>
+                <span className="gr-drop-count">
+                  {layers.filter((l) => Boolean(l.window)).length}
+                </span>
                 <span className="gr-drop-now">{layer.name}</span>
               </button>
               <div className="gr-drop-body">
@@ -353,6 +391,8 @@ export default function GradePanel({
                     onSelect={onSelectLayer}
                     onToggleVisible={onToggleVisible}
                     onDelete={onDeleteLayer}
+                    showAll={showAll}
+                    onToggleShowAll={onToggleShowAll}
                   />
                 </div>
               </div>
@@ -565,7 +605,11 @@ function RangeBar({
  *
  * 图层面板已经不再显示调色层（它们不能画、不能拖像素，堆在列表里只会碍事），
  * 所以「切换 / 显示隐藏 / 删除」都在这里：点行切换，右边两个小按钮管开关和删除。
- * 每建一个范围就多一行，常驻不隐藏。
+ *
+ * 第一行「全部线框」是**固定的总览开关**，不属于任何图层：
+ * 点它只把所有带范围的二级层的蚂蚁线一起叠到画布上，不切层、不跳一级、
+ * 不改任何参数。它永远不会回到一级 —— 因为它的作用就是显示所有二级蚂蚁线。
+ * 无范围的「全局调色台」层（一级）不再混进这个列表里充当入口。
  */
 function RangeList({
   layers,
@@ -573,24 +617,49 @@ function RangeList({
   onSelect,
   onToggleVisible,
   onDelete,
+  showAll,
+  onToggleShowAll,
 }: {
   layers: StrataLayer[];
   activeId: string;
   onSelect: (id: string) => void;
   onToggleVisible: (id: string, visible: boolean) => void;
   onDelete: (id: string) => void;
+  showAll: boolean;
+  onToggleShowAll: () => void;
 }) {
-  if (layers.length === 0) return null;
+  /** 只列二级（带范围）的层；无范围的全局层属于一级，不在这儿当入口。 */
+  const ranges = layers.filter((l) => Boolean(l.window));
   return (
     <div className="gr-list" role="list">
-      {layers.map((l) => {
+      {/* 总览开关：固定首行，不对应任何层，永远不切层 / 不跳一级 */}
+      <div className={`gr-item gr-overview${showAll ? " is-on" : ""}`} role="listitem">
+        <button
+          type="button"
+          className="gr-item-main"
+          aria-pressed={showAll}
+          onClick={onToggleShowAll}
+          title="把所有二级调色范围的蚂蚁线一起显示在画布上（再点一次收起）"
+        >
+          <span className="gr-item-icon" aria-hidden="true">
+            ◎
+          </span>
+          <span className="gr-item-name">全部线框</span>
+          <span className="gr-item-off">
+            {showAll ? "已显示" : `${ranges.length} 个范围`}
+          </span>
+        </button>
+      </div>
+
+      {ranges.map((l) => {
         const kind = l.window?.kind;
         const icon =
-          kind === "line" ? "╱" : kind === "ellipse" ? "◯" : kind === "quad" ? "▱" : kind ? "✎" : "全";
+          kind === "line" ? "╱" : kind === "ellipse" ? "◯" : kind === "quad" ? "▱" : "✎";
         return (
           <div
             key={l.id}
             className={`gr-item${l.id === activeId ? " is-on" : ""}${l.visible === false ? " is-hidden" : ""}`}
+            role="listitem"
           >
             <button
               type="button"

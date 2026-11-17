@@ -168,8 +168,10 @@ export function composeForDisplay(
   /**
    * prescaled：override.layer.surface 已经按显示比例缩好（并且偏移也已经烘进去），
    * 这里只补缩蒙版 / 范围，不再缩表面。拖动图层时用它省掉每帧的整幅重缩。
+   * prescaledMask：蒙版也已经按同一比例缩好，别再缩第二次（重复缩既慢又会把
+   * 尺寸缩错）。移动图层时蒙版本来就不跟着动，缩一份可以整段拖拽复用。
    */
-  override?: (LayerOverride & { prescaled?: boolean }) | null,
+  override?: (LayerOverride & { prescaled?: boolean; prescaledMask?: boolean }) | null,
 ): { width: number; height: number } {
   const s = Math.min(1, Math.max(MIN_SCALE, viewScale));
 
@@ -191,7 +193,10 @@ export function composeForDisplay(
           override.prescaled && override.layer.surface
             ? {
                 ...override.layer,
-                mask: override.layer.mask ? shrink(override.layer.mask, s, false) : override.layer.mask,
+                mask:
+                  override.layer.mask && !override.prescaledMask
+                    ? shrink(override.layer.mask, s, false)
+                    : override.layer.mask,
                 window: override.layer.window ? shrinkWindow(override.layer.window, s) : override.layer.window,
               }
             : shrinkLayer(override.layer, s, false),

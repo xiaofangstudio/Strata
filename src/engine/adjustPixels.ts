@@ -13,6 +13,13 @@
  */
 import { clamp01, hexToRgb01, luma01, linearToSrgb, srgbToLinear } from "./filters";
 import { applyGrade, gradeIsNeutral, gradeNeedsPixels } from "./grading";
+import {
+  applyHslMixer,
+  applyVignette,
+  presetCurveLut,
+  presetMixer,
+  lutEval,
+} from "./algos/cameraRaw";
 import type { AdjustState } from "../core/layer";
 
 /** 必须走逐像素通道的调整种类。 */
@@ -483,6 +490,17 @@ function applyCameraRaw(img: ImageData, p: Record<string, number>): void {
     }
   }
 
+  // 5.5) 色调曲线：单调三次 LUT，曲线预设 0 为恒等
+  const curvePreset = num(p, "curve", 0);
+  if (curvePreset !== 0) {
+    const lut = presetCurveLut(curvePreset);
+    for (let i = 0; i < n; i += 1) {
+      lr[i] = lutEval(lut, lr[i]);
+      lg[i] = lutEval(lut, lg[i]);
+      lb[i] = lutEval(lut, lb[i]);
+    }
+  }
+
   // 6) 清晰度（大半径局部对比）与纹理（小半径细节）
   if (clarity !== 0 || texture !== 0) {
     const base = guidedLuma(lr, lg, lb, w, h, Math.max(4, Math.min(w, h) / 40));
@@ -527,11 +545,31 @@ function applyCameraRaw(img: ImageData, p: Record<string, number>): void {
     }
   }
 
-  // 9) 写回
+  // 9) 写回显示域字节面
   for (let i = 0; i < n; i += 1) {
     d[i * 4] = Math.round(clamp01(lr[i]) * 255);
     d[i * 4 + 1] = Math.round(clamp01(lg[i]) * 255);
     d[i * 4 + 2] = Math.round(clamp01(lb[i]) * 255);
+  }
+
+  // 9.5) 8 色带 HSL mixer：字节面上做，预设 0 为恒等
+  const mixerPreset = num(p, "mixerPreset", 0);
+  if (mixerPreset !== 0) {
+    const m = presetMixer(mixerPreset);
+    applyHslMixer(d, m.hue, m.sat, m.lum);
+  }
+
+  // 9.6) 后期暗角：最后一步，正负方向相反、alpha 不变
+  const vignette = num(p, "vignette", 0);
+  if (vignette !== 0) {
+    applyVignette(
+      { data: d, width: w, height: h },
+      {
+        amount: vignette,
+        midpoint: num(p, "vignetteMidpoint", 50),
+        highlights: num(p, "vignetteHighlights", 0),
+      },
+    );
   }
 }
 

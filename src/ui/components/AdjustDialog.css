@@ -1,0 +1,46 @@
+/**
+ * 调整参数对话框的外壳。
+ *
+ * 参数控件本身直接复用 LayersPanel.css 里 .ly-adjust / .ly-prop 那一套，
+ * 这里只负责：弹窗内可滚动、提示文案、底部状态字。别去覆盖 .ly-* 的栅格，
+ * 那套在窄 dock 与 460px 弹窗里都能自适应。
+ */
+
+.ad {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 62vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 2px 4px;
+  scrollbar-width: thin;
+}
+
+.ad-hint {
+  flex: none;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+.ad-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ad-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 弹窗比右侧 dock 宽，参数区左右留一点呼吸 */
+.ad .ly-adjust {
+  padding: 2px 4px 4px;
+}

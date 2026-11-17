@@ -9,12 +9,14 @@
  *   两个数量级。用于手持连拍、扫描分块、同一场景的多张素材对齐。
  *
  * - **自动混合**：焦段合成（focus stacking）的核心 —— 逐像素算局部锐度
- *   （3×3 拉普拉斯能量，再盒式模糊成权重），锐度高的层权重大，最后按权重
- *   加权平均。这样每张只贡献它清晰的那部分，景深就能合成出「全清晰」。
+ *   （3×3 拉普拉斯能量 + halo 扩散）作为焦点权重，权重与图像都拆成拉普拉斯
+ *   金字塔后逐频段混合再 collapse。相比单分辨率加权平均，边缘不会出光晕，
+ *   低频过渡也更平滑（Pyramid Blend，Ported from PhotoCraft pyramid.rs）。
  *
  * 纯计算 + 一次 canvas 落版，node（vitest）里可以断言对齐偏移与权重单调性。
  */
 import { boxBlurPass, premultiply, type RgbaBuffer } from "../engine/filters/kernels";
+import { fuseStackPyramid } from "../engine/algos/pyramid";
 import { createSurface, mustCtx, readPixels } from "../engine/surface";
 import type { StrataDoc } from "./document";
 import type { StackMode } from "./stackModes";
@@ -255,34 +257,16 @@ export function autoBlendLayers(doc: StrataDoc, referenceId = doc.activeLayerId)
 
   const w = doc.width;
   const h = doc.height;
-  const acc = new Float32Array(w * h * 4);
-  const wsum = new Float32Array(w * h);
-
-  for (const l of parts) {
+  const inputs: RgbaBuffer[] = parts.map((l) => {
     const img = readPixels(l.surface);
-    const weight = sharpnessWeights({ data: img.data, width: img.width, height: img.height });
-    for (let p = 0; p < w * h; p += 1) {
-      const a = img.data[p * 4 + 3] / 255;
-      const k = weight[p] * a;
-      if (k <= 0) continue;
-      acc[p * 4] += img.data[p * 4] * k;
-      acc[p * 4 + 1] += img.data[p * 4 + 1] * k;
-      acc[p * 4 + 2] += img.data[p * 4 + 2] * k;
-      acc[p * 4 + 3] += 255 * k;
-      wsum[p] += k;
-    }
-  }
+    return { data: img.data, width: img.width, height: img.height };
+  });
+  if (inputs.some((b) => b.width !== w || b.height !== h)) return doc;
+  const fused = fuseStackPyramid(inputs);
 
   const merged = createSurface(w, h);
   const outImg = readPixels(merged);
-  for (let p = 0; p < w * h; p += 1) {
-    const s = wsum[p];
-    if (s <= 0) continue;
-    outImg.data[p * 4] = acc[p * 4] / s;
-    outImg.data[p * 4 + 1] = acc[p * 4 + 1] / s;
-    outImg.data[p * 4 + 2] = acc[p * 4 + 2] / s;
-    outImg.data[p * 4 + 3] = acc[p * 4 + 3] / s;
-  }
+  outImg.data.set(fused.data);
   mustCtx(merged).putImageData(outImg, 0, 0);
 
   const layers = doc.layers.map((l) => (l.id === ref.id ? { ...l, surface: merged } : l));
