@@ -1,0 +1,137 @@
+/**
+ * 模糊画廊工作窗样式 —— `.bg-` 独占前缀（注意不要撞到全局可能的 .bg 类，
+ * 这里一律 .bg- 双段起步）。
+ */
+.bg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  height: 100%;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.bg-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.bg-param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.bg-param-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.bg-param-label {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.bg-param-value {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.bg-pins-head {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.bg-pins {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bg-pin {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  text-align: left;
+}
+
+.bg-pin:hover {
+  background: var(--hover);
+}
+
+.bg-pin.is-sel {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.bg-pin-id {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+.bg-pin.is-sel .bg-pin-id {
+  background: #db2777;
+}
+
+.bg-pin-coord {
+  flex: 1 1 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.bg-pin-del {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.bg-pin-del:hover {
+  color: #c0392b;
+}
+
+.bg-tip {
+  margin: auto 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.bg-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bg-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}

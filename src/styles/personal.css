@@ -416,3 +416,29 @@ html[data-window-frost="on"] .start-foot {
   --glass-blur: 10px;
   --glass-alpha: 0.30;
 }
+
+/* 消失点平面校验条：蓝/黄/红三态（对应 PS 的网格配色），独占前缀避免撞车 */
+.vp-plane-hint {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.vp-plane-hint--ok {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.vp-plane-hint--warn {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.vp-plane-hint--bad {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+}

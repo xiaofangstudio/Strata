@@ -16,7 +16,7 @@ import {
 import { applyFilterToLayer } from "../../core/filterOps";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
-import Modal from "./Modal";
+import DraggableModal from "./DraggableModal";
 import RangeInput from "./RangeInput";
 import "./FilterGallery.css";
 
@@ -74,7 +74,7 @@ const GROUP_ORDER: FilterGroup[] = [
  * 确认（onApply）时仍走全分辨率，所以最终结果不受影响；
  * 预览只是"形状对得上"，这正是调参数时需要的。
  */
-function previewFilter(base: StrataDoc, def: FilterDef, params: Record<string, number>): StrataDoc {
+export function previewFilter(base: StrataDoc, def: FilterDef, params: Record<string, number>): StrataDoc {
   const MAX_SIDE = 1100;
   const s = Math.min(1, MAX_SIDE / Math.max(base.width, base.height));
   const act = base.layers.find((l) => l.id === base.activeLayerId);
@@ -160,10 +160,13 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
   };
 
   return (
-    <Modal
+    <DraggableModal
+      id="filterFx"
       title={def.label}
+      badge="滤镜"
       onClose={cancel}
-      width={520}
+      width={560}
+      height={620}
       footer={
         <>
           <span className="fg-note">{usable ? def.label : zh.dialog.filterNoPixel}</span>
@@ -248,6 +251,6 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
           })}
         </div>
       </div>
-    </Modal>
+    </DraggableModal>
   );
 }

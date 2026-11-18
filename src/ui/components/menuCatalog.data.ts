@@ -121,6 +121,7 @@ export const RAW: RawRow[] = [
   ["Edit/Transform", "Flip Horizontal", "", "edit.transform.flipHorizontal"],
   ["Edit/Transform", "Flip Vertical", "", "edit.transform.flipVertical"],
   ["Edit", "Auto-Align Layers…", "", "edit.autoAlignLayers"],
+  ["Edit", "Auto-Align Layers (Features)…", "", "edit.autoAlignLayersFeatures"],
   ["Edit", "Auto-Blend Layers…", "", "edit.autoBlendLayers"],
   ["Edit", "---", "", "---"],
   ["Edit", "Define Brush Preset…", "", "edit.defineBrushPreset"],

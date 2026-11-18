@@ -16,7 +16,7 @@ import { cloneSurface, createSurface, mustCtx, readPixels } from "../../engine/s
 import { zh } from "../../i18n";
 import type { ThemeMode } from "../../stores/theme";
 import { capturePointer } from "../pointer";
-import Modal from "./Modal";
+import DraggableModal from "./DraggableModal";
 import "./LiquifyDialog.css";
 import RangeInput from "./RangeInput";
 
@@ -376,10 +376,15 @@ export default function LiquifyDialog({ doc, themeMode, onApply, onClose }: Prop
   const note = !usable ? zh.liquify.noPixel : touched ? MODE_LABEL[set.mode] : zh.liquify.empty;
 
   return (
-    <Modal
+    <DraggableModal
+      id="liquify"
       title={zh.liquify.title}
+      badge="液化"
       onClose={onClose}
       width={880}
+      height={560}
+      minWidth={680}
+      minHeight={480}
       footer={
         <>
           <span className="lq-note">{note}</span>
@@ -464,6 +469,6 @@ export default function LiquifyDialog({ doc, themeMode, onApply, onClose }: Prop
           </button>
         </div>
       </div>
-    </Modal>
+    </DraggableModal>
   );
 }

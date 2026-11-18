@@ -49,6 +49,12 @@ export class StubContext2D {
   setTransform(): void {
     this.track("setTransform");
   }
+  /** 记录矩阵乘变换的实参 —— 供校验「单应矩阵 → canvas 矩阵」的参数顺序。 */
+  readonly transformCalls: number[][] = [];
+  transform(m11: number, m12: number, m21: number, m22: number, dx: number, dy: number): void {
+    this.track("transform");
+    this.transformCalls.push([m11, m12, m21, m22, dx, dy]);
+  }
   save(): void {
     this.track("save");
   }

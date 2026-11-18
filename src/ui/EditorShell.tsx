@@ -25,7 +25,11 @@ import {
   readFileBytes,
   writeFileBytes,
 } from "../engine/image";
+import { alignLayersByFeatures } from "../core/featureAlign";
 import { mergeAndTone } from "../engine/algos/hdr";
+import { seamLabels, multiband, type RoiImage } from "../engine/algos/panoramaBlend";
+import { checkPlane, planeFocal, normalizePlane } from "../engine/algos/vanishing";
+import { findPhotos } from "../engine/algos/scancrop";
 import {
   INTENT_LABELS,
   convertDocumentBestEffort,
@@ -177,6 +181,7 @@ import CompareView, { type CompareLayout } from "./components/CompareView";
 import GradePanel, { type GradeOverlayState } from "./components/GradePanel";
 import GradeWindowOverlay from "./components/GradeWindowOverlay";
 import AdjustDialog from "./components/AdjustDialog";
+import CameraRawDialog from "./components/CameraRawDialog";
 import { DEFAULT_FEATHER } from "../core/gradeWindow";
 import BrowseDialog from "./components/BrowseDialog";
 import ExrDialog from "./components/ExrDialog";
@@ -184,9 +189,10 @@ import { CreateDropletDialog, ScriptEventsDialog } from "./components/Automation
 import FloatingDoc, { type FloatRect } from "./components/FloatingDoc";
 import { applyStackModeToDoc, autoAlignLayers, autoBlendLayers } from "../core/stackOps";
 import { applyStackMode, type StackMode } from "../core/stackModes";
-import { contentBounds } from "../engine/warp";
+import { contentBounds, rectifyQuadSurface } from "../engine/warp";
 import { alignLayers, distributeLayers, type AlignEdge, type DistributeEdge } from "../core/arrange";
 import { clearSmartFilters, deleteFilterMask, toggleFilterMask, toggleSmartFilters } from "../core/filterOps";
+import { isBlurGallery, type BlurPin } from "../core/blurPins";
 import { isArtboard, newArtboard, sliceFromLayer } from "../core/artboard";
 import {
   buildAdjustedDoc,
@@ -365,6 +371,8 @@ import BrandMark from "./components/BrandMark";
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import FilterGallery from "./components/FilterGallery";
 import FilterFxDialog from "./components/FilterFxDialog";
+import BlurGalleryDialog from "./components/BlurGalleryDialog";
+import BlurGalleryOverlay from "./components/BlurGalleryOverlay";
 import {
   ChannelCalcDialog,
   LoadSelectionDialog,
@@ -640,8 +648,23 @@ export default function EditorShell({
   const [gallery, setGallery] = useState(false);
   /** 滤镜参数弹窗：值为滤镜菜单 id（filter.blur.gaussianBlur 等），null 关闭 */
   const [filterFx, setFilterFx] = useState<string | null>(null);
+  /** 模糊画廊画布钉点：滤镜 id + 覆盖层需要的钉点/手柄状态（null = 不显示） */
+  const [blurGalleryId, setBlurGalleryId] = useState<string | null>(null);
+  const [blurPins, setBlurPins] = useState<{
+    pins: BlurPin[];
+    selected: number;
+    showRing: boolean;
+    scale: number;
+  } | null>(null);
+  /** 钉点拖动回调放 ref：几何更新不应触发覆盖层卸载/重挂（会打断 pointer capture） */
+  const blurPinsCb = useRef<((pins: BlurPin[], selected: number, commit: boolean) => void) | null>(null);
+  const setBlurPinsCb = useCallback(
+    (cb: ((pins: BlurPin[], selected: number, commit: boolean) => void) | null) => { blurPinsCb.current = cb; },
+    [],
+  );
   /** 调整参数弹窗：值为 AdjustId（levels / curves / cameraraw …），null 关闭 */
   const [adjustFx, setAdjustFx] = useState<AdjustId | null>(null);
+  const [cameraRawOpen, setCameraRawOpen] = useState(false);
   /** 上一次应用的滤镜 id（滤镜 > 上次滤镜）。 */
   const lastFilterRef = useRef<string | null>(null);
   /** 上一次自由变换的相对参数（编辑 > 变换 > 再次）。 */
@@ -4050,19 +4073,116 @@ export default function EditorShell({
     }
     const w = Math.max(1, Math.round(x1 - x0));
     const h = Math.max(1, Math.round(y1 - y0));
+    // 多频段融合代价随像素数线性增长：工作画布限制在 150 万像素内，
+    // 结果再放大回原尺寸（低频过渡不受影响，符合全景查看习惯）。
+    const workScale = Math.min(1, Math.sqrt(1_500_000 / (w * h)));
+    const fw = Math.max(1, Math.round(w * workScale));
+    const fh = Math.max(1, Math.round(h * workScale));
     const moved = {
       ...shifted,
       width: w,
       height: h,
       layers: shifted.layers.map((l) => {
         if (l.kind !== "pixel") return l;
-        const s2 = createSurface(w, h);
-        mustCtx(s2).drawImage(l.surface, -x0, -y0);
+        const s2 = createSurface(fw, fh);
+        mustCtx(s2).drawImage(l.surface, -x0 * workScale, -y0 * workScale, w * workScale, h * workScale);
         return { ...l, surface: s2 };
       }),
     };
-    onCommit(autoBlendLayers(moved), "Photomerge 全景拼接");
-    setToast(`已按对齐结果拼接，画布扩到 ${w}×${h}`);
+
+    setToast("正在接缝检测与多频段融合，稍候…");
+    setTimeout(() => {
+      // 融合（移植自 PhotoCraft panorama/blend.rs）：
+      // 1) 各层亮度 + 覆盖 → 最小代价接缝，决定每个重叠像素归哪张图；
+      // 2) 归属作为权重跑拉普拉斯金字塔多频段混合 —— 低频大范围过渡、高频保细节，接缝不可见。
+      const parts = moved.layers.filter((l) => l.kind === "pixel");
+      if (parts.length < 2) {
+        setToast("至少需要两层像素来融合");
+        return;
+      }
+      const luma: Float32Array[] = [];
+      const cover: Uint8Array[] = [];
+      const imgs: RoiImage[] = [];
+      for (const l of parts) {
+        const img = readPixels(l.surface);
+        const gray = new Float32Array(fw * fh);
+        const mask = new Uint8Array(fw * fh);
+        for (let i = 0; i < fw * fh; i += 1) {
+          const p = i * 4;
+          gray[i] = (0.299 * img.data[p] + 0.587 * img.data[p + 1] + 0.114 * img.data[p + 2]) / 255;
+          mask[i] = img.data[p + 3] > 127 ? 1 : 0;
+        }
+        luma.push(gray);
+        cover.push(mask);
+        // 紧凑 ROI：只保留有内容的 bbox，避免金字塔在透明区空跑（实测 12s → 2.5s）
+        let bx0 = fw, by0 = fh, bx1 = -1, by1 = -1;
+        for (let y = 0; y < fh; y += 1) {
+          for (let x = 0; x < fw; x += 1) {
+            if (!mask[y * fw + x]) continue;
+            if (x < bx0) bx0 = x;
+            if (x > bx1) bx1 = x;
+            if (y < by0) by0 = y;
+            if (y > by1) by1 = y;
+          }
+        }
+        if (bx1 < 0) {
+          imgs.push({ x0: 0, y0: 0, w: fw, h: fh, ch: 3, px: new Float32Array(fw * fh * 3), alpha: new Float32Array(fw * fh) });
+          continue;
+        }
+        const rw = bx1 - bx0 + 1;
+        const rh = by1 - by0 + 1;
+        const px = new Float32Array(rw * rh * 3);
+        const alpha = new Float32Array(rw * rh);
+        for (let y = 0; y < rh; y += 1) {
+          for (let x = 0; x < rw; x += 1) {
+            const s = ((y + by0) * fw + x + bx0) * 4;
+            const d = y * rw + x;
+            alpha[d] = img.data[s + 3] / 255;
+            for (let c = 0; c < 3; c += 1) {
+              const sv = img.data[s + c] / 255;
+              px[d * 3 + c] = sv <= 0.04045 ? sv / 12.92 : Math.pow((sv + 0.055) / 1.055, 2.4);
+            }
+          }
+        }
+        imgs.push({ x0: bx0, y0: by0, w: rw, h: rh, ch: 3, px, alpha });
+      }
+      const labels = seamLabels(fw, fh, luma, cover, parts.map((_, i) => i));
+      const weights = imgs.map((im, k) => {
+        const wt = new Float32Array(im.w * im.h);
+        for (let y = 0; y < im.h; y += 1) {
+          for (let x = 0; x < im.w; x += 1) {
+            wt[y * im.w + x] = labels[(y + im.y0) * fw + x + im.x0] === k ? 1 : 0;
+          }
+        }
+        return wt;
+      });
+      const fused = multiband(fw, fh, imgs, weights);
+      const outSmall = createSurface(fw, fh);
+      const outImg = readPixels(outSmall);
+      for (let i = 0; i < fw * fh; i += 1) {
+        const p = i * 4;
+        for (let c = 0; c < 3; c += 1) {
+          const lin = Math.max(0, Math.min(1, fused.color[i * 3 + c]));
+          const s = lin <= 0.0031308 ? lin * 12.92 : 1.055 * Math.pow(lin, 1 / 2.4) - 0.055;
+          outImg.data[p + c] = Math.round(s * 255);
+        }
+        outImg.data[p + 3] = Math.round(fused.coverage[i] * 255);
+      }
+      mustCtx(outSmall).putImageData(outImg, 0, 0);
+      // 放大回原尺寸（workScale=1 时直接用小图，避免无谓重采样）
+      const out = createSurface(w, h);
+      const octx = mustCtx(out);
+      octx.imageSmoothingQuality = "high";
+      octx.drawImage(outSmall, 0, 0, w, h);
+      const first = parts[0].id;
+      const nextLayers = moved.layers.map((l) => {
+        if (l.id === first && l.kind === "pixel") return { ...l, surface: out };
+        if (l.kind === "pixel") return { ...l, visible: false };
+        return l;
+      });
+      onCommit({ ...moved, width: w, height: h, layers: nextLayers, activeLayerId: first, dirty: true }, "Photomerge 全景拼接（多频段融合）");
+      setToast(`已拼接：${w}×${h}，接缝 + 多频段融合，${parts.length} 张图${workScale < 1 ? `（${Math.round(workScale * 100)}% 工作分辨率）` : ""}`);
+    }, 60);
   }, [doc, onCommit]);
 
   /**
@@ -4124,8 +4244,10 @@ export default function EditorShell({
   /**
    * 文件 > 自动 > 裁正照片。
    *
-   * 先缩小到 800 边做检测（连通域是 O(像素)，全分辨率跑大图会卡），
-   * 再把矩形按比例放大回原尺寸去切图 —— 精度对「一张照片的大致边界」够用。
+   * 先用 PhotoCraft 的 scancrop 算法（Otsu + 形态学 + 凸包最小外接矩形）
+   * 找出扫描图里每张照片的四边形与旋转角，按四角透视展平成直立图层 ——
+   * 这是真正的旋转校正，旧版只能切轴对齐矩形。
+   * 检测不到（背景太杂）时回退旧的连通域轴对齐切图。
    */
   const cropAndStraighten = useCallback(() => {
     const full = composeClean();
@@ -4138,12 +4260,31 @@ export default function EditorShell({
     sctx.imageSmoothingQuality = "medium";
     sctx.drawImage(full, 0, 0, dw, dh);
     const img = sctx.getImageData(0, 0, dw, dh);
+
+    // 新路径：凸包最小外接矩形，能测旋转并按四角展平
+    const photos = findPhotos({ data: img.data, width: dw, height: dh });
+    if (photos.length > 0) {
+      let next = doc;
+      photos.forEach((p, i) => {
+        // 检测在缩小图上，四角按比例放大回全分辨率
+        const quad = p.corners.map(([x, y]) => ({ x: x / k, y: y / k }));
+        const outW = Math.max(1, Math.round(p.width / k));
+        const outH = Math.max(1, Math.round(p.height / k));
+        const upright = rectifyQuadSurface(full, quad, outW, outH);
+        next = placeRaster(next, `裁正 ${i + 1}`, upright);
+      });
+      onCommit(next, "裁正照片（含旋转校正）");
+      const rotated = photos.filter((p) => Math.abs(p.angle) > 0.5).length;
+      setToast(`切出 ${photos.length} 张并转正（${rotated} 张带旋转，最大 ${Math.max(0, ...photos.map((p) => Math.abs(p.angle))).toFixed(1)}°）`);
+      return;
+    }
+
+    // 回退：旧的连通域轴对齐切图
     const res = findPhotoRegions(img.data, dw, dh, 32, 0.004);
     if (res.singleBlob || res.boxes.length === 0) {
       setToast("只找到一整块内容，没有多张照片可分（背景可能太杂）");
       return;
     }
-    // 按比例放大回原尺寸
     let next = doc;
     let n = 0;
     for (const b of res.boxes) {
@@ -4157,7 +4298,7 @@ export default function EditorShell({
       n += 1;
     }
     onCommit(next, "裁正照片");
-    setToast(`切出 ${n} 张（背景判定为 rgb(${res.background.join(", ")})）`);
+    setToast(`切出 ${n} 张（轴对齐，背景 rgb(${res.background.join(", ")})）`);
   }, [doc, composeClean, cropCanvas, onCommit]);
 
   /** 文件 > 导出 > 颜色查找表：把当前调整层烘成 33³ 的 .cube。 */
@@ -5694,6 +5835,30 @@ export default function EditorShell({
                 .join("，");
               onCommit(res.doc, "自动对齐图层");
               setToast(`已对齐：${desc}`);
+            },
+          };
+        }
+        case "edit.autoAlignLayersFeatures": {
+          if (!canTransform) return undefined;
+          return {
+            run: () => {
+              setToast("正在特征配准（角点 + 描述子 + RANSAC），稍候…");
+              // 让出主线程让 toast 先渲染，再跑重计算（配准在降采样图上进行）
+              setTimeout(() => {
+                const res = alignLayersByFeatures(doc);
+                if (res.transforms.length === 0) {
+                  setToast("特征配准失败：角点或内点不足（两张图差异太大或太平坦）");
+                  return;
+                }
+                const desc = res.transforms
+                  .map((t) => {
+                    const l = doc.layers.find((x) => x.id === t.id);
+                    return `${l?.name ?? "图层"}（内点 ${t.inliers}）`;
+                  })
+                  .join("，");
+                onCommit(res.doc, "自动对齐图层（特征配准）");
+                setToast(`已按特征对齐：${desc}`);
+              }, 60);
             },
           };
         }
@@ -8353,7 +8518,7 @@ export default function EditorShell({
 
         /* ---------------------------------------------------------- 滤镜 */
         case "filter.cameraRaw":
-          return adjustLayer("cameraraw");
+          return { run: () => setCameraRawOpen(true) };
         case "filter.filterGallery":
           return { run: () => setGallery(true) };
         case "filter.liquify":
@@ -8726,7 +8891,11 @@ export default function EditorShell({
         default: {
           // 已注册的滤镜统一进参数弹窗（实时预览 + 确定才落盘）
           const fx = filterDef(id);
-          if (fx) return { run: () => setFilterFx(fx.id) };
+          if (fx) {
+            // 模糊画廊 5 项走专用大窗：画布钉点编辑，而不是平铺滑块
+            if (isBlurGallery(fx.id)) return { run: () => setBlurGalleryId(fx.id) };
+            return { run: () => setFilterFx(fx.id) };
+          }
           return undefined;
         }
       }
@@ -9273,10 +9442,10 @@ export default function EditorShell({
         if (mergeOk) onCommit(mergeDown(doc), zh.menu.mergeDown);
         return;
       }
-      // Ctrl+Shift+A：Camera Raw（与菜单一致，开参数弹窗而不是直接插中性层）
+      // Ctrl+Shift+A：Camera Raw（与菜单一致，开专用七页签工作窗）
       if (k === "a" && e.shiftKey) {
         e.preventDefault();
-        setAdjustFx("cameraraw");
+        setCameraRawOpen(true);
         return;
       }
       if (k === "backspace") {
@@ -9691,6 +9860,18 @@ export default function EditorShell({
                     }
                   />
                 ) : null,
+              )}
+              {/* 模糊画廊画布钉点（对话框开着时挂上，与画布同变换 */}
+              {blurGalleryId && blurPins && (
+                <BlurGalleryOverlay
+                  docW={docW}
+                  docH={docH}
+                  scale={blurPins.scale}
+                  pins={blurPins.pins}
+                  selected={blurPins.selected}
+                  showRing={blurPins.showRing}
+                  onChange={(pins, sel, commit) => blurPinsCb.current?.(pins, sel, commit)}
+                />
               )}
               {/* 校样层：把合成结果按校样条件重算后盖在上面（纯显示） */}
               <canvas
@@ -11250,7 +11431,26 @@ export default function EditorShell({
         </Modal>
       )}
       {/* 滤镜 > 灭点：把四点围出的平面拉正 */}
-      {vpDialog && (
+      {vpDialog && (() => {
+        // 消失点平面实时校验（移植自 PhotoCraft vanishing.rs）：
+        // 有效平面 → 蓝，存疑 → 黄，无效 → 红；能解出焦距时一并显示。
+        const nums = vpDialog.q.map((v) => Number.parseFloat(v));
+        let planeHint = "";
+        let planeTone = "";
+        if (nums.every((n) => Number.isFinite(n))) {
+          const p = normalizePlane({
+            corners: [0, 1, 2, 3].map((i) => [nums[i * 2], nums[i * 2 + 1]] as [number, number]),
+          } as Parameters<typeof normalizePlane>[0]);
+          const status = checkPlane(p, [Number(vpDialog.w) / 2, Number(vpDialog.h) / 2]);
+          const focal = planeFocal(p, [Number(vpDialog.w) / 2, Number(vpDialog.h) / 2]);
+          planeTone = status === "valid" ? "ok" : status === "questionable" ? "warn" : "bad";
+          planeHint = status === "valid"
+            ? `平面有效${focal ? ` · 估计焦距 ${Math.round(focal)}px` : " · 正对镜头（无透视）"}`
+            : status === "questionable"
+              ? `平面存疑：角太尖或焦距不相容${focal ? `（焦距 ${Math.round(focal)}px）` : ""}`
+              : "平面无效：四角要构成凸四边形、顺序不能交叉";
+        }
+        return (
         <Modal
           title="灭点（平面校正）"
           onClose={() => setVpDialog(null)}
@@ -11361,8 +11561,12 @@ export default function EditorShell({
               </span>
             </label>
           </div>
+          {planeHint && (
+            <div className={`vp-plane-hint vp-plane-hint--${planeTone}`}>{planeHint}</div>
+          )}
         </Modal>
-      )}
+        );
+      })()}
       {/* 编辑 > 内容识别缩放（接缝雕刻） */}
       {casDialog && (
         <Modal
@@ -11893,6 +12097,32 @@ export default function EditorShell({
             onCommit(next, adjustDef(adjustFx).label);
           }}
           onClose={() => setAdjustFx(null)}
+        />
+      )}
+      {blurGalleryId && (
+        <BlurGalleryDialog
+          doc={doc}
+          filterId={blurGalleryId}
+          scale={scale}
+          onPinsChange={setBlurPins}
+          onCb={setBlurPinsCb}
+          onPreview={previewDoc}
+          onApply={(next) => {
+            setBlurGalleryId(null);
+            onCommit(next, filterDef(blurGalleryId)?.label ?? "模糊画廊");
+          }}
+          onClose={() => setBlurGalleryId(null)}
+        />
+      )}
+      {cameraRawOpen && (
+        <CameraRawDialog
+          doc={doc}
+          onPreview={previewDoc}
+          onApply={(next) => {
+            setCameraRawOpen(false);
+            onCommit(next, "Camera Raw");
+          }}
+          onClose={() => setCameraRawOpen(false)}
         />
       )}
       {liquify && (

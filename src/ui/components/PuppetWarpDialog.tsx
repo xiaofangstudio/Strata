@@ -21,7 +21,7 @@ import { cloneSurface, createSurface, mustCtx } from "../../engine/surface";
 import { zh } from "../../i18n";
 import type { ThemeMode } from "../../stores/theme";
 import { capturePointer } from "../pointer";
-import Modal from "./Modal";
+import DraggableModal from "./DraggableModal";
 import "./LiquifyDialog.css";
 
 interface Props {
@@ -340,10 +340,15 @@ export default function PuppetWarpDialog({
   const [toastText, setToastText] = useState("");
 
   return (
-    <Modal
+    <DraggableModal
+      id={mode === "affine" ? "puppetAffine" : "puppet"}
       title={mode === "affine" ? zh.puppet.titleAffine : zh.puppet.titlePuppet}
+      badge="变形"
       onClose={onClose}
       width={880}
+      height={580}
+      minWidth={680}
+      minHeight={480}
       footer={
         <>
           <span className="lq-note">
@@ -434,6 +439,6 @@ export default function PuppetWarpDialog({
         单击空白处加图钉，拖动图钉变形；离图钉越近的像素跟随越强。确定后按当前图钉在全分辨率上
         重新计算一次。变形作用于当前图层（含蒙版）。
       </p>
-    </Modal>
+    </DraggableModal>
   );
 }

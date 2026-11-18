@@ -1,0 +1,242 @@
+/**
+ * Camera Raw 工作窗口样式 —— 全部 `.cr-` 独占前缀（裸类撞车过的坑不再踩）。
+ * 两栏：左预览（可缩） + 右七页签。窗口可拖可缩，故两栏都用 min-width:0 + flex。
+ */
+
+.cr {
+  display: flex;
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.cr-left {
+  flex: 0 0 42%;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow-y: auto;
+}
+
+.cr-right {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.cr-preview {
+  flex: 0 0 auto;
+  height: 200px;
+  min-height: 140px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background:
+    repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 16px 16px,
+    var(--surface);
+  overflow: hidden;
+}
+
+.cr-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cr-presets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: auto;
+}
+
+.cr-presets-head {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.cr-presets-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 88px;
+  overflow-y: auto;
+}
+
+.cr-preset {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.cr-preset.is-builtin {
+  border-color: var(--accent);
+}
+
+.cr-preset-name {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-preset-name:hover {
+  background: var(--hover);
+}
+
+.cr-preset-del {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 6px 2px 2px;
+  cursor: pointer;
+}
+
+.cr-preset-del:hover {
+  color: #c0392b;
+}
+
+.cr-presets-save {
+  display: flex;
+  gap: 4px;
+}
+
+.cr-preset-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  padding: 4px 8px;
+}
+
+.cr-presets-save button {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.cr-preset-msg {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  min-height: 1em;
+}
+
+.cr-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow-x: auto;
+  flex: 0 0 auto;
+  scrollbar-width: thin;
+}
+
+.cr-tab {
+  flex: 1 0 auto;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  padding: 9px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.cr-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--surface);
+}
+
+.cr-params {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.cr-param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cr-param-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.cr-param-label {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.cr-param-value {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cr-tab-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.cr-grading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cr-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}

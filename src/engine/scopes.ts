@@ -137,9 +137,10 @@ export function computeVectorscope(
       const cb = -0.169 * r - 0.331 * g + 0.5 * b;
       const cr = 0.5 * r - 0.419 * g - 0.081 * b;
       // 放大到 ±0.5 满量程，越界夹到边缘（超饱和就直接压在圆周上）
-      const px = Math.round(half + cb * size * 2 * 0.5);
-      const py = Math.round(half - cr * size * 2 * 0.5);
-      if (px < 0 || py < 0 || px >= size || py >= size) continue;
+      // 注意必须 clamp 而不是丢弃：BT.601 纯蓝 Cb 恰为 0.5 → px=size，
+      // 纯青 Cr 恰为 -0.5 → py=size，直接 continue 会把最饱和的颜色整个吞掉。
+      const px = Math.max(0, Math.min(size - 1, Math.round(half + cb * size)));
+      const py = Math.max(0, Math.min(size - 1, Math.round(half - cr * size)));
       hit(out, px, py);
     }
   }

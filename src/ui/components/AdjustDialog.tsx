@@ -28,7 +28,7 @@ import {
 } from "../../core/layer";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
-import Modal from "./Modal";
+import DraggableModal from "./DraggableModal";
 import { AdjustProps } from "./LayersPanel";
 import "./AdjustDialog.css";
 
@@ -110,10 +110,13 @@ export default function AdjustDialog({
   if (!layer) return null;
 
   return (
-    <Modal
+    <DraggableModal
+      id="adjust"
       title={adjustDef(adjustId).label}
+      badge="调整"
       onClose={cancel}
-      width={460}
+      width={500}
+      height={600}
       footer={
         <>
           <span className="ad-note">
@@ -149,6 +152,6 @@ export default function AdjustDialog({
           onChange={(next) => setWork(next)}
         />
       </div>
-    </Modal>
+    </DraggableModal>
   );
 }

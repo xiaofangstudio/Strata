@@ -1,0 +1,66 @@
+/**
+ * 模糊画廊钉点覆盖层样式 —— `.bgo-` 独占前缀。
+ * SVG 铺满 stage、和画布同变换。
+ *
+ * 与其它参数窗不同，这里**整个 SVG 接指针**：画廊模式下点画布=放钉点，
+ * 画布平移/缩放让位给钉点编辑（PS 的画廊模态同样如此）；only 对话框开着时挂载，
+ * 关闭即卸载，不影响常规编辑。
+ */
+
+.bgo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: auto;
+  cursor: crosshair;
+  z-index: 12;
+}
+
+.bgo > g,
+.bgo-pin {
+  pointer-events: none;
+}
+
+.bgo-dot {
+  fill: #2563eb;
+  stroke: #fff;
+  cursor: grab;
+  pointer-events: auto;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.bgo-dot:active {
+  cursor: grabbing;
+}
+
+.bgo-pin.is-sel .bgo-dot {
+  fill: #db2777;
+}
+
+.bgo-ring {
+  fill: none;
+  stroke: #2563eb;
+  stroke-dasharray: 6 4;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.bgo-handle {
+  fill: #fff;
+  stroke: #2563eb;
+  cursor: ew-resize;
+  pointer-events: auto;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.bgo-label {
+  fill: #1e40af;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 2px;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+}

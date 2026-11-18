@@ -1,0 +1,197 @@
+/*
+ * 参数工作窗口样式。
+ * 设计要点（对齐 PhotoCraft dialogs.rs 的意图）：
+ *  · 遮罩层完全透明、pointer-events:none —— 不压暗、不虚化、不挡画布；
+ *  · 窗口本体有实心表面 + 柔和阴影 + 细边框，浮在画面上而不糊住画面；
+ *  · 独占 .pw- 前缀，绝不复用 .modal / .cp 这些容易撞车的裸类名。
+ */
+
+.pw-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  pointer-events: none; /* 画布仍可平移/缩放/取样 */
+}
+
+.pw-window {
+  position: fixed;
+  pointer-events: auto; /* 只有窗口本体吃输入 */
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow:
+    0 18px 48px rgba(15, 23, 42, 0.18),
+    0 4px 14px rgba(15, 23, 42, 0.1);
+  overflow: hidden;
+  animation: pw-in 160ms var(--ease, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: box-shadow 160ms var(--ease, ease), border-color 160ms var(--ease, ease);
+}
+
+.pw-window.is-active {
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 45%, var(--border));
+  box-shadow:
+    0 22px 56px rgba(15, 23, 42, 0.22),
+    0 0 0 1px color-mix(in srgb, var(--accent, #3b82f6) 14%, transparent);
+}
+
+.pw-window.is-dragging {
+  box-shadow:
+    0 28px 64px rgba(15, 23, 42, 0.26),
+    0 0 0 1px color-mix(in srgb, var(--accent, #3b82f6) 24%, transparent);
+  transition: none;
+}
+
+.pw-window.is-closing {
+  animation: pw-out var(--dur, 150ms) ease-in forwards;
+}
+
+@keyframes pw-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pw-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+/* 标题栏：拖动区。细渐变 + 抓手点阵，让「可拖」一眼可见 */
+.pw-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-2, #f8fafc), var(--surface));
+}
+
+.pw-bar:active {
+  cursor: grabbing;
+}
+
+.pw-grip {
+  color: var(--text-3, #94a3b8);
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.pw-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pw-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface-3, rgba(148, 163, 184, 0.14));
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pw-x {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  line-height: 1;
+  color: var(--text-2);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.pw-x:hover {
+  background: var(--surface-3, rgba(148, 163, 184, 0.16));
+  color: var(--text);
+}
+
+/* 内容区：自己滚，窗口拖高时这里跟着变大 */
+.pw-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px;
+}
+
+.pw-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2, #f8fafc) 60%, transparent);
+}
+
+/* 按钮不拆行（中文在窄 flex 里会被竖排，踩过坑） */
+.pw-foot button {
+  white-space: nowrap;
+}
+
+/* 右下角缩放手柄：两条斜线暗示可拖 */
+.pw-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.pw-resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--text-3, #94a3b8);
+  border-bottom: 2px solid var(--text-3, #94a3b8);
+  border-bottom-right-radius: 2px;
+  opacity: 0.7;
+}
+
+.pw-window.is-dragging .pw-resize::after {
+  opacity: 1;
+}
+
+/* 深色主题：阴影更沉、抓手更亮，保持可读 */
+:root[data-theme="dark"] .pw-window {
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.5),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
