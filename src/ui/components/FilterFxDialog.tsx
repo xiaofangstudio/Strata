@@ -16,9 +16,14 @@ import {
 import { applyFilterToLayer } from "../../core/filterOps";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
+import { useBaseComposite, useComposedPreview } from "../hooks/useComposedPreview";
 import DraggableModal from "./DraggableModal";
+import FilterPreview from "./FilterPreview";
+import MiniHistogram from "./MiniHistogram";
+import NumericField from "./NumericField";
 import RangeInput from "./RangeInput";
 import "./FilterGallery.css";
+import "./FilterFxDialog.css";
 
 interface Props {
   doc: StrataDoc;
@@ -139,6 +144,10 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
     previewRef.current(preview);
   }, [preview]);
 
+  /** 窗口内独立预览：滤镜预览文档合成离屏画布（尾随节流，不是防抖）。 */
+  const { canvas: previewCanvas, version: previewVersion } = useComposedPreview(preview, 120);
+  const baseCanvas = useBaseComposite(base);
+
   const cancel = useCallback(() => {
     if (closedRef.current) return;
     closedRef.current = true;
@@ -165,8 +174,10 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
       title={def.label}
       badge="滤镜"
       onClose={cancel}
-      width={560}
-      height={620}
+      width={980}
+      height={640}
+      minWidth={820}
+      minHeight={520}
       footer={
         <>
           <span className="fg-note">{usable ? def.label : zh.dialog.filterNoPixel}</span>
@@ -180,8 +191,10 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
         </>
       }
     >
-      <div className="fg">
-        <div className="fg-list" role="listbox" aria-label={zh.dialog.filterTitle}>
+      <div className="fxw">
+        {/* 左：滤镜目录（沿用滤镜库的分组列表样式） */}
+        <div className="fxw-catalog" role="listbox" aria-label={zh.dialog.filterTitle}>
+          <div className="ad-pane-head">{zh.dialog.filterTitle}</div>
           {GROUP_ORDER.map((g) => {
             const items = FILTER_DEFS.filter((d) => d.group === g);
             if (!items.length) return null;
@@ -208,47 +221,73 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
           })}
         </div>
 
-        <div className="fg-body">
-          <p className="fg-hint">{zh.dialog.filterHint}</p>
-          {def.params.map((p) => {
-            const v = params[p.id] ?? p.def;
-            return (
-              <label className="fg-field" key={p.id}>
-                <span className="fg-field-head">
-                  <span className="fg-field-label">{p.label}</span>
-                  <span className="fg-field-value">
-                    {p.dec ? v.toFixed(p.dec) : Math.round(v)}
-                    {p.unit ?? ""}
+        {/* 中：窗口内独立预览 + 直方图（真合成结果，不压暗背景） */}
+        <div className="fxw-preview-pane">
+          <div className="ad-pane-head">{zh.dialog.fpPreview}</div>
+          <FilterPreview
+            source={previewCanvas}
+            compareSource={baseCanvas}
+            docW={base.width}
+            docH={base.height}
+            version={previewVersion}
+            height="100%"
+          />
+          <div className="ad-hist">
+            <span className="ad-hist-label">{zh.dialog.fpHistogram}</span>
+            <MiniHistogram source={previewCanvas} version={previewVersion} height={52} />
+          </div>
+        </div>
+
+        {/* 右：参数 */}
+        <div className="fxw-params-pane">
+          <div className="ad-pane-head">{zh.dialog.fpParams}</div>
+          <div className="fxw-params-scroll">
+            <p className="fg-hint">{zh.dialog.filterHint}</p>
+            {def.params.map((p) => {
+              const v = params[p.id] ?? p.def;
+              return (
+                <label className="fg-field" key={p.id}>
+                  <span className="fg-field-head">
+                    <NumericField
+                      label={p.label}
+                      value={v}
+                      min={p.min}
+                      max={p.max}
+                      step={p.step}
+                      dec={p.dec}
+                      unit={p.unit}
+                      onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
+                    />
                   </span>
-                </span>
-                {p.choices ? (
-                  <select
-                    className="fg-select"
-                    value={v}
-                    onChange={(e) =>
-                      setParams((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))
-                    }
-                  >
-                    {p.choices.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <RangeInput
-                    className="fg-range"
-                    min={p.min}
-                    max={p.max}
-                    step={p.step}
-                    value={v}
-                    aria-label={p.label}
-                    onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
-                  />
-                )}
-              </label>
-            );
-          })}
+                  {p.choices ? (
+                    <select
+                      className="fg-select"
+                      value={v}
+                      onChange={(e) =>
+                        setParams((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))
+                      }
+                    >
+                      {p.choices.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <RangeInput
+                      className="fg-range"
+                      min={p.min}
+                      max={p.max}
+                      step={p.step}
+                      value={v}
+                      aria-label={p.label}
+                      onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
+                    />
+                  )}
+                </label>
+              );
+            })}
+          </div>
         </div>
       </div>
     </DraggableModal>

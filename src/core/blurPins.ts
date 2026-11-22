@@ -99,6 +99,89 @@ export function usesRing(id: string): boolean {
   return id === "filter.blurGallery.irisBlur" || id === "filter.blurGallery.spinBlur";
 }
 
+/**
+ * 多钉是否走「分布场」路径：Field / Iris 支持每钉独立模糊量（对齐 PhotoCraft
+ * 的 Pin.blur per pin），直接合成 amount 图喂 iterativeVariableBlur；
+ * Tilt / Spin / Path 参考实现本身就是单钉，继续走 FilterDef.apply。
+ */
+export function usesAmountField(id: string): boolean {
+  return id === "filter.blurGallery.fieldBlur" || id === "filter.blurGallery.irisBlur";
+}
+
+/**
+ * 多颗钉 → 逐像素模糊强度图（0..1，1 = 吃满 maxBlurPx）。
+ *
+ *  · Field：每颗钉一个锥形衰减场（钉心 = 该钉 blur 满量，半径 = 短边×0.6 处衰减到 0），
+ *    多钉取 max —— 哪颗钉造成的模糊更强就听谁的；
+ *  · Iris：每颗钉一个椭圆清晰区（区内 0、区外按羽化升到 1），多钉取 min ——
+ *    任一颗钉的清晰区内都保持清晰（并集），与旧单钉 irisBlur 公式一致。
+ *
+ * 返回 null 表示这组钉在该滤镜下没有分布场（调用方回退 def.apply）。
+ */
+export function pinAmountField(
+  id: string,
+  pins: readonly BlurPin[],
+  w: number,
+  h: number,
+): { map: Float32Array; maxBlurPx: number } | null {
+  if (!usesAmountField(id) || pins.length === 0) return null;
+  const b: Bounds = [0, 0, w, h];
+  const ss = shortSide(b);
+  const map = new Float32Array(w * h);
+  const maxBlurPx = Math.max(1, ...pins.map((p) => p.blur));
+
+  if (id === "filter.blurGallery.fieldBlur") {
+    const reach = ss * 0.6; // 衰减半径：短边的 6 成
+    for (const p of pins) {
+      const c = toDoc(b, p);
+      const amt = p.blur / maxBlurPx;
+      if (amt <= 0) continue;
+      // 锥形衰减：d/reach 线性降到 0（比高斯便宜且可测：单调、边界明确）
+      const r2 = reach * reach;
+      const cx0 = Math.max(0, Math.floor(c.x - reach));
+      const cx1 = Math.min(w - 1, Math.ceil(c.x + reach));
+      const cy0 = Math.max(0, Math.floor(c.y - reach));
+      const cy1 = Math.min(h - 1, Math.ceil(c.y + reach));
+      for (let y = cy0; y <= cy1; y += 1) {
+        const dy = y - c.y;
+        for (let x = cx0; x <= cx1; x += 1) {
+          const dx = x - c.x;
+          const t = 1 - (dx * dx + dy * dy) / r2;
+          if (t <= 0) continue;
+          const v = amt * t;
+          const i = y * w + x;
+          if (v > map[i]) map[i] = v;
+        }
+      }
+    }
+    return { map, maxBlurPx };
+  }
+
+  // Iris：椭圆清晰区场，多钉取 min（任一区内都清晰）
+  for (let i = 0; i < w * h; i += 1) map[i] = 1;
+  for (const p of pins) {
+    const c = toDoc(b, p);
+    const rx = Math.max(1, p.radius * ss);
+    const ry = rx;
+    const feather = Math.max(0.02, p.feather);
+    const cx0 = Math.max(0, Math.floor(c.x - rx * (1 + feather)));
+    const cx1 = Math.min(w - 1, Math.ceil(c.x + rx * (1 + feather)));
+    const cy0 = Math.max(0, Math.floor(c.y - ry * (1 + feather)));
+    const cy1 = Math.min(h - 1, Math.ceil(c.y + ry * (1 + feather)));
+    for (let y = cy0; y <= cy1; y += 1) {
+      const dy = (y - c.y) / ry;
+      for (let x = cx0; x <= cx1; x += 1) {
+        const dx = (x - c.x) / rx;
+        const len = Math.hypot(dx, dy);
+        const v = Math.min(1, Math.max(0, (len - 1) / feather));
+        const i = y * w + x;
+        if (v < map[i]) map[i] = v;
+      }
+    }
+  }
+  return { map, maxBlurPx };
+}
+
 /** 钉点 → 滤镜参数（写回 FilterDef 的 params，字段名与 defs.ts 一致）。 */
 export function pinToParams(id: string, p: BlurPin): Record<string, number> {
   // defs 的 cx/cy 是相对整图 0..100；bounds 就是整层（0,0,docW,docH），

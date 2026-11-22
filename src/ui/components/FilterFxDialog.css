@@ -1,0 +1,45 @@
+/**
+ * 滤镜参数工作窗的三栏布局：滤镜目录 / 窗口内预览 / 参数。
+ * 独占 .fxw- 前缀；共享的面板头(.ad-pane-head)/直方图(.ad-hist)与
+ * 调整工作窗一致，列表与滑杆沿用 .fg-*（滤镜库那套）。
+ */
+.fxw {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1.25fr) minmax(200px, 0.75fr);
+  gap: 12px;
+  height: 100%;
+  min-height: 420px;
+}
+
+.fxw-catalog,
+.fxw-preview-pane,
+.fxw-params-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fxw-catalog {
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.fxw-preview-pane > .fpv {
+  flex: 1 1 auto;
+  min-height: 200px;
+}
+
+.fxw-params-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}

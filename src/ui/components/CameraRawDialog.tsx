@@ -50,21 +50,32 @@ interface Props {
 
 /** 七页签定义：id → 页签名 + 该页包含的参数 id（对应 cameraraw 的 18 参数，无遗漏无重复）。 */
 type TabId = "light" | "color" | "effects" | "curve" | "mixer" | "grading" | "detail";
-const TABS: { id: TabId; label: string; params: string[] }[] = [
-  { id: "light", label: "Light · 光", params: [
+const TABS: { id: TabId; params: string[] }[] = [
+  { id: "light", params: [
     "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
   ] },
-  { id: "color", label: "Color · 色", params: [
+  { id: "color", params: [
     "temperature", "tint", "vibrance", "saturation",
   ] },
-  { id: "effects", label: "Effects · 效果", params: [
+  { id: "effects", params: [
     "vignette", "vignetteMidpoint", "vignetteHighlights",
   ] },
-  { id: "curve", label: "Curve · 曲线", params: ["curve"] },
-  { id: "mixer", label: "Color Mixer · 混色", params: ["mixerPreset"] },
-  { id: "grading", label: "Color Grading · 分级", params: [] },
-  { id: "detail", label: "Detail · 细节", params: ["texture", "clarity", "dehaze"] },
+  { id: "curve", params: ["curve"] },
+  { id: "mixer", params: ["mixerPreset"] },
+  { id: "grading", params: [] },
+  { id: "detail", params: ["texture", "clarity", "dehaze"] },
 ];
+
+/** 页签名走 i18n（六语言），渲染时读取当前字典。 */
+const TAB_LABEL: Record<TabId, keyof typeof zh.dialog> = {
+  light: "crTabLight",
+  color: "crTabColor",
+  effects: "crTabEffects",
+  curve: "crTabCurve",
+  mixer: "crTabMixer",
+  grading: "crTabGrading",
+  detail: "crTabDetail",
+};
 
 /** 参数 display 元信息：label / 范围 / 步长 / 小数位 / 单位，取自 cameraraw 的定义。 */
 import { adjustDef } from "../../core/layer";
@@ -104,9 +115,33 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
   previewRef.current = onPreview;
   const closedRef = useRef(false);
 
+  // 主画布预览推送：work 状态本身即时更新（滑块本地值跟手）。
+  // 全文档合成 + 18 参数像素管线在大图上每帧跑会堵主线程 —— 用尾随节流
+  // （每 60ms 强制推一帧最新值），拖动中画面持续刷新，停手后最后一帧保证推。
+  const pushTimer = useRef<number | null>(null);
+  const lastPush = useRef(0);
+  const pushPending = useRef<(() => void) | null>(null);
   useEffect(() => {
-    previewRef.current(work);
+    pushPending.current = () => {
+      if (closedRef.current) return;
+      previewRef.current(work);
+    };
+    const elapsed = Date.now() - lastPush.current;
+    if (elapsed >= 60) {
+      lastPush.current = Date.now();
+      pushPending.current();
+      return;
+    }
+    if (pushTimer.current !== null) return; // 已有排定帧，它算的是最新 pending
+    pushTimer.current = window.setTimeout(() => {
+      pushTimer.current = null;
+      lastPush.current = Date.now();
+      pushPending.current?.();
+    }, 60 - elapsed);
   }, [work]);
+  useEffect(() => () => {
+    if (pushTimer.current !== null) window.clearTimeout(pushTimer.current);
+  }, []);
 
   /** 工作文档一变就合成一张预览画布（供左侧缩略图 + 直方图用）。 */
   const [previewCanvas, setPreviewCanvas] = useState<HTMLCanvasElement | null>(null);
@@ -160,28 +195,35 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
     setWork(setAdjust(work, layer.id, { ...st, params: { ...st.params, [id]: value } }));
   }, [work, layer, st]);
 
+  /** 内置预设显示名走 i18n；用户预设直接显示保存时的名字。 */
+  const presetLabel = useCallback(
+    (p: RawPreset): string =>
+      p.nameKey ? ((zh.dialog as Record<string, string>)[p.nameKey] ?? p.name) : p.name,
+    [],
+  );
+
   const applyPreset = useCallback((preset: RawPreset) => {
     if (!layer) return;
     setWork(setAdjust(work, layer.id, presetToAdjust(preset.params)));
-    setPresetMsg(`已套用「${preset.name}」`);
-  }, [work, layer]);
+    setPresetMsg(zh.dialog.crApplied.replace("{name}", presetLabel(preset)));
+  }, [work, layer, presetLabel]);
 
   const doSave = useCallback(() => {
     const name = presetName.trim();
     if (!name || !st) {
-      setPresetMsg("先输入预设名称");
+      setPresetMsg(zh.dialog.crNeedName);
       return;
     }
     const ok = saveUserPreset({ name, params: st.params }, userPresets);
     setUserPresets(loadUserPresets());
-    setPresetMsg(ok ? `已保存「${name}」` : "保存失败：浏览器存储不可用");
+    setPresetMsg(ok ? zh.dialog.crSaved.replace("{name}", name) : zh.dialog.crSaveFailed);
     if (ok) setPresetName("");
   }, [presetName, st, userPresets]);
 
   const doDelete = useCallback((name: string) => {
     deleteUserPreset(name, userPresets);
     setUserPresets(loadUserPresets());
-    setPresetMsg(`已删除「${name}」`);
+    setPresetMsg(zh.dialog.crDeleted.replace("{name}", name));
   }, [userPresets]);
 
   const neutral = st
@@ -217,7 +259,7 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
       footer={
         <>
           <span className="cr-note">
-            {neutral ? "拖动右侧参数或套用预设，左侧预览实时更新" : "确定后生成可随时回改的调整图层"}
+            {neutral ? zh.dialog.crNeutralHint : zh.dialog.crTunedHint}
           </span>
           <span className="cr-spacer" />
           <button className="btn-ghost" onClick={cancel}>{zh.dialog.cancel}</button>
@@ -235,13 +277,13 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
           </div>
           <MiniHistogram source={previewCanvas} version={previewVersion} height={64} />
           <div className="cr-presets">
-            <div className="cr-presets-head">预设</div>
+            <div className="cr-presets-head">{zh.dialog.crPresets}</div>
             <div className="cr-presets-list">
               {allPresets.map((p) => (
                 <span className={`cr-preset${p.builtin ? " is-builtin" : ""}`} key={`${p.builtin ? "b" : "u"}-${p.name}`}>
-                  <button className="cr-preset-name" onClick={() => applyPreset(p)} title="套用预设">{p.name}</button>
+                  <button className="cr-preset-name" onClick={() => applyPreset(p)} title={zh.dialog.crApplyTitle}>{presetLabel(p)}</button>
                   {!p.builtin && (
-                    <button className="cr-preset-del" onClick={() => doDelete(p.name)} title="删除预设">×</button>
+                    <button className="cr-preset-del" onClick={() => doDelete(p.name)} title={zh.dialog.crDelTitle}>×</button>
                   )}
                 </span>
               ))}
@@ -250,11 +292,11 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
               <input
                 className="cr-preset-input"
                 value={presetName}
-                placeholder="存为…"
+                placeholder={zh.dialog.crSaveAs}
                 onChange={(e) => setPresetName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") doSave(); }}
               />
-              <button className="btn-ghost" onClick={doSave}>保存</button>
+              <button className="btn-ghost" onClick={doSave}>{zh.dialog.crSave}</button>
             </div>
             {presetMsg && <div className="cr-preset-msg">{presetMsg}</div>}
           </div>
@@ -263,18 +305,21 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
         {/* 右：七页签 + 参数滑杆 */}
         <div className="cr-right">
           <div className="cr-tabs" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                aria-selected={t.id === tab}
-                className={`cr-tab${t.id === tab ? " is-active" : ""}`}
-                onClick={() => setTab(t.id)}
-                title={t.label}
-              >
-                {t.label.split(" · ")[0]}
-              </button>
-            ))}
+            {TABS.map((t) => {
+              const label = zh.dialog[TAB_LABEL[t.id]];
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={t.id === tab}
+                  className={`cr-tab${t.id === tab ? " is-active" : ""}`}
+                  onClick={() => setTab(t.id)}
+                  title={label}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
           <div className="cr-params">
             {st && curTab.params.map((id) => {
@@ -300,14 +345,14 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
               );
             })}
             {tab === "curve" && (
-              <p className="cr-tab-hint">色调曲线预设：0 = 原图，1–4 = 由柔和到强对比的单调三次曲线，逐通道应用。</p>
+              <p className="cr-tab-hint">{zh.dialog.crCurveHint}</p>
             )}
             {tab === "mixer" && (
-              <p className="cr-tab-hint">8 色带混色预设：0 = 原图，1–4 = 不同色相/饱和度/明度组合，可与人像/风光风格叠加。</p>
+              <p className="cr-tab-hint">{zh.dialog.crMixerHint}</p>
             )}
             {tab === "grading" && previewCanvas && (
               <div className="cr-grading">
-                <p className="cr-tab-hint">分级参考：切换 R/G/B 通道看色偏，配合 Color 页的色温 / 色调校正。</p>
+                <p className="cr-tab-hint">{zh.dialog.crGradingHint}</p>
                 <HistogramPanel source={previewCanvas} version={previewVersion} />
               </div>
             )}

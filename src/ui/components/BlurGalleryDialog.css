@@ -135,3 +135,74 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* ---------- 画廊面板分区（钉点 / 分布 / 参数）---------- */
+.bg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bg-section-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.bg-pin {
+  cursor: pointer;
+}
+
+.bg-pin-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.bg-pin-blur {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.bg-pin-blur-label {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.bg-pin-blur-val {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bg-heat-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  padding: 4px;
+  display: grid;
+  place-items: center;
+}
+
+.bg-heat {
+  display: block;
+  width: 96px;
+  image-rendering: pixelated;
+  border-radius: 3px;
+}
+
+.bg-heat-legend {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+}

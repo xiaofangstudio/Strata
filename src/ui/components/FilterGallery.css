@@ -186,11 +186,11 @@
   outline-offset: 1px;
 }
 
-/* ---------- 滤镜库三栏（效果目录 / 堆栈 / 参数）----------
+/* ---------- 滤镜库四栏（效果目录 / 独立预览 / 效果堆栈 / 参数）----------
    独占 fgl- 前缀，别和 fg- 的旧两栏样式串味。 */
 .fgl {
   display: grid;
-  grid-template-columns: 150px 1fr 220px;
+  grid-template-columns: 132px minmax(0, 1.4fr) 200px minmax(190px, 0.75fr);
   gap: 0;
   height: 100%;
   min-height: 420px;
@@ -200,12 +200,24 @@
 }
 
 .fgl-catalog,
+.fgl-preview-pane,
 .fgl-stack,
 .fgl-params {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+.fgl-preview-pane {
+  padding: var(--sp-2) var(--sp-3);
+  border-right: 1px solid var(--border);
+  gap: 0;
+}
+
+.fgl-preview-pane .fpv {
+  flex: 1 1 auto;
+  min-height: 200px;
 }
 
 .fgl-catalog {

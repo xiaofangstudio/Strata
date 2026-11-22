@@ -1,0 +1,130 @@
+/**
+ * 窗口内独立预览的棋盘底 + 工具条样式。独占 fpv- 前缀。
+ * 棋盘格用双重 conic-gradient，与 PhotoCraft widgets::checker 同意图。
+ */
+.fpv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.fpv-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(-45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d8d8d8 75%),
+    linear-gradient(-45deg, transparent 75%, #d8d8d8 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  touch-action: none;
+}
+
+.fpv-stage:active {
+  cursor: grabbing;
+}
+
+.fpv-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.fpv-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* 按住对比时的角标：明确告诉用户现在看的是「改之前」 */
+.fpv-original {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.fpv-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  user-select: none;
+}
+
+.fpv-btn,
+.fpv-pct,
+.fpv-cmp {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--r-sm) - 2px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  min-width: 22px;
+  height: 21px;
+  padding: 0 5px;
+  cursor: pointer;
+}
+
+.fpv-btn:hover,
+.fpv-pct:hover,
+.fpv-cmp:hover {
+  background: var(--hover);
+}
+
+.fpv-cmp {
+  min-width: 40px;
+  white-space: nowrap;
+  touch-action: none;
+}
+
+.fpv-cmp.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.fpv-pct {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fpv-pct.is-fit {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fpv-spacer {
+  flex: 1 1 auto;
+}
+
+.fpv-size {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

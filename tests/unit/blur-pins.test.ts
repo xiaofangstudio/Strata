@@ -150,3 +150,62 @@ describe("族判定", () => {
     }
   });
 });
+
+import { pinAmountField, usesAmountField } from "../../src/core/blurPins";
+
+describe("pinAmountField 多钉分布场", () => {
+  it("非 field/iris 返回 null（走 def.apply 路径）", () => {
+    const B2: Bounds = [0, 0, 100, 100];
+    for (const id of ["filter.blurGallery.tiltShift", "filter.blurGallery.spinBlur", "filter.blurGallery.pathBlur"]) {
+      expect(pinAmountField(id, [pin()], 100, 100)).toBeNull();
+      expect(usesAmountField(id)).toBe(false);
+    }
+    void B2;
+  });
+
+  it("field：钉心处强度 = 该钉 blur 满量比例，多钉取 max", () => {
+    const strong = pin({ x: 0.5, y: 0.5, blur: 100, radius: 0.2 });
+    const weak = pin({ x: 0.1, y: 0.1, blur: 20, radius: 0.2 });
+    const r = pinAmountField("filter.blurGallery.fieldBlur", [strong, weak], 100, 100)!;
+    expect(r.maxBlurPx).toBe(100);
+    // 强钉钉心 (50,50)
+    expect(r.map[50 * 100 + 50]).toBeCloseTo(1, 5);
+    // 弱钉钉心 (10,10)：距强钉约 56.6 < reach(60)，会受强钉场影响，但 max 应 ≥ 弱钉自身量
+    expect(r.map[10 * 100 + 10]).toBeGreaterThanOrEqual(0.2);
+    // 远角 (99,99) 距强钉 69.3 > 60 且距弱钉 125.9 > 60 → 两场都衰减到 0
+    expect(r.map[99 * 100 + 99]).toBe(0);
+  });
+
+  it("iris：钉心清晰（0）、区外升到 1，多钉取 min（并集）", () => {
+    const a = pin({ x: 0.3, y: 0.5, blur: 30, radius: 0.2, feather: 0.5 });
+    const b2 = pin({ x: 0.7, y: 0.5, blur: 30, radius: 0.2, feather: 0.5 });
+    const r = pinAmountField("filter.blurGallery.irisBlur", [a, b2], 100, 100)!;
+    // 100×100 图短边 100；a 钉心 (30,50) 清晰
+    expect(r.map[50 * 100 + 30]).toBe(0);
+    // b 钉心 (70,50) 也清晰 —— 即使它在 a 的场之外
+    expect(r.map[50 * 100 + 70]).toBe(0);
+    // 两钉之间的中点 (50,50)：距两钉各 20 = 恰在边缘上（len=1）→ v=0
+    expect(r.map[50 * 100 + 50]).toBe(0);
+    // 远角 (0,0)：距 a 约 30（1.5 倍半径）→ 已完全模糊
+    expect(r.map[0]).toBe(1);
+  });
+
+  it("iris 单钉与旧 irisBlur 公式一致：len-1/feather", () => {
+    const p = pin({ x: 0.5, y: 0.5, blur: 20, radius: 0.25, feather: 0.5 });
+    const r = pinAmountField("filter.blurGallery.irisBlur", [p], 100, 100)!;
+    // (75,50)：dx=25/25=1.0（rx=0.25*100=25），dy=0 → len=1 → v=0（边缘恰清晰）
+    expect(r.map[50 * 100 + 75]).toBeCloseTo(0, 5);
+    // (90,50)：dx=40/25=1.6 → v=(1.6-1)/0.5=1.2 → clamp 1
+    expect(r.map[50 * 100 + 90]).toBe(1);
+    // (80,50)：dx=30/25=1.2 → v=(1.2-1)/0.5=0.4
+    expect(r.map[50 * 100 + 80]).toBeCloseTo(0.4, 5);
+  });
+
+  it("全零 blur 的 field 返回全 0 图（maxBlurPx 兜底 1，不产生 NaN）", () => {
+    const r = pinAmountField("filter.blurGallery.fieldBlur", [pin({ blur: 0 })], 50, 50)!;
+    expect(r.maxBlurPx).toBe(1);
+    let sum = 0;
+    for (const v of r.map) sum += v;
+    expect(sum).toBe(0);
+  });
+});

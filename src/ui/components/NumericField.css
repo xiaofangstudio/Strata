@@ -1,0 +1,57 @@
+/**
+ * 专业数值控件：标签可擦洗、数值框可输表达式。独占 nf- 前缀。
+ */
+.nf {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nf-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nf-label:hover {
+  color: var(--accent);
+}
+
+.nf-num {
+  flex: 0 0 auto;
+  width: 58px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--r-sm) - 2px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.nf-num:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.nf-num.is-invalid {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
+.nf-unit {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}

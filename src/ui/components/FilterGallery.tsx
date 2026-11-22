@@ -18,7 +18,11 @@ import {
 import { applyFilterStack, moveItem, toggleItem, type FilterStackItem } from "../../core/filterStack";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
+import { useBaseComposite, useComposedPreview } from "../hooks/useComposedPreview";
 import DraggableModal from "./DraggableModal";
+import FilterPreview from "./FilterPreview";
+import MiniHistogram from "./MiniHistogram";
+import NumericField from "./NumericField";
 import "./FilterGallery.css";
 import RangeInput from "./RangeInput";
 
@@ -48,6 +52,10 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
   useEffect(() => {
     previewRef.current(preview.doc);
   }, [preview.doc]);
+
+  /** 窗口内独立预览：整条效果堆栈的合成结果（尾随节流）。 */
+  const { canvas: previewCanvas, version: previewVersion } = useComposedPreview(preview.doc, 120);
+  const baseCanvas = useBaseComposite(base);
 
   const cancel = useCallback(() => {
     if (closedRef.current) return;
@@ -85,14 +93,18 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
     <DraggableModal
       id="filterGallery"
       title={zh.dialog.filterTitle}
-      badge="滤镜库"
+      badge={zh.dialog.fglBadge}
       onClose={cancel}
-      width={880}
-      height={620}
+      width={1080}
+      height={640}
+      minWidth={920}
+      minHeight={520}
       footer={
         <>
           <span className="fg-note">
-            {usable ? `${items.filter((i) => i.visible).length} 个效果叠加` : "从左侧添加效果到堆栈"}
+            {usable
+              ? zh.dialog.fglStacked.replace("{n}", String(items.filter((i) => i.visible).length))
+              : zh.dialog.fglEmpty}
           </span>
           <span className="fg-foot-spacer" />
           <button className="btn-ghost" onClick={cancel}>{zh.dialog.cancel}</button>
@@ -103,22 +115,39 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
       <div className="fgl">
         {/* 左：效果目录 */}
         <div className="fgl-catalog" role="listbox" aria-label={zh.dialog.filterTitle}>
-          <div className="fgl-col-head">效果</div>
+          <div className="fgl-col-head">{zh.dialog.fglEffects}</div>
           {FILTERS.map((d) => (
-            <button key={d.id} type="button" className="fg-item" onClick={() => addEffect(d.id)} title={`添加 ${d.label}`}>
+            <button key={d.id} type="button" className="fg-item" onClick={() => addEffect(d.id)} title={`${zh.dialog.fglAdd} ${d.label}`}>
               <span className="fg-item-name">{d.label}</span>
-              <span className="fg-item-sub">+ 添加</span>
+              <span className="fg-item-sub">+ {zh.dialog.fglAdd}</span>
             </button>
           ))}
         </div>
 
-        {/* 中：效果堆栈（自下而上叠加，与 PhotoCraft 一致） */}
+        {/* 中左：窗口内独立预览 + 直方图 —— 看的是整条堆栈生效后的真合成结果 */}
+        <div className="fgl-preview-pane">
+          <div className="ad-pane-head">{zh.dialog.fpPreview}</div>
+          <FilterPreview
+            source={previewCanvas}
+            compareSource={baseCanvas}
+            docW={base.width}
+            docH={base.height}
+            version={previewVersion}
+            height="100%"
+          />
+          <div className="ad-hist">
+            <span className="ad-hist-label">{zh.dialog.fpHistogram}</span>
+            <MiniHistogram source={previewCanvas} version={previewVersion} height={48} />
+          </div>
+        </div>
+
+        {/* 中右：效果堆栈（自下而上叠加，与 PhotoCraft 一致） */}
         <div className="fgl-stack">
           <div className="fgl-col-head">
-            <span>效果堆栈</span>
-            <span className="fgl-col-sub">{items.length} 项</span>
+            <span>{zh.dialog.fglStack}</span>
+            <span className="fgl-col-sub">{zh.dialog.fglItems.replace("{n}", String(items.length))}</span>
           </div>
-          {items.length === 0 && <p className="fgl-empty">左键点一个效果添加，可叠加多个</p>}
+          {items.length === 0 && <p className="fgl-empty">{zh.dialog.fglEmpty}</p>}
           <div className="fgl-stack-list">
             {items.map((it, i) => {
               const d = adjustDef(it.id);
@@ -134,21 +163,21 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
                   <button
                     type="button"
                     className="fgl-eye"
-                    title={it.visible ? "隐藏此效果" : "显示此效果"}
+                    title={it.visible ? zh.dialog.fglHide : zh.dialog.fglShow}
                     onClick={(e) => { stop(e); setItems(toggleItem(items, i)); }}
                   >
                     {it.visible ? "◉" : "○"}
                   </button>
                   <div className="fgl-card-main">
                     <span className="fgl-card-name">{d.label}</span>
-                    <span className="fgl-card-sub">第 {i + 1} 层 · {d.params.length} 参数</span>
+                    <span className="fgl-card-sub">{zh.dialog.fglItems.replace("{n}", String(i + 1))} · {d.params.length} {zh.dialog.fpParams}</span>
                   </div>
                   <div className="fgl-card-ops">
-                    <button type="button" title="上移" disabled={i === 0}
+                    <button type="button" title={zh.dialog.fglUp} disabled={i === 0}
                       onClick={(e) => { stop(e); setItems(moveItem(items, i, i - 1)); }}>↑</button>
-                    <button type="button" title="下移" disabled={i === items.length - 1}
+                    <button type="button" title={zh.dialog.fglDown} disabled={i === items.length - 1}
                       onClick={(e) => { stop(e); setItems(moveItem(items, i, i + 1)); }}>↓</button>
-                    <button type="button" title="删除"
+                    <button type="button" title={zh.dialog.fglDelete}
                       onClick={(e) => {
                         stop(e);
                         setItems((prev) => prev.filter((x) => x.uid !== it.uid));
@@ -163,8 +192,8 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
 
         {/* 右：选中项参数 */}
         <div className="fgl-params">
-          <div className="fgl-col-head">{selDef ? selDef.label : "参数"}</div>
-          {!selectedItem && <p className="fgl-empty">选中一个效果来调它的参数</p>}
+          <div className="fgl-col-head">{selDef ? selDef.label : zh.dialog.fpParams}</div>
+          {!selectedItem && <p className="fgl-empty">{zh.dialog.fglPick}</p>}
           {selectedItem && selDef && (
             <div className="fg-body">
               {selDef.params.map((p) => {
@@ -172,10 +201,16 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
                 return (
                   <label className="fg-field" key={p.id}>
                     <span className="fg-field-head">
-                      <span className="fg-field-label">{p.label}</span>
-                      <span className="fg-field-value">
-                        {p.dec ? v.toFixed(p.dec) : Math.round(v)}{p.unit ?? ""}
-                      </span>
+                      <NumericField
+                        label={p.label}
+                        value={v}
+                        min={p.min}
+                        max={p.max}
+                        step={p.step}
+                        dec={p.dec}
+                        unit={p.unit}
+                        onChange={(nv) => setParam(p.id, nv)}
+                      />
                     </span>
                     <RangeInput
                       className="fg-range"

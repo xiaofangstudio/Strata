@@ -11,12 +11,13 @@ import { cloneSurface, createSurface, mustCtx } from "../engine/surface";
 import { filterDef, type FilterDef } from "../engine/filters/defs";
 import type { RgbaBuffer } from "../engine/filters/kernels";
 
-function toBuffer(img: ImageData): RgbaBuffer {
+/** ImageData → RgbaBuffer（画廊等外部管线复用）。 */
+export function toBuffer(img: ImageData): RgbaBuffer {
   return { data: img.data, width: img.width, height: img.height };
 }
 
-/** 选区 alpha 与滤镜结果混合（sel 可为 null = 全图）。 */
-function blendWithSelection(
+/** 选区 alpha 与滤镜结果混合（sel 可为 null = 全图）。画廊管线复用。 */
+export function blendWithSelection(
   orig: RgbaBuffer,
   filtered: RgbaBuffer,
   sel: ImageData | null,

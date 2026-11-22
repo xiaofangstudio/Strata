@@ -18,6 +18,8 @@ export interface RawPreset {
   name: string;
   params: Record<string, number>;
   builtin?: boolean;
+  /** 内置预设的显示名走 i18n（key 挂在 zh.dialog 下）；用户预设直接用 name。 */
+  nameKey?: string;
 }
 
 const KEY = "strata.cameraraw.presets";
@@ -38,24 +40,28 @@ export function sanitizeParams(input: unknown): Record<string, number> {
 
 /** 内置预设（对应 PS 的常规胶片风格基线），全部走 sanitize 保证合法。 */
 export const BUILTIN_PRESETS: RawPreset[] = [
-  { name: "原图", params: sanitizeParams({}), builtin: true },
+  { name: "原图", nameKey: "crPresetOriginal", params: sanitizeParams({}), builtin: true },
   {
     name: "通透日光",
+    nameKey: "crPresetDaylight",
     builtin: true,
     params: sanitizeParams({ temperature: 12, contrast: 18, highlights: -24, shadows: 20, vibrance: 18, clarity: 10 }),
   },
   {
     name: "暖调人像",
+    nameKey: "crPresetPortrait",
     builtin: true,
     params: sanitizeParams({ temperature: 20, tint: 6, contrast: -8, highlights: -12, shadows: 14, vibrance: 10, texture: -6 }),
   },
   {
     name: "冷调街拍",
+    nameKey: "crPresetStreet",
     builtin: true,
     params: sanitizeParams({ temperature: -22, contrast: 24, blacks: -18, dehaze: 16, saturation: -8 }),
   },
   {
     name: "胶片柔和生活",
+    nameKey: "crPresetFilm",
     builtin: true,
     params: sanitizeParams({ contrast: -12, highlights: -16, shadows: 18, curve: 1, vignette: -12, texture: -8 }),
   },

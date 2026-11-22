@@ -28,7 +28,10 @@ import {
 } from "../../core/layer";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
+import { useComposedPreview } from "../hooks/useComposedPreview";
 import DraggableModal from "./DraggableModal";
+import FilterPreview from "./FilterPreview";
+import MiniHistogram from "./MiniHistogram";
 import { AdjustProps } from "./LayersPanel";
 import "./AdjustDialog.css";
 
@@ -86,6 +89,9 @@ export default function AdjustDialog({
     previewRef.current(work);
   }, [work]);
 
+  /** 窗口内独立预览：工作文档合成离屏画布（尾随节流，不是防抖）。 */
+  const { canvas: previewCanvas, version: previewVersion } = useComposedPreview(work, 120);
+
   /**
    * 参数还是全默认就不让确定 —— 否则又会落一个「画面完全没变化」的中性层，
    * 那正是用户说的「起效了又没起效」。曲线 / 渐变映射的额外结构一并比较。
@@ -115,12 +121,14 @@ export default function AdjustDialog({
       title={adjustDef(adjustId).label}
       badge="调整"
       onClose={cancel}
-      width={500}
+      width={860}
       height={600}
+      minWidth={720}
+      minHeight={480}
       footer={
         <>
           <span className="ad-note">
-            {neutral ? "还没调参数：先拖一下滑杆或曲线" : "确定后生成可随时回改的调整图层"}
+            {neutral ? zh.dialog.fpNeutralHint : zh.dialog.fpTunedHint}
           </span>
           <span className="ad-spacer" />
           <button className="btn-ghost" onClick={cancel}>
@@ -132,25 +140,41 @@ export default function AdjustDialog({
         </>
       }
     >
-      <div className="ad">
-        <p className="ad-hint">
-          参数在这里调好再确定：拖动时画布实时预览，取消则原图一点不变。
-          当前选中的图层与右侧调色台都不会被打断。
-        </p>
-        {/*
-          AdjustProps 是属性面板里那套参数 UI（色阶专用编辑器、曲线、渐变映射、
-          分通道滑杆都在里面）。这里把它的 doc / layer 换成「工作文档 + 临时层」，
-          onChange / onPreview 都只更新弹窗自己的 state —— 于是一条滑杆也不会
-          写进历史、更不会碰活动层。确定才由 onApply 统一落库。
-        */}
-        <AdjustProps
-          doc={work}
-          layer={layer}
-          compSource={compSource ?? null}
-          compVersion={compVersion}
-          onPreview={setWork}
-          onChange={(next) => setWork(next)}
-        />
+      {/*
+        专业工作台布局：左边是「应用参数后的完整合成预览 + 直方图」（与 PhotoCraft
+        一致，预览必须按真实对比度判断，所以背景不压暗），右边才是参数。参数依旧
+        复用 AdjustProps，一份代码两处用；预览画布由 useComposedPreview 尾随节流
+        合成，拖参数时画面持续跟手。
+      */}
+      <div className="ad-workbench">
+        <div className="ad-preview-pane">
+          <div className="ad-pane-head">{zh.dialog.fpPreview}</div>
+          <FilterPreview
+            source={previewCanvas}
+            compareSource={compSource ?? null}
+            docW={base.width}
+            docH={base.height}
+            version={previewVersion}
+            height="100%"
+          />
+          <div className="ad-hist">
+            <span className="ad-hist-label">{zh.dialog.fpHistogram}</span>
+            <MiniHistogram source={previewCanvas} version={previewVersion} height={52} />
+          </div>
+        </div>
+        <div className="ad-params-pane">
+          <div className="ad-pane-head">{zh.dialog.fpParams}</div>
+          <div className="ad-params-scroll">
+            <AdjustProps
+              doc={work}
+              layer={layer}
+              compSource={compSource ?? null}
+              compVersion={compVersion}
+              onPreview={setWork}
+              onChange={(next) => setWork(next)}
+            />
+          </div>
+        </div>
       </div>
     </DraggableModal>
   );
