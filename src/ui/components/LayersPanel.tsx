@@ -33,6 +33,7 @@ import {
   curveOf,
   setCurveOf,
   newAdjustState,
+  newBlendIf,
   newLayerStyle,
   initiallyCollapsedGroupIds,
   styleDef,
@@ -48,6 +49,7 @@ import {
   type StyleId,
 } from "../../core/layer";
 import { hexToRgb01, monotoneAt, rgb01ToHex, type CurvePoint } from "../../engine/filters";
+import { curveFromPick, type CurvePickKind } from "../../core/curvePicker";
 import {
   addAdjustLayer,
   addLayer,
@@ -65,6 +67,7 @@ import {
   selectLayer,
   setAdjust,
   setBlend,
+  setBlendIf,
   setOpacity,
   setSelection,
   toggleClip,
@@ -97,10 +100,16 @@ import {
   saveChannelAsAlpha,
 } from "../../core/channelOps";
 import { combineSelection, type SelectionMode } from "../../core/selection";
+import {
+  isVideoLayer,
+  sampleFrameIndices,
+  setFrameIndex,
+} from "../../core/videoLayer";
 import ColorChip from "./ColorChip";
 import RangeInput from "./RangeInput";
 import MiniHistogram from "./MiniHistogram";
-import LevelsEditor from "./LevelsEditor";
+import LevelsEditor, { type CanvasPickRequest } from "./LevelsEditor";
+import BlendIfBar from "./BlendIfBar";
 import Popover from "./Popover";
 import "./LayersPanel.css";
 
@@ -1038,6 +1047,8 @@ function AdjustMenu({ onAdd }: { onAdd: (id: AdjustId) => void }) {
   );
 }
 
+const NOOP_PICK: CanvasPickRequest = () => {};
+
 /** 调整图层的参数区（改参数不碰像素，随时可调可删）。 */
 export function AdjustProps({
   doc,
@@ -1046,6 +1057,10 @@ export function AdjustProps({
   onPreview,
   compSource,
   compVersion = 0,
+  pickSource,
+  docW,
+  docH,
+  onRequestPick = NOOP_PICK,
 }: {
   doc: StrataDoc;
   layer: StrataLayer;
@@ -1054,6 +1069,11 @@ export function AdjustProps({
   /** 合成画布：色阶类调整拿它算直方图 */
   compSource?: HTMLCanvasElement | null;
   compVersion?: number;
+  /** 色阶吸管取样用的未调整基础合成图 */
+  pickSource?: HTMLCanvasElement | null;
+  docW?: number;
+  docH?: number;
+  onRequestPick?: CanvasPickRequest;
 }) {
   const st = layer.adjust;
   if (!st) return null;
@@ -1071,6 +1091,13 @@ export function AdjustProps({
   /** 只动一个数值，曲线 / 色标原样带走。 */
   const setParam = (id: string, value: number) =>
     preview(setAdjust(doc, layer.id, { ...st, params: { ...st.params, [id]: value } }));
+
+  /**
+   * 一次改多个参数（三点吸管会同时动黑白场和伽马）。必须基于同一份 st 生成，
+   * 连着调三次 setParam 会用同一份旧 doc，后两次把前两次覆盖掉。
+   */
+  const setParams = (patch: Record<string, number>) =>
+    preview(setAdjust(doc, layer.id, { ...st, params: { ...st.params, ...patch } }));
 
   /** 松手时把「当前这份（已预览的）状态」写进历史，而不是直接用旧的 st 重建。 */
   const commit = () => onChange(lastPreviewRef.current ?? setAdjust(doc, layer.id, st), zh.layers.adjustParams);
@@ -1113,14 +1140,32 @@ export function AdjustProps({
           id={st.id}
           params={st.params}
           source={compSource ?? null}
+          pickSource={pickSource ?? null}
+          docW={docW ?? 0}
+          docH={docH ?? 0}
+          onRequestPick={onRequestPick}
+          canPick={Boolean(pickSource && docW && docH && onRequestPick !== NOOP_PICK)}
           version={compVersion}
           setParam={setParam}
+          setParams={setParams}
           commit={commit}
         />
       )}
 
       {st.id === "curves" && (
-        <CurveEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={preview} commit={commit} />
+        <CurveEditor
+        doc={doc}
+        layer={layer}
+        st={st}
+        onChange={onChange}
+        onPreview={preview}
+        commit={commit}
+        pickSource={pickSource}
+        docW={docW}
+        docH={docH}
+        onRequestPick={onRequestPick}
+        canPick={Boolean(pickSource && docW && docH && onRequestPick !== NOOP_PICK)}
+      />
       )}
       {st.id === "gradientmap" && (
         <GradientEditor doc={doc} layer={layer} st={st} onChange={onChange} onPreview={preview} />
@@ -1207,6 +1252,11 @@ export function StyleProps({
   const list = layer.styles ?? [];
   /** 收起的样式（默认全展开，样式多了点标题能收起来） */
   const [folded, setFolded] = useState<StyleId[]>([]);
+  /** Blend If 拖动中的最新文档；松手才落历史，避免每段手势几十条记录。 */
+  const biPreviewRef = useRef<StrataDoc | null>(null);
+  useEffect(() => {
+    biPreviewRef.current = null;
+  }, [doc]);
   const [pick, setPick] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -1224,6 +1274,15 @@ export function StyleProps({
     const p = { [field]: v } as Partial<LayerStyle>;
     if (live) onPreview(updateLayerStyle(doc, id, p));
     else onChange(updateLayerStyle(doc, id, p), zh.layers.styleTitle);
+  };
+
+  /** Blend If：拖动中只预览，松手以「最新预览文档」落一条历史。 */
+  const setBI = (patch: Partial<NonNullable<StrataLayer["blendIf"]>>, commitNow: boolean) => {
+    const base = biPreviewRef.current ?? doc;
+    const next = setBlendIf(base, layer.id, patch);
+    biPreviewRef.current = next;
+    if (commitNow) onChange(next, zh.dialog.biTitle);
+    else onPreview(next);
   };
 
   const missing = STYLE_DEFS.filter((d) => !list.some((s) => s.id === d.id));
@@ -1267,6 +1326,56 @@ export function StyleProps({
           )}
         </div>
       </div>
+
+      {/* Blend If 是图层级混合选项，不属于任何一条样式，所以放在样式列表之上 */}
+      {(() => {
+        const bi = layer.blendIf ?? newBlendIf();
+        return (
+          <div className="ly-blendif">
+            <div className="ly-blendif-head">
+              <button
+                type="button"
+                className={bi.enabled ? "ly-check is-on" : "ly-check"}
+                title={zh.dialog.biEnable}
+                aria-pressed={bi.enabled}
+                onClick={() => setBI({ enabled: !bi.enabled }, true)}
+              >
+                {bi.enabled ? "◉" : "○"}
+              </button>
+              <span>{zh.dialog.biTitle}</span>
+            </div>
+            {bi.enabled && (
+              <>
+                <BlendIfBar
+                  label={zh.dialog.biThis}
+                  black={bi.thisBlack}
+                  white={bi.thisWhite}
+                  onChange={(b, w, phase) => setBI({ thisBlack: b, thisWhite: w }, phase === "commit")}
+                />
+                <BlendIfBar
+                  label={zh.dialog.biUnder}
+                  black={bi.underBlack}
+                  white={bi.underWhite}
+                  onChange={(b, w, phase) => setBI({ underBlack: b, underWhite: w }, phase === "commit")}
+                />
+                <div className="ly-blendif-feather">
+                  <span>{zh.dialog.biFeather}</span>
+                  <RangeInput
+                    min={0}
+                    max={128}
+                    step={1}
+                    value={bi.feather}
+                    aria-label={zh.dialog.biFeather}
+                    onChange={(v) => setBI({ feather: v }, false)}
+                    onDragEnd={() => setBI({}, true)}
+                  />
+                  <span>{bi.feather}</span>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {list.length === 0 && <span className="ly-hint">{zh.layers.styleEmpty}</span>}
 
@@ -1434,6 +1543,11 @@ function CurveEditor({
   onChange,
   onPreview,
   commit,
+  pickSource,
+  docW,
+  docH,
+  onRequestPick,
+  canPick = true,
 }: {
   doc: StrataDoc;
   layer: StrataLayer;
@@ -1442,6 +1556,11 @@ function CurveEditor({
   onPreview: (next: StrataDoc) => void;
   /** 松手写历史：用「最近一次预览的文档」，避免拿旧的 st 把拖动的曲线冲掉 */
   commit?: () => void;
+  pickSource?: HTMLCanvasElement | null;
+  docW?: number;
+  docH?: number;
+  onRequestPick?: CanvasPickRequest;
+  canPick?: boolean;
 }) {
   const [channel, setChannel] = useState<CurveChannel>("rgb");
   // 当前编辑的是哪条曲线：切通道等于换一组点，写回也写到对应那一组
@@ -1450,6 +1569,21 @@ function CurveEditor({
   const dragRef = useRef<number | null>(null);
   // 刚刚由「空白处单击」新增的点，双击时不能立刻删掉它
   const freshRef = useRef<number | null>(null);
+  const [picking, setPicking] = useState<CurvePickKind | null>(null);
+
+  useEffect(() => () => onRequestPick?.(null), [onRequestPick]);
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onRequestPick?.(null);
+      setPicking(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onRequestPick, picking]);
 
   /** 把编辑后的点集写回对应通道（预览不进历史，松手才落一条）。 */
   const push = (next: CurvePoint[], label?: string) => {
@@ -1458,11 +1592,43 @@ function CurveEditor({
     else onPreview(doc2);
   };
 
+  /** 曲线三点吸管：从基础合成图取样，按黑 / 灰 / 白场语义移动控制点。 */
+  const beginPick = (kind: CurvePickKind) => {
+    if (!onRequestPick) return;
+    onRequestPick((x, y) => {
+      let applied = false;
+      try {
+        const cv = pickSource;
+        if (!cv || cv.width < 1 || cv.height < 1) return;
+        const sx = Math.max(0, Math.min(cv.width - 1, Math.round((x / Math.max(1, docW ?? 0)) * cv.width)));
+        const sy = Math.max(0, Math.min(cv.height - 1, Math.round((y / Math.max(1, docH ?? 0)) * cv.height)));
+        const px = cv.getContext("2d")?.getImageData(sx, sy, 1, 1).data;
+        if (!px) return;
+        const level =
+          channel === "r" ? px[0] / 255
+          : channel === "g" ? px[1] / 255
+          : channel === "b" ? px[2] / 255
+          : (0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]) / 255;
+        push(curveFromPick(pts, kind, level));
+        applied = true;
+      } catch {
+        // 取色失败不写半条曲线
+      } finally {
+        onRequestPick(null);
+        setPicking(null);
+        if (applied) {
+          (commit ?? (() => onChange(setAdjust(doc, layer.id, st), zh.layers.adjustParams)))();
+        }
+      }
+    });
+    setPicking(kind);
+  };
+
   const CHANNEL_TABS: { id: CurveChannel; label: string; hue: string }[] = [
     { id: "rgb", label: "RGB", hue: "var(--text-2)" },
-    { id: "r", label: "红", hue: "#e05252" },
-    { id: "g", label: "绿", hue: "#4caf50" },
-    { id: "b", label: "蓝", hue: "#5b8def" },
+    { id: "r", label: zh.dialog.lvRed, hue: "#e05252" },
+    { id: "g", label: zh.dialog.lvGreen, hue: "#4caf50" },
+    { id: "b", label: zh.dialog.lvBlue, hue: "#5b8def" },
   ];
 
   const activeHue = CHANNEL_TABS.find((c) => c.id === channel)?.hue ?? "var(--accent)";
@@ -1633,6 +1799,37 @@ function CurveEditor({
           </button>
         ))}
       </div>
+      {canPick && (
+        <>
+          <div className="ly-curve-picks" role="group" aria-label={zh.dialog.lvPickGray}>
+            <button
+              type="button"
+              className={picking === "black" ? "ly-curve-pick is-on" : "ly-curve-pick"}
+              title={zh.dialog.lvPickBlack}
+              onClick={() => beginPick("black")}
+            >
+              ◑ {zh.dialog.lvBlack}
+            </button>
+            <button
+              type="button"
+              className={picking === "gray" ? "ly-curve-pick is-on" : "ly-curve-pick"}
+              title={zh.dialog.lvPickGray}
+              onClick={() => beginPick("gray")}
+            >
+              ◐ {zh.dialog.lvGray}
+            </button>
+            <button
+              type="button"
+              className={picking === "white" ? "ly-curve-pick is-on" : "ly-curve-pick"}
+              title={zh.dialog.lvPickWhite}
+              onClick={() => beginPick("white")}
+            >
+              ◒ {zh.dialog.lvWhite}
+            </button>
+          </div>
+          {picking && <span className="ly-curve-pick-hint">{zh.dialog.lvPickHint}</span>}
+        </>
+      )}
       <canvas
         ref={ref}
         className="ly-curve-canvas"
@@ -1926,7 +2123,7 @@ function LayerRow({
         <EyeIcon open={layer.visible} />
       </button>
 
-      <LayerThumb layer={layer} doc={doc} />
+      <LayerThumb layer={layer} doc={doc} onChange={onChange} />
 
       {layer.mask && (
         <MaskThumb
@@ -2009,7 +2206,15 @@ function LayerRow({
  * 调整层与图层组都没有自己的像素（surface 只是 1×1 占位），画出来只会是
  * 一坨拉伸的噪点，所以各给一枚徽标。
  */
-function LayerThumb({ layer, doc }: { layer: StrataLayer; doc: StrataDoc }) {
+function LayerThumb({
+  layer,
+  doc,
+  onChange,
+}: {
+  layer: StrataLayer;
+  doc: StrataDoc;
+  onChange?: (next: StrataDoc, label: string) => void;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const kind = layer.kind;
 
@@ -2040,7 +2245,64 @@ function LayerThumb({ layer, doc }: { layer: StrataLayer; doc: StrataDoc }) {
       </span>
     );
   }
+  // 视频层不再只显示「当前帧一张」——展示真实分帧并允许点选跳帧
+  if (isVideoLayer(layer) && layer.video.frames.length > 1 && onChange) {
+    return <FrameThumbStrip layer={layer} doc={doc} onChange={onChange} />;
+  }
   return <canvas ref={ref} width={36} height={36} className="ly-thumb" />;
+}
+
+/** 视频层的分帧缩略图条：取样首尾 + 当前帧，点哪帧跳哪帧。 */
+function FrameThumbStrip({
+  layer,
+  doc,
+  onChange,
+}: {
+  layer: StrataLayer & { video: NonNullable<StrataLayer["video"]> };
+  doc: StrataDoc;
+  onChange: (next: StrataDoc, label: string) => void;
+}) {
+  const v = layer.video;
+  const indices = useMemo(
+    () => sampleFrameIndices(v.frames.length, v.index, 4),
+    [v.frames.length, v.index],
+  );
+  return (
+    <span className="ly-frames" title={zh.layers.frameThumb} role="group" aria-label={zh.layers.frameThumb}>
+      {indices.map((idx) => (
+        <button
+          key={idx}
+          type="button"
+          className={idx === v.index ? "ly-frame is-on" : "ly-frame"}
+          title={`${idx + 1} / ${v.frames.length}`}
+          aria-pressed={idx === v.index}
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange(setFrameIndex(doc, layer.id, idx), zh.layers.frameThumb);
+          }}
+        >
+          <FrameTile surface={v.frames[idx].surface} docW={doc.width} docH={doc.height} />
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/** 单帧缩略图画布：按文档比例缩放，不做 dataURL，帧内容原地变了也能重画。 */
+function FrameTile({ surface, docW, docH }: { surface: HTMLCanvasElement; docW: number; docH: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const k = Math.min(c.width / Math.max(1, docW), c.height / Math.max(1, docH));
+    const w = docW * k;
+    const h = docH * k;
+    ctx.drawImage(surface, (c.width - w) / 2, (c.height - h) / 2, w, h);
+  }, [surface, docW, docH]);
+  return <canvas ref={ref} width={16} height={16} />;
 }
 
 /** 蒙版缩略图：alpha 直接当灰度画在白底上，所见即所得。 */

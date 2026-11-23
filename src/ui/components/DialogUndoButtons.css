@@ -1,0 +1,16 @@
+/* 参数窗口撤销按钮：独占 .dub- 前缀，避免和裸类名撞车。 */
+.dub-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+
+.dub-btn {
+  padding: 0 var(--sp-2);
+}
+
+.dub-btn span {
+  font-size: var(--fs-md);
+  line-height: 1;
+}

@@ -12,6 +12,7 @@
  * 颜色叠加、描边在上。
  */
 import { blendOp, isSoftBlend, type LayerStyle, type StrataLayer } from "../core/layer";
+import { blendIfActive, blendIfWeight, luma01 } from "./blendIf";
 import { mustCtx } from "./surface";
 import { svgFilter } from "./filters";
 import { blendInto } from "./blend";
@@ -354,9 +355,10 @@ export function paintStyledLayer(
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
   const styles = activeStyles(layer);
+  const useBlendIf = blendIfActive(layer.blendIf);
 
-  /* 最常用的情形：没有样式也没有剪贴，直接一次 drawImage。 */
-  if (styles.length === 0 && !clipShape) {
+  /* 最常用的情形：没有样式、没有剪贴、没有 Blend If，直接一次 drawImage。 */
+  if (styles.length === 0 && !clipShape && !useBlendIf) {
     if (isSoftBlend(layer.blend)) {
       blendInto(ctx, layerShape(layer), layer.opacity / 100, layer.blend);
       return;
@@ -384,9 +386,41 @@ export function paintStyledLayer(
     ec.globalCompositeOperation = "source-over";
   }
 
+  /**
+   * Blend If：按「本图层像素亮度」与「下方合成像素亮度」逐像素调 alpha。
+   * 这一步必须在任何 drawStyle 之前做完，否则样式会拿未受混合带约束的轮廓。
+   * 用 4 号槽是因为 1–3 号槽会被 drawStyle 临时占用。
+   */
+  let src = eff;
+  if (useBlendIf && layer.blendIf) {
+    const out = slot(4, w, h);
+    const oc = mustCtx(out);
+    oc.clearRect(0, 0, w, h);
+    const sd = ec.getImageData(0, 0, w, h);
+    const ud = ctx.getImageData(0, 0, w, h);
+    const od = oc.createImageData(w, h);
+    for (let p = 0; p < w * h; p += 1) {
+      const i = p * 4;
+      const a = sd.data[i + 3];
+      if (!a) continue;
+      const weight = blendIfWeight(
+        luma01(sd.data[i], sd.data[i + 1], sd.data[i + 2]),
+        luma01(ud.data[i], ud.data[i + 1], ud.data[i + 2]),
+        layer.blendIf,
+      );
+      if (weight <= 0) continue;
+      od.data[i] = sd.data[i];
+      od.data[i + 1] = sd.data[i + 1];
+      od.data[i + 2] = sd.data[i + 2];
+      od.data[i + 3] = weight >= 1 ? a : Math.max(1, Math.round(a * weight));
+    }
+    oc.putImageData(od, 0, 0);
+    src = out;
+  }
+
   const below = ["dropshadow", "outerglow"];
   for (const s of styles) {
-    if (below.includes(s.id)) drawStyle(ctx, layer, eff, s, w, h);
+    if (below.includes(s.id)) drawStyle(ctx, layer, src, s, w, h);
   }
 
   ctx.save();
@@ -394,16 +428,16 @@ export function paintStyledLayer(
     // Canvas2D 没有这些混色公式，只能把整幅画面读回来逐像素算。
     // 会破坏 ctx 的 save / restore 栈 —— 因此先 restore 再单独合成。
     ctx.restore();
-    blendInto(ctx, eff, layer.opacity / 100, layer.blend);
+    blendInto(ctx, src, layer.opacity / 100, layer.blend);
   } else {
     ctx.globalAlpha = layer.opacity / 100;
     ctx.globalCompositeOperation = blendOp(layer.blend);
-    ctx.drawImage(eff, 0, 0);
+    ctx.drawImage(src, 0, 0);
     ctx.restore();
   }
 
   for (const s of styles) {
-    if (!below.includes(s.id)) drawStyle(ctx, layer, eff, s, w, h);
+    if (!below.includes(s.id)) drawStyle(ctx, layer, src, s, w, h);
   }
 }
 

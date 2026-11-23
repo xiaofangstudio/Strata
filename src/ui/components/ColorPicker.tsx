@@ -18,6 +18,7 @@ import {
   type CSSProperties,
   type PointerEvent as RPointerEvent,
 } from "react";
+import { colorWarnings } from "../../core/colorWarnings";
 import { zh } from "../../i18n";
 import {
   COLOR_PRESETS,
@@ -148,6 +149,7 @@ export default function ColorPicker({
 
   const cur = hsvToHex(hsv.h, hsv.s, hsv.v);
   const hueHex = hsvToHex(hsv.h, 1, 1);
+  const fix = (next: string) => commit(hexToHsv(next));
 
   // 横排形态：大 SV 方块 + 竖色相条。十六进制 / RGB 由调用方排在下面。
   if (variant === "sv") {
@@ -236,6 +238,8 @@ export default function ColorPicker({
         <span className="cp-hash">#</span>
         <HexBox hex={cur} onHex={(v) => commit(hexToHsv(v))} />
       </div>
+
+      <ColorWarningsRow hex={cur} onFix={fix} />
 
       {detailed && (
         <div className="cp-detail">
@@ -458,6 +462,43 @@ export function NumBox({
  * 回车补交当前草稿，失焦时草稿合法就采纳、不合法才回滚 ——
  * 不能让用户打了一半点别处就把颜色弄丢。
  */
+/**
+ * 颜色警告条。只在真有问题时出现，每条都带一键修正 —— 只警告不给解法
+ * 等于让用户自己猜最近的安全色，那是网页表单式的假专业。
+ */
+export function ColorWarningsRow({ hex, onFix }: { hex: string; onFix: (hex: string) => void }) {
+  const w = colorWarnings(hex);
+  if (w.webSafe && !w.outOfGamut) return null;
+  return (
+    <div className="cpw-row" role="status">
+      {w.outOfGamut && (
+        <button
+          type="button"
+          className="cpw-item"
+          title={zh.dialog.cpFixGamut}
+          onClick={() => onFix(w.nearestGamut)}
+        >
+          <span className="cpw-icon" aria-hidden="true">!</span>
+          <span className="cpw-text">{zh.dialog.cpOutOfGamut}</span>
+          <span className="cpw-fix">{zh.dialog.cpFixGamut}</span>
+        </button>
+      )}
+      {!w.webSafe && (
+        <button
+          type="button"
+          className="cpw-item"
+          title={zh.dialog.cpFixWebSafe}
+          onClick={() => onFix(w.nearestWebSafe)}
+        >
+          <span className="cpw-icon" aria-hidden="true">!</span>
+          <span className="cpw-text">{zh.dialog.cpNotWebSafe}</span>
+          <span className="cpw-fix">{zh.dialog.cpFixWebSafe}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function HexBox({ hex, onHex }: { hex: string; onHex: (hex: string) => void }) {
   const short = hex.replace("#", "").toUpperCase();
   const [draft, setDraft] = useState(short);

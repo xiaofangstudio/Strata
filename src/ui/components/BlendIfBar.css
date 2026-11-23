@@ -1,0 +1,62 @@
+/* Blend If 双半三角：独占 .blendif- 前缀。 */
+.blendif-row {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) 66px;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 3px 0;
+}
+
+.blendif-label {
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.blendif-bar {
+  position: relative;
+  height: 18px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.blendif-ramp {
+  position: absolute;
+  inset: 2px 3px;
+  background: linear-gradient(to right, #000, #fff);
+  border-radius: 2px;
+}
+
+.blendif-handle {
+  position: absolute;
+  top: -1px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  transform: translateX(-5px);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+}
+
+.blendif-handle-black {
+  bottom: -1px;
+  border-bottom: 7px solid #8fd4ff;
+}
+
+.blendif-handle-white {
+  top: -1px;
+  border-top: 7px solid #ffffff;
+}
+
+.blendif-num {
+  font-size: 10px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}

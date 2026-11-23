@@ -24,6 +24,10 @@ interface Props {
   onChange: (v: number) => void;
   /** 擦洗灵敏度：拖 1px 改多少 step，默认 1 */
   sensitivity?: number;
+  /** 擦洗 / 输入开始（参数窗把整段手势合成一步撤销） */
+  onGestureStart?: () => void;
+  /** 擦洗 / 输入结束 */
+  onGestureEnd?: () => void;
 }
 
 export default function NumericField({
@@ -36,6 +40,8 @@ export default function NumericField({
   unit,
   onChange,
   sensitivity = 1,
+  onGestureStart,
+  onGestureEnd,
 }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
@@ -63,6 +69,7 @@ export default function NumericField({
     if (e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     scrub.current = { x: e.clientX, start: value, moved: false };
+    onGestureStart?.();
   };
   const onLabelMove = (e: RPointerEvent<HTMLSpanElement>) => {
     const s = scrub.current;
@@ -76,7 +83,9 @@ export default function NumericField({
     if (next !== value) onChangeRef.current(next);
   };
   const onLabelUp = () => {
+    if (!scrub.current) return;
     scrub.current = null;
+    onGestureEnd?.();
   };
 
   return (
@@ -106,9 +115,11 @@ export default function NumericField({
           setInvalid(!r.ok);
           if (r.ok && r.value !== value) onChangeRef.current(r.value);
         }}
+        onFocus={onGestureStart}
         onBlur={(e) => {
           if (draft !== null) commit(e.currentTarget.value);
           else setInvalid(false);
+          onGestureEnd?.();
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();

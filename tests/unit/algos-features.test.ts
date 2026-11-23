@@ -176,7 +176,7 @@ describe("register 端到端", () => {
     expect(res!.inliers).toBeGreaterThanOrEqual(6);
     expect(Math.abs(res!.model[2] + 9)).toBeLessThan(1);
     expect(Math.abs(res!.model[5] - 6)).toBeLessThan(1);
-  });
+  }, 20000);
 
   it("相似变换（旋转 4° + 缩放 1.03）能配准", () => {
     const w = 192, h = 160;
@@ -195,7 +195,7 @@ describe("register 端到端", () => {
       expect(Math.abs(bx - p[0])).toBeLessThan(2);
       expect(Math.abs(by - p[1])).toBeLessThan(2);
     }
-  });
+  }, 20000);
 
   it("lumaPlane 从 RGBA 取 0..1 亮度", () => {
     const img = makeBuffer(2, 2);

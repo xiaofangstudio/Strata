@@ -19,6 +19,8 @@ import { applyFilterStack, moveItem, toggleItem, type FilterStackItem } from "..
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
 import { useBaseComposite, useComposedPreview } from "../hooks/useComposedPreview";
+import { useDialogUndo } from "../hooks/useDialogUndo";
+import DialogUndoButtons from "./DialogUndoButtons";
 import DraggableModal from "./DraggableModal";
 import FilterPreview from "./FilterPreview";
 import MiniHistogram from "./MiniHistogram";
@@ -39,7 +41,20 @@ const nextUid = () => `fx-${++uidSeq}`;
 
 export default function FilterGallery({ doc, onPreview, onApply, onClose }: Props) {
   const base = useRef(doc).current;
-  const [items, setItems] = useState<FilterStackItem[]>([]);
+  /**
+   * 历史只管效果堆栈本身；「当前选中哪一项」是视图状态，不进撤销栈 ——
+   * 否则按一次 Ctrl+Z 先退选中项，用户会以为撤销坏了。
+   */
+  const {
+    state: items,
+    setState: setItems,
+    beginGesture,
+    endGesture,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useDialogUndo<FilterStackItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
 
   const preview = useMemo(() => applyFilterStack(base, items), [base, items]);
@@ -106,6 +121,12 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
               ? zh.dialog.fglStacked.replace("{n}", String(items.filter((i) => i.visible).length))
               : zh.dialog.fglEmpty}
           </span>
+          <DialogUndoButtons
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+          />
           <span className="fg-foot-spacer" />
           <button className="btn-ghost" onClick={cancel}>{zh.dialog.cancel}</button>
           <button className="btn-primary" onClick={apply} disabled={!usable}>{zh.dialog.confirm}</button>
@@ -210,6 +231,8 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
                         dec={p.dec}
                         unit={p.unit}
                         onChange={(nv) => setParam(p.id, nv)}
+                        onGestureStart={beginGesture}
+                        onGestureEnd={endGesture}
                       />
                     </span>
                     <RangeInput
@@ -220,6 +243,8 @@ export default function FilterGallery({ doc, onPreview, onApply, onClose }: Prop
                       value={v}
                       aria-label={p.label}
                       onChange={(nv) => setParam(p.id, nv)}
+                      onDragStart={beginGesture}
+                      onDragEnd={endGesture}
                     />
                   </label>
                 );

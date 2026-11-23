@@ -1,0 +1,142 @@
+/* 色彩范围对话框：独占 .crw- 前缀，别和 .cr-（Camera Raw）撞车。 */
+.crw {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: var(--sp-3);
+  height: 100%;
+  min-height: 0;
+}
+
+.crw-preview,
+.crw-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.crw-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+}
+
+.crw-tools {
+  display: grid;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-3);
+}
+
+.crw-tool {
+  white-space: nowrap;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  text-align: left;
+}
+
+.crw-tool:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.crw-tool.is-on {
+  color: var(--accent, var(--text));
+  border-color: var(--accent, var(--border));
+  background: var(--pressed);
+}
+
+.crw-tol {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  margin-bottom: var(--sp-3);
+}
+
+.crw-tol-val {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.crw-samples-head {
+  justify-content: space-between;
+}
+
+.crw-clear {
+  height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.crw-empty {
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.crw-sample-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.crw-sample {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 14px 18px;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.crw-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.crw-sample-rgb {
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crw-sample-op {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: center;
+}
+
+.crw-del {
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-xs);
+}
+
+.crw-del:hover {
+  color: var(--text);
+  background: var(--hover);
+}

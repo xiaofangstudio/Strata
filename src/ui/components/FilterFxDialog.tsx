@@ -5,7 +5,7 @@
  * 中每帧重算预览（useMemo 直推 onPreview，不进历史），确定才落盘一条历史。
  * 列表按 模糊 / 锐化 / 杂色 / 像素化 分组，全部读 FilterDef 注册表。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   FILTER_DEFS,
   filterDef,
@@ -17,6 +17,8 @@ import { applyFilterToLayer } from "../../core/filterOps";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
 import { useBaseComposite, useComposedPreview } from "../hooks/useComposedPreview";
+import { useDialogUndo } from "../hooks/useDialogUndo";
+import DialogUndoButtons from "./DialogUndoButtons";
 import DraggableModal from "./DraggableModal";
 import FilterPreview from "./FilterPreview";
 import MiniHistogram from "./MiniHistogram";
@@ -24,6 +26,12 @@ import NumericField from "./NumericField";
 import RangeInput from "./RangeInput";
 import "./FilterGallery.css";
 import "./FilterFxDialog.css";
+
+/** 对话框自己的历史快照：当前滤镜 + 它的全部参数。 */
+interface FxSettings {
+  id: string;
+  params: Record<string, number>;
+}
 
 interface Props {
   doc: StrataDoc;
@@ -126,10 +134,21 @@ export function previewFilter(base: StrataDoc, def: FilterDef, params: Record<st
 
 export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onClose }: Props) {
   const base = useRef(doc).current;
-  const [id, setId] = useState<string>(() => filterDef(filterId)?.id ?? FILTER_DEFS[0].id);
-  const [params, setParams] = useState<Record<string, number>>(() =>
-    filterParams(filterDef(id) ?? FILTER_DEFS[0]),
-  );
+  const initialId = filterDef(filterId)?.id ?? FILTER_DEFS[0].id;
+  const {
+    state: fx,
+    setState: setFx,
+    beginGesture,
+    endGesture,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useDialogUndo<FxSettings>({
+    id: initialId,
+    params: filterParams(filterDef(initialId) ?? FILTER_DEFS[0]),
+  });
+  const { id, params } = fx;
 
   const def: FilterDef = filterDef(id) ?? FILTER_DEFS[0];
 
@@ -164,8 +183,7 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
   }, [base, def, onApply, params]);
 
   const pick = (next: FilterDef) => {
-    setId(next.id);
-    setParams(filterParams(next));
+    setFx(() => ({ id: next.id, params: filterParams(next) }));
   };
 
   return (
@@ -181,6 +199,12 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
       footer={
         <>
           <span className="fg-note">{usable ? def.label : zh.dialog.filterNoPixel}</span>
+          <DialogUndoButtons
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+          />
           <span className="fg-foot-spacer" />
           <button className="btn-ghost" onClick={cancel}>
             {zh.dialog.cancel}
@@ -256,7 +280,9 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
                       step={p.step}
                       dec={p.dec}
                       unit={p.unit}
-                      onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
+                      onChange={(nv) => setFx((prev) => ({ ...prev, params: { ...prev.params, [p.id]: nv } }))}
+                      onGestureStart={beginGesture}
+                      onGestureEnd={endGesture}
                     />
                   </span>
                   {p.choices ? (
@@ -264,7 +290,10 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
                       className="fg-select"
                       value={v}
                       onChange={(e) =>
-                        setParams((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))
+                        setFx((prev) => ({
+                          ...prev,
+                          params: { ...prev.params, [p.id]: Number(e.target.value) },
+                        }))
                       }
                     >
                       {p.choices.map((c) => (
@@ -281,7 +310,9 @@ export default function FilterFxDialog({ doc, filterId, onPreview, onApply, onCl
                       step={p.step}
                       value={v}
                       aria-label={p.label}
-                      onChange={(nv) => setParams((prev) => ({ ...prev, [p.id]: nv }))}
+                      onChange={(nv) => setFx((prev) => ({ ...prev, params: { ...prev.params, [p.id]: nv } }))}
+                      onDragStart={beginGesture}
+                      onDragEnd={endGesture}
                     />
                   )}
                 </label>

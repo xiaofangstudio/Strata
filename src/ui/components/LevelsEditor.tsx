@@ -13,30 +13,43 @@
  * 松手才 commit 写进撤销栈，和调整图层其它参数一个套路。
  */
 import { useEffect, useRef, useState } from "react";
+import {
+  clampLevel as clamp,
+  gammaFromMid,
+  gammaMid,
+  levelsFromSample,
+  type LevelPickKind,
+} from "../../core/levelsPicker";
+import { zh } from "../../i18n";
 import { computeHistogram, type HistStats } from "./HistogramPanel";
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
-/** 灰度系数（%，10–300）⇄ 中间调在输入轴上的位置。 */
-function gammaMid(ib: number, iw: number, g: number): number {
-  const span = Math.max(1, iw - ib);
-  return ib + span * Math.pow(0.5, g / 100);
-}
-function gammaFromMid(ib: number, iw: number, t: number): number {
-  const span = Math.max(1, iw - ib);
-  const ratio = clamp((t - ib) / span, 0.02, 0.98);
-  const g = (100 * Math.log(0.5)) / Math.log(ratio);
-  return clamp(g, 10, 300);
-}
-
 type DragKey = "black" | "white" | "gamma" | "outBlack" | "outWhite";
+
+/** 画布取色回调；mods 让色彩范围吸管区分 Shift 加选 / Alt 减选。 */
+export type CanvasPickCallback = (
+  x: number,
+  y: number,
+  mods?: { shift: boolean; alt: boolean },
+) => void;
+/** 申请接管下一次画布点击；传 null 表示取消申请。 */
+export type CanvasPickRequest = (cb: CanvasPickCallback | null) => void;
 
 interface LevelsEditorProps {
   id: "levels" | "channellevels";
   params: Record<string, number>;
   source: HTMLCanvasElement | null;
+  /** 未应用参数的基础合成图，吸管只从它取样（否则越调吸管越飘）。 */
+  pickSource: HTMLCanvasElement | null;
+  docW: number;
+  docH: number;
+  /** 向编辑壳申请「下一次画布点击交给色阶吸管」。 */
+  onRequestPick: CanvasPickRequest;
+  /** 没有可用画布取样通道时（例如右侧普通属性面板）隐藏吸管，避免假按钮。 */
+  canPick?: boolean;
   version: number;
   setParam: (id: string, value: number) => void;
+  /** 一次改多个参数（吸管会同时动黑白场和伽马），避免三次调用互相覆盖。 */
+  setParams: (patch: Record<string, number>) => void;
   commit: () => void;
 }
 
@@ -51,8 +64,14 @@ export default function LevelsEditor({
   id,
   params,
   source,
+  pickSource,
+  docW,
+  docH,
+  onRequestPick,
+  canPick = true,
   version,
   setParam,
+  setParams,
   commit,
 }: LevelsEditorProps) {
   const isChannel = id === "channellevels";
@@ -74,6 +93,29 @@ export default function LevelsEditor({
   const binsRef = useRef<HistStats | null>(null);
   const dragRef = useRef<{ key: DragKey; value: number } | null>(null);
   const [, force] = useState(0);
+  const [picking, setPicking] = useState<LevelPickKind | null>(null);
+
+  // 组件卸载 / 切调整类型时，别把「下一次画布点击」的申请留在编辑壳里
+  useEffect(() => () => onRequestPick(null), [onRequestPick]);
+
+  // 吸管待命期间：十字光标 + Esc 取消（捕获阶段拦住，免得顺手把整个对话框关了）
+  useEffect(() => {
+    if (!picking) return;
+    const prev = document.body.style.cursor;
+    document.body.style.cursor = "crosshair";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onRequestPick(null);
+      setPicking(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.body.style.cursor = prev;
+    };
+  }, [onRequestPick, picking]);
 
   // 直方图数据：合成结果变化时重算一次，存 ref，拖动期间不反复统计
   useEffect(() => {
@@ -121,6 +163,43 @@ export default function LevelsEditor({
     dragRef.current = null;
     commit();
     force((n) => n + 1);
+  };
+
+  /** 点吸管按钮 → 下一次画布点击由这里接管，从「基础合成图」取样。 */
+  const beginPick = (kind: LevelPickKind) => {
+    onRequestPick((x, y) => {
+      let applied = false;
+      try {
+        const cv = pickSource;
+        if (!cv || cv.width < 1 || cv.height < 1) return;
+        const sx = clamp(Math.round((x / Math.max(1, docW)) * cv.width), 0, cv.width - 1);
+        const sy = clamp(Math.round((y / Math.max(1, docH)) * cv.height), 0, cv.height - 1);
+        const px = cv.getContext("2d")?.getImageData(sx, sy, 1, 1).data;
+        if (!px) return;
+        const next = levelsFromSample({
+          kind,
+          black,
+          white,
+          gamma,
+          channel: isChannel ? ch : "lum",
+          sample: [px[0], px[1], px[2]],
+        });
+        setParams({
+          [blackKey]: next.black,
+          [whiteKey]: next.white,
+          [gammaKey]: next.gamma,
+        });
+        commit();
+        applied = true;
+      } catch {
+        // 取色失败（画布被污染 / 尺寸异常）就安静退出，绝不把一半参数写进去
+      } finally {
+        onRequestPick(null);
+        setPicking(null);
+        if (applied) force((n) => n + 1);
+      }
+    });
+    setPicking(kind);
   };
 
   const onHistDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -213,7 +292,7 @@ export default function LevelsEditor({
               style={ch === c ? ({ "--lv-hue": `rgb(${CHANNEL_COLOR[c].join(",")})` } as React.CSSProperties) : undefined}
               onClick={() => setCh(c)}
             >
-              {c === "r" ? "红" : c === "g" ? "绿" : "蓝"}
+              {c === "r" ? zh.dialog.lvRed : c === "g" ? zh.dialog.lvGreen : zh.dialog.lvBlue}
             </button>
           ))}
         </div>
@@ -221,10 +300,43 @@ export default function LevelsEditor({
 
       {/* 顶部数字：直接左右拖改值，和直方图手柄双向联动 */}
       <div className="lv-top">
-        <DraggableNum label="黑场" value={vBlack} min={0} max={254} onChange={(v) => apply("black", v)} onCommit={endDrag} />
-        <DraggableNum label="灰场" value={vGamma} min={10} max={300} suffix="%" onChange={(v) => apply("gamma", v)} onCommit={endDrag} />
-        <DraggableNum label="白场" value={vWhite} min={1} max={255} onChange={(v) => apply("white", v)} onCommit={endDrag} />
+        <DraggableNum label={zh.dialog.lvBlack} value={vBlack} min={0} max={254} onChange={(v) => apply("black", v)} onCommit={endDrag} />
+        <DraggableNum label={zh.dialog.lvGray} value={vGamma} min={10} max={300} suffix="%" onChange={(v) => apply("gamma", v)} onCommit={endDrag} />
+        <DraggableNum label={zh.dialog.lvWhite} value={vWhite} min={1} max={255} onChange={(v) => apply("white", v)} onCommit={endDrag} />
       </div>
+
+      {/* 三点吸管：PhotoCraft / PS 都靠它做白平衡与黑白场校正，光拖滑块很难对准 */}
+      {canPick && (
+        <>
+          <div className="lv-pickers" role="group" aria-label={zh.dialog.lvPickGray}>
+            <button
+              type="button"
+              className={picking === "black" ? "lv-pick is-on" : "lv-pick"}
+              title={zh.dialog.lvPickBlack}
+              onClick={() => beginPick("black")}
+            >
+              ◑ <span>{zh.dialog.lvBlack}</span>
+            </button>
+            <button
+              type="button"
+              className={picking === "gray" ? "lv-pick is-on" : "lv-pick"}
+              title={zh.dialog.lvPickGray}
+              onClick={() => beginPick("gray")}
+            >
+              ◐ <span>{zh.dialog.lvGray}</span>
+            </button>
+            <button
+              type="button"
+              className={picking === "white" ? "lv-pick is-on" : "lv-pick"}
+              title={zh.dialog.lvPickWhite}
+              onClick={() => beginPick("white")}
+            >
+              ◒ <span>{zh.dialog.lvWhite}</span>
+            </button>
+          </div>
+          {picking && <p className="lv-pick-hint">{zh.dialog.lvPickHint}</p>}
+        </>
+      )}
 
       <canvas
         ref={canvasRef}
@@ -238,8 +350,8 @@ export default function LevelsEditor({
       {hasOutput && (
         <>
           <div className="lv-out-top">
-            <DraggableNum label="输出黑" value={vOutBlack} min={0} max={254} onChange={(v) => apply("outBlack", v)} onCommit={endDrag} />
-            <DraggableNum label="输出白" value={vOutWhite} min={1} max={255} onChange={(v) => apply("outWhite", v)} onCommit={endDrag} />
+            <DraggableNum label={zh.dialog.lvOutBlack} value={vOutBlack} min={0} max={254} onChange={(v) => apply("outBlack", v)} onCommit={endDrag} />
+            <DraggableNum label={zh.dialog.lvOutWhite} value={vOutWhite} min={1} max={255} onChange={(v) => apply("outWhite", v)} onCommit={endDrag} />
           </div>
           <canvas
             ref={outRef}
@@ -287,7 +399,7 @@ function DraggableNum({
       <span className="lv-num-label">{label}</span>
       <span
         className="lv-num-val"
-        title="左右拖动改值"
+        title={zh.dialog.lvDragTip}
         onPointerDown={(e) => {
           drag.current = { x: e.clientX, v: value };
           (e.target as Element).setPointerCapture(e.pointerId);

@@ -18,7 +18,7 @@
  *   ② **预览与结果同源**：工作文档就是最终落库的那份 doc，不会出现「拖的时候
  *      一个样、松手变另一个样」。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   adjustDef,
   createAdjustLayer,
@@ -28,9 +28,13 @@ import {
 } from "../../core/layer";
 import type { StrataDoc } from "../../core/document";
 import { zh } from "../../i18n";
+import { useBaseComposite } from "../hooks/useComposedPreview";
 import { useComposedPreview } from "../hooks/useComposedPreview";
+import { useDialogUndo } from "../hooks/useDialogUndo";
+import DialogUndoButtons from "./DialogUndoButtons";
 import DraggableModal from "./DraggableModal";
 import FilterPreview from "./FilterPreview";
+import type { CanvasPickRequest } from "./LevelsEditor";
 import MiniHistogram from "./MiniHistogram";
 import { AdjustProps } from "./LayersPanel";
 import "./AdjustDialog.css";
@@ -42,6 +46,8 @@ interface Props {
   /** 合成画布：色阶 / 亮度对比度拿它算直方图 */
   compSource?: HTMLCanvasElement | null;
   compVersion?: number;
+  /** 色阶吸管：申请接管下一次画布点击 */
+  onRequestPick: CanvasPickRequest;
   /** 拖动参数时的即时预览（不进历史） */
   onPreview: (next: StrataDoc) => void;
   /** 确定：把工作文档落库，进历史 */
@@ -71,14 +77,44 @@ export default function AdjustDialog({
   adjustId,
   compSource,
   compVersion,
+  onRequestPick,
   onPreview,
   onApply,
   onClose,
 }: Props) {
   const base = useRef(doc).current;
   const temp = useMemo(() => withTempLayer(base, adjustId), [base, adjustId]);
-  const [work, setWork] = useState<StrataDoc>(temp.doc);
+  const {
+    state: work,
+    setState: setWorkBase,
+    beginGesture,
+    endGesture,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useDialogUndo<StrataDoc>(temp.doc);
   const layer = work.layers.find((l) => l.id === temp.layerId) ?? null;
+
+  /**
+   * AdjustProps 的两条回调语义正好对上历史边界：
+   *   onPreview = 拖动中的实时帧（攒着不进历史）
+   *   onChange  = 松手 / 提交（整段手势合成一步）
+   */
+  const livePreview = useCallback(
+    (next: StrataDoc) => {
+      beginGesture();
+      setWorkBase(next);
+    },
+    [beginGesture, setWorkBase],
+  );
+  const commitChange = useCallback(
+    (next: StrataDoc) => {
+      setWorkBase(next);
+      endGesture();
+    },
+    [endGesture, setWorkBase],
+  );
 
   const previewRef = useRef(onPreview);
   previewRef.current = onPreview;
@@ -91,6 +127,8 @@ export default function AdjustDialog({
 
   /** 窗口内独立预览：工作文档合成离屏画布（尾随节流，不是防抖）。 */
   const { canvas: previewCanvas, version: previewVersion } = useComposedPreview(work, 120);
+  /** 吸管必须从「未调整」的基础图取样，不能拿正在被调的预览图，否则越吸越飘。 */
+  const baseCanvas = useBaseComposite(base);
 
   /**
    * 参数还是全默认就不让确定 —— 否则又会落一个「画面完全没变化」的中性层，
@@ -130,6 +168,12 @@ export default function AdjustDialog({
           <span className="ad-note">
             {neutral ? zh.dialog.fpNeutralHint : zh.dialog.fpTunedHint}
           </span>
+          <DialogUndoButtons
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+          />
           <span className="ad-spacer" />
           <button className="btn-ghost" onClick={cancel}>
             {zh.dialog.cancel}
@@ -170,8 +214,12 @@ export default function AdjustDialog({
               layer={layer}
               compSource={compSource ?? null}
               compVersion={compVersion}
-              onPreview={setWork}
-              onChange={(next) => setWork(next)}
+              pickSource={baseCanvas}
+              docW={base.width}
+              docH={base.height}
+              onRequestPick={onRequestPick}
+              onPreview={livePreview}
+              onChange={(next) => commitChange(next)}
             />
           </div>
         </div>

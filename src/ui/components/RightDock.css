@@ -337,6 +337,199 @@
   border-radius: var(--r-full);
 }
 
+/* ---------- 真停靠：拖拽重排 / 拆离浮窗 ---------- */
+
+.dock-group {
+  /* 悬浮操作条与落点指示线都以面板为定位基准 */
+  position: relative;
+}
+
+/* 排序落点：2px 亮线，不改布局，所以拖动过程面板不会跳 */
+.dock-group.is-drop-before::before,
+.dock-group.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 6;
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
+  pointer-events: none;
+}
+
+.dock-group.is-drop-before::before {
+  top: -1px;
+}
+
+.dock-group.is-drop-after::after {
+  bottom: -1px;
+}
+
+/* 面板右上角的操作条：平时透明，hover 才浮出来，不占面板高度 */
+.dock-group-tools {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 22px;
+  padding: 0 2px;
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+.dock-group:hover > .dock-group-tools,
+.dock-group-tools:focus-within {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.dock-group-drag,
+.dock-group-tool {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.dock-group-drag {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.dock-group-drag:active {
+  cursor: grabbing;
+}
+
+.dock-group-tool {
+  cursor: pointer;
+}
+
+.dock-group-drag:hover,
+.dock-group-tool:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+/* 拆离出来的浮窗：portal 到 body，层级在参数窗（120）之下、普通浮层之上 */
+.dock-float {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 260px;
+  min-height: 140px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--r-sm, 8px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.38);
+}
+
+.dock-float-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 5px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.dock-float-grip {
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.dock-float-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.dock-float-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.dock-float-btn:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+.dock-float-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dock-float-body > .dock-group {
+  flex: 1;
+  min-height: 0;
+  height: auto !important;
+}
+
+.dock-float-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.dock-float-resize::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--text-3);
+  border-bottom: 2px solid var(--text-3);
+  border-radius: 1px;
+}
+
 /* ---- 质感精修 2026-11-06 ---- */
 
 /* 面板坞 / 开关轨 / 底栏 / 分隔条 / 标题条：半透明细边替代实色线，边界更透气 */

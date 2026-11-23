@@ -25,7 +25,7 @@ import {
   touchRecentColor,
   useColorSwatches,
 } from "../color-swatches";
-import ColorPicker, { HexBox, NumBox } from "./ColorPicker";
+import ColorPicker, { ColorWarningsRow, HexBox, NumBox } from "./ColorPicker";
 import ToolIcon from "./ToolIcon";
 import "./ColorPanel.css";
 
@@ -157,6 +157,8 @@ export default function ColorPanel({
             <span className="cp-hash">#</span>
             <HexBox hex={active} onHex={apply} />
           </div>
+
+          <ColorWarningsRow hex={active} onFix={apply} />
 
           <div className="cp-channels">
             <div className="cp-channel">

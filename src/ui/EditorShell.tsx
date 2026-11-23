@@ -157,13 +157,11 @@ import {
   type FreeTransform,
 } from "../core/transform";
 import {
-  colorRangeMask,
   focusMask,
   growByColor,
   skyRobustMask,
   subjectSaliencyMask,
 } from "../core/smartSelect";
-import { hexToRgb } from "./color-utils";
 import {
   findLayers,
   isolateLayers,
@@ -181,6 +179,8 @@ import CompareView, { type CompareLayout } from "./components/CompareView";
 import GradePanel, { type GradeOverlayState } from "./components/GradePanel";
 import GradeWindowOverlay from "./components/GradeWindowOverlay";
 import AdjustDialog from "./components/AdjustDialog";
+import type { CanvasPickCallback, CanvasPickRequest } from "./components/LevelsEditor";
+import ColorRangeDialog from "./components/ColorRangeDialog";
 import CameraRawDialog from "./components/CameraRawDialog";
 import { DEFAULT_FEATHER } from "../core/gradeWindow";
 import BrowseDialog from "./components/BrowseDialog";
@@ -397,7 +397,12 @@ import HistogramPanel from "./components/HistogramPanel";
 import ScopesPanel from "./components/ScopesPanel";
 import NavigatorPanel from "./components/NavigatorPanel";
 import PropertiesPanel from "./components/PropertiesPanel";
-import RightDock, { type GroupId as DockGroupId } from "./components/RightDock";
+import RightDock, {
+  isDockGroupId,
+  loadDockLayout,
+  type GroupId as DockGroupId,
+  type DockFloatRect,
+} from "./components/RightDock";
 import OptionsBar from "./components/OptionsBar";
 import BrushSettingsPanel from "./components/BrushSettingsPanel";
 import Preferences, { type PrefPage } from "./components/Preferences";
@@ -664,6 +669,8 @@ export default function EditorShell({
   );
   /** 调整参数弹窗：值为 AdjustId（levels / curves / cameraraw …），null 关闭 */
   const [adjustFx, setAdjustFx] = useState<AdjustId | null>(null);
+  /** 色彩范围对话框：吸管取样 + 容差预览，确定才落选区 */
+  const [colorRangeOpen, setColorRangeOpen] = useState(false);
   const [cameraRawOpen, setCameraRawOpen] = useState(false);
   /** 上一次应用的滤镜 id（滤镜 > 上次滤镜）。 */
   const lastFilterRef = useRef<string | null>(null);
@@ -970,6 +977,11 @@ export default function EditorShell({
     histogram: false,
     scopes: false,
   });
+  /** 面板顺序 / 拆离状态：工作区保存恢复时也带上，Dock 自己负责持久化。 */
+  const [dockOrder, setDockOrder] = useState<DockGroupId[]>(() => loadDockLayout().order);
+  const [dockDetached, setDockDetached] = useState<Partial<Record<DockGroupId, DockFloatRect>>>(
+    () => loadDockLayout().detached,
+  );
 
   /**
    * 当前正在编辑的调色层 = **选中的那个**。
@@ -1150,6 +1162,15 @@ export default function EditorShell({
   const previewDocRef = useRef<StrataDoc | null>(null);
 
   /**
+   * 色阶三点吸管的「下一次画布点击」接管器。普通吸管工具改前景色，这个只服务
+   * 参数窗里的黑/灰/白场按钮；一次性消费，取完立刻归还给正常工具。
+   */
+  const levelPickRef = useRef<CanvasPickCallback | null>(null);
+  const requestLevelPick = useCallback<CanvasPickRequest>((cb) => {
+    levelPickRef.current = cb;
+  }, []);
+
+  /**
    * 平移的「实时值」与舞台元素。
    *
    * 平移时每帧 setPan 会让整个编辑壳重渲染一次 —— 拖起来就是一格一格的。
@@ -1289,12 +1310,24 @@ export default function EditorShell({
   const cursorHexRef = useRef<HTMLSpanElement | null>(null);
   /** 吸管是否按住不放（按住时连续取色，像 PS 一样拖着扫） */
   const pickingRef = useRef(false);
-  /** 每份文档各自的缩放与平移，切标签页时还原 */
-  const views = useRef(new Map<string, { scale: number; pan: { x: number; y: number } }>());
+  /** 每份文档各自的缩放 / 平移 / 旋转，切标签页时还原。 */
+  const views = useRef(
+    new Map<string, { scale: number; pan: { x: number; y: number }; rotation: number }>(),
+  );
 
   const docId = doc.id;
   const docW = doc.width;
   const docH = doc.height;
+
+  /** 视图旋转是 ref（拖动每帧直写 DOM），改完必须顺手存进当前文档的视图缓存。 */
+  const setViewRotation = useCallback(
+    (deg: number) => {
+      rotLiveRef.current = ((deg % 360) + 360) % 360;
+      const prev = views.current.get(docId);
+      if (prev) views.current.set(docId, { ...prev, rotation: rotLiveRef.current });
+    },
+    [docId],
+  );
 
   /* ---------------------------------------------------------------- 视图 */
 
@@ -1338,21 +1371,6 @@ export default function EditorShell({
     },
     [],
   );
-
-  // 切换文档时还原它自己的视图；首次打开则适应窗口
-  useEffect(() => {
-    const saved = views.current.get(docId);
-    if (saved) {
-      setScale(saved.scale);
-      setPan(saved.pan);
-    } else {
-      fit();
-    }
-  }, [docId, fit]);
-
-  useEffect(() => {
-    views.current.set(docId, { scale, pan });
-  }, [docId, scale, pan]);
 
   // 活动图层没有蒙版、或切到别的文档时，退出蒙版编辑态
   useEffect(() => {
@@ -1829,6 +1847,29 @@ export default function EditorShell({
       el.style.setProperty("--view-rot", `${rotLiveRef.current}deg`);
     });
   }, []);
+
+  // 切换文档时还原它自己的视图；首次打开则适应窗口。
+  // 放在 applyPanDom 之后：旋转存在 ref 里，pan 没变时样式 effect 不会重跑，
+  // 这里主动刷一次 DOM，否则 Match Rotation 后切文档，缓存对了但画布还停在旧角度。
+  useEffect(() => {
+    const saved = views.current.get(docId);
+    if (saved) {
+      rotLiveRef.current = saved.rotation ?? 0;
+      setScale(saved.scale);
+      setPan(saved.pan);
+    } else {
+      rotLiveRef.current = 0;
+      fit();
+    }
+    applyPanDom();
+  }, [docId, fit, applyPanDom]);
+
+  // 写在恢复之后：切文档这一拍先把缓存读出来还原，再把还原后的值写回去，
+  // 顺序反了会用上一个文档的 scale/pan 覆盖掉目标文档自己的缓存。
+  useEffect(() => {
+    const prev = views.current.get(docId);
+    views.current.set(docId, { scale, pan, rotation: prev?.rotation ?? rotLiveRef.current });
+  }, [docId, scale, pan]);
 
   useEffect(
     () => () => {
@@ -2484,6 +2525,15 @@ export default function EditorShell({
       }
       if (e.button !== 0) return;
       const p = docPoint(e);
+
+      // 色阶吸管待命：这一次点击交给参数窗，工具 / 参考线 / 变换全部让路。
+      // ref 是一次性的，取完立刻清空，绝不把后续画布操作吞掉。
+      const levelPick = levelPickRef.current;
+      if (levelPick) {
+        levelPickRef.current = null;
+        levelPick(p.x, p.y, { shift: e.shiftKey, alt: e.altKey });
+        return;
+      }
 
       // 分析工具：标尺拖一段量距离/角度，计数工具落一个编号点。
       // 两者都只画在浮层上，一个像素都不碰图层。
@@ -3464,7 +3514,7 @@ export default function EditorShell({
       setPan((p) => ({ x: p.x + d.dx, y: p.y + d.dy }));
       // 双指夹角变化 → 视图旋转（不改像素）；小于 0.3° 的抖动忽略。
       if (Math.abs(d.rotationDeg) > 0.3) {
-        rotLiveRef.current = (rotLiveRef.current + d.rotationDeg + 360) % 360;
+        setViewRotation(rotLiveRef.current + d.rotationDeg);
         applyPanDom();
       }
     };
@@ -3485,7 +3535,7 @@ export default function EditorShell({
       vp.removeEventListener("pointerup", onUp, true);
       vp.removeEventListener("pointercancel", onUp, true);
     };
-  }, [zoom]);
+  }, [setViewRotation, zoom]);
 
   /* ---------------------------------------------------------------- 命令 */
 
@@ -6802,10 +6852,27 @@ export default function EditorShell({
         case "window.arrange.matchAll":
           return {
             run: () => {
-              // 把当前视图（缩放 + 平移）同步到所有打开的文档：
-              // Strata 的每个文档各有自己的视图缓存，这里统一刷成当前这份
-              for (const d of docs) views.current.set(d.id, { scale, pan });
-              setToast(`已把当前缩放与位置同步到 ${docs.length} 个文档`);
+              // 四条命令必须各干各的：以前共用一个分支，Match Rotation / Match All
+              // 根本没同步旋转，是典型的「菜单有、功能是假的」。
+              const kind = id === "window.arrange.matchZoom" ? "zoom"
+                : id === "window.arrange.matchLocation" ? "location"
+                : id === "window.arrange.matchRotation" ? "rotation" : "all";
+              for (const d of docs) {
+                const prev = d.id === docId
+                  ? { scale, pan, rotation: rotLiveRef.current }
+                  : views.current.get(d.id) ?? { scale: 1, pan: { x: 0, y: 0 }, rotation: 0 };
+                views.current.set(d.id, {
+                  scale: kind === "location" || kind === "rotation" ? prev.scale : scale,
+                  pan: kind === "zoom" || kind === "rotation" ? prev.pan : pan,
+                  rotation:
+                    kind === "zoom" || kind === "location"
+                      ? prev.rotation
+                      : rotLiveRef.current,
+                });
+              }
+              const label = kind === "zoom" ? "缩放" : kind === "location" ? "位置"
+                : kind === "rotation" ? "旋转" : "缩放 / 位置 / 旋转";
+              setToast(`已把当前${label}同步到 ${docs.length} 个文档`);
             },
           };
 
@@ -6896,10 +6963,18 @@ export default function EditorShell({
               if (!name) { setToast("名字不能为空"); return; }
               const rest = prefs.workspaces.filter((w) => w.name !== name);
               setPrefs({
-                workspaces: [...rest, { name, dock: { ...dockOpen } }],
+                workspaces: [
+                  ...rest,
+                  {
+                    name,
+                    dock: { ...dockOpen },
+                    order: [...dockOrder],
+                    detached: { ...dockDetached },
+                  },
+                ],
                 activeWorkspace: name,
               });
-              setToast(`已保存工作区「${name}」（当前面板布局）`);
+              setToast(`已保存工作区「${name}」（开合 / 顺序 / 浮窗全记住）`);
             },
           };
         case "window.workspace.deleteWorkspace":
@@ -6915,6 +6990,44 @@ export default function EditorShell({
                 activeWorkspace: undefined,
               });
               setToast(`已删除工作区「${name}」`);
+            },
+          };
+        case "window.workspace.applySaved":
+          return {
+            run: () => {
+              // 保存了却不给应用，是典型的「菜单有、功能是假的」——这里补上真正的恢复。
+              const list = prefs.workspaces;
+              if (!list.length) {
+                setToast("还没有保存的工作区，先用「新建工作区」存一个");
+                return;
+              }
+              const raw = window.prompt(
+                "输入序号应用工作区：\n" + list.map((w, i) => `${i + 1}. ${w.name}`).join("\n"),
+                "1",
+              );
+              if (raw === null) return;
+              const w = list[Number(raw.trim()) - 1];
+              if (!w) {
+                setToast("序号无效");
+                return;
+              }
+              setDockOpen((prev) => ({ ...prev, ...w.dock }) as Record<DockGroupId, boolean>);
+              if (Array.isArray(w.order)) {
+                const valid = w.order.filter(isDockGroupId);
+                const full = [...valid, ...dockOrder.filter((id) => !valid.includes(id))];
+                setDockOrder(full);
+              }
+              if (w.detached) {
+                const next: Partial<Record<DockGroupId, DockFloatRect>> = {};
+                for (const [k, v] of Object.entries(w.detached)) {
+                  if (isDockGroupId(k) && v && [v.x, v.y, v.w, v.h].every((n) => Number.isFinite(n))) {
+                    next[k] = v;
+                  }
+                }
+                setDockDetached(next);
+              }
+              setPrefs({ activeWorkspace: w.name });
+              setToast(`已应用工作区「${w.name}」`);
             },
           };
         case "window.workspace.lockWorkspace":
@@ -8418,20 +8531,9 @@ export default function EditorShell({
             },
           };
         case "select.colorRange": {
-          const crLayer = activeLayer(doc);
-          if (!crLayer) return undefined;
-          return {
-            // 扫全图是重活，放到点了以后再做（解析期只判断有没有像素层）
-            run: () => {
-              const rgb = hexToRgb(fg);
-              const next = colorRangeMask(crLayer.surface, [rgb.r, rgb.g, rgb.b], tolerance);
-              if (!next || isSelectionEmpty(next)) {
-                setError(zh.selection.similarEmpty);
-                return;
-              }
-              onCommit(setSelection(doc, next), zh.selection.colorRange);
-            },
-          };
+          if (!activeLayer(doc)) return undefined;
+          // 真对话框：吸管取样、容差预览、Shift/Alt 加减选。整图扫描放进对话框。
+          return { run: () => setColorRangeOpen(true) };
         }
         case "select.subject": {
           const subLayer = activeLayer(doc);
@@ -9397,7 +9499,7 @@ export default function EditorShell({
       if (k === "r" && e.shiftKey) {
         e.preventDefault();
         if (rotLiveRef.current !== 0) {
-          rotLiveRef.current = 0;
+          setViewRotation(0);
           applyPanDom();
           setToast("视图已转正");
         }
@@ -10144,6 +10246,11 @@ export default function EditorShell({
         <RightDock
           open={dockOpen}
           onToggle={toggleDock}
+          order={dockOrder}
+          onOrderChange={setDockOrder}
+          detached={dockDetached}
+          onDetachedChange={setDockDetached}
+          locked={prefs.workspaceLocked}
           footer={<LayersFooter doc={doc} onChange={onCommit} onMaskEdit={setMaskEdit} />}
           navigator={
             <NavigatorPanel
@@ -12091,12 +12198,28 @@ export default function EditorShell({
           adjustId={adjustFx}
           compSource={compRef.current}
           compVersion={panelTick}
+          onRequestPick={requestLevelPick}
           onPreview={previewDoc}
           onApply={(next) => {
             setAdjustFx(null);
             onCommit(next, adjustDef(adjustFx).label);
           }}
           onClose={() => setAdjustFx(null)}
+        />
+      )}
+      {colorRangeOpen && (
+        <ColorRangeDialog
+          doc={doc}
+          onRequestPick={requestLevelPick}
+          onApply={(mask) => {
+            setColorRangeOpen(false);
+            if (isSelectionEmpty(mask)) {
+              setError(zh.selection.similarEmpty);
+              return;
+            }
+            onCommit(setSelection(doc, mask), zh.selection.colorRange);
+          }}
+          onClose={() => setColorRangeOpen(false)}
         />
       )}
       {blurGalleryId && (

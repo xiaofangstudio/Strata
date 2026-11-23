@@ -745,6 +745,7 @@ export const RAW: RawRow[] = [
   ["Window/Workspace", "Reset Workspace", "", "window.workspace.resetWorkspace"],
   ["Window/Workspace", "New Workspace…", "", "window.workspace.newWorkspace"],
   ["Window/Workspace", "Delete Workspace…", "", "window.workspace.deleteWorkspace"],
+  ["Window/Workspace", "Apply Saved Workspace…", "", "window.workspace.applySaved"],
   ["Window/Workspace", "---", "", "---"],
   ["Window/Workspace", "Keyboard Shortcuts…", "Ctrl+Alt+Shift+K", "edit.keyboardShortcuts"],
   ["Window/Workspace", "Lock Workspace", "", "window.workspace.lockWorkspace"],

@@ -574,3 +574,56 @@
   border: 1px solid var(--border-strong);
   border-radius: 3px;
 }
+
+/* 拾色器警告条：独占 .cpw- 前缀，避免和拾色器本体 .cp- 撞车。 */
+.cpw-row {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.cpw-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  white-space: nowrap;
+  text-align: left;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.cpw-item:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.cpw-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: var(--text);
+  background: #e0a33a;
+  font-weight: 700;
+}
+
+.cpw-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cpw-fix {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--accent, var(--text));
+}

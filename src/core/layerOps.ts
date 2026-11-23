@@ -20,8 +20,10 @@ import {
   createLayer,
   createMask,
   newAdjustState,
+  newBlendIf,
   newLayerStyle,
   type AdjustState,
+  type BlendIfState,
   type BlendId,
   type LayerStyle,
   type StrataLayer,
@@ -67,6 +69,7 @@ export type LayerPatch = Partial<
     | "adjust"
     | "clip"
     | "styles"
+    | "blendIf"
     | "smart"
     | "parent"
     | "maskLinked"
@@ -624,6 +627,17 @@ export function setOpacity(doc: StrataDoc, id: string, opacity: number): StrataD
 
 export function setBlend(doc: StrataDoc, id: string, blend: BlendId): StrataDoc {
   return updateLayer(doc, id, { blend });
+}
+
+/** 改一层的 Blend If 滑块；undefined 时先建一份默认状态。 */
+export function setBlendIf(
+  doc: StrataDoc,
+  id: string,
+  patch: Partial<BlendIfState>,
+): StrataDoc {
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer) return doc;
+  return updateLayer(doc, id, { blendIf: { ...(layer.blendIf ?? newBlendIf()), ...patch } });
 }
 
 /* ---------------------------------------------------------------- 蒙版 */

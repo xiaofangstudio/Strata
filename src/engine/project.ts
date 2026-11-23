@@ -15,6 +15,8 @@ import {
   createLayer,
   type AdjustState,
   type BlendId,
+  type BlendIfState,
+  newBlendIf,
   type LayerKind,
   type LayerStyle,
   type StrataLayer,
@@ -47,6 +49,8 @@ interface FileLayer {
   clip?: boolean;
   /** 图层样式；为空时省略 */
   styles?: LayerStyle[];
+  /** Blend If 双半三角；没开时省略 */
+  blendIf?: BlendIfState;
   /**
    * 所属图层组在 layers 数组里的**下标**（顶层省略）。
    *
@@ -187,6 +191,23 @@ export function isStrataPath(path: string): boolean {
   return path.toLowerCase().endsWith(`.${STRATA_EXTENSION}`);
 }
 
+/** Blend If：坏数据一律退到默认关闭，不让存档把画布搞成全透明。 */
+function sanitizeBlendIf(raw: unknown): BlendIfState {
+  const d = newBlendIf();
+  if (!raw || typeof raw !== "object") return d;
+  const b = raw as Record<string, unknown>;
+  const num = (v: unknown, fallback: number, lo: number, hi: number) =>
+    Number.isFinite(Number(v)) ? Math.max(lo, Math.min(hi, Number(v))) : fallback;
+  return {
+    enabled: b.enabled === true,
+    thisBlack: num(b.thisBlack, d.thisBlack, 0, 255),
+    thisWhite: num(b.thisWhite, d.thisWhite, 0, 255),
+    underBlack: num(b.underBlack, d.underBlack, 0, 255),
+    underWhite: num(b.underWhite, d.underWhite, 0, 255),
+    feather: num(b.feather, d.feather, 0, 255),
+  };
+}
+
 /** 把整份文档序列化成 .strata 字节。 */
 export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
   const layers: FileLayer[] = [];
@@ -203,6 +224,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     if (l.adjust) fl.adjust = l.adjust;
     if (l.clip) fl.clip = true;
     if (l.styles && l.styles.length) fl.styles = l.styles;
+    if (l.blendIf?.enabled) fl.blendIf = { ...l.blendIf };
     // 组也想记下自己属于哪个上层组：存下标，读回时再换成新 id
     if (l.parent) {
       const pi = doc.layers.findIndex((x) => x.id === l.parent);
@@ -276,6 +298,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
       maskActive: fl.maskActive,
       clip: !!fl.clip,
       styles: fl.styles ? fl.styles.map(cloneStyle) : [],
+      blendIf: sanitizeBlendIf(fl.blendIf),
       smart: fl.smart,
       window: sanitizeWindow(fl.window),
     };

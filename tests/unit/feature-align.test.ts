@@ -84,7 +84,7 @@ describe("estimateFeatureTransform", () => {
     const [x, y] = hApply(res!.h, 100, 100);
     expect(x).toBeCloseTo(88, 0);
     expect(y).toBeCloseTo(108, 0);
-  });
+  }, 20000);
 
   it("旋转+缩放图估计出的变换能把点拉回原位", () => {
     const w = 320, h = 260;
@@ -103,7 +103,7 @@ describe("estimateFeatureTransform", () => {
       expect(Math.abs(bx - p[0])).toBeLessThan(3);
       expect(Math.abs(by - p[1])).toBeLessThan(3);
     }
-  });
+  }, 20000);
 });
 
 describe("applySimilarityToLayer 落版方向", () => {

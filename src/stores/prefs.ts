@@ -92,8 +92,13 @@ export interface Prefs {
   dragThreshold: number;
   /** 被隐藏的顶级菜单（编辑 > 菜单） */
   hiddenMenus: string[];
-  /** 自定义工作区（窗口 > 工作区）：名字 + 面板开合状态 */
-  workspaces: { name: string; dock: Record<string, boolean> }[];
+  /** 自定义工作区（窗口 > 工作区）：名字 + 面板开合 / 顺序 / 拆离状态 */
+  workspaces: {
+    name: string;
+    dock: Record<string, boolean>;
+    order?: string[];
+    detached?: Record<string, { x: number; y: number; w: number; h: number }>;
+  }[];
   /** 当前工作区名（空 = 未使用命名工作区） */
   activeWorkspace?: string;
   /** 锁定工作区：锁住后不允许再拖动/开关面板 */

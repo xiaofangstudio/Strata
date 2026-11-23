@@ -1361,6 +1361,31 @@ export const STYLE_DEFS: readonly StyleDef[] = [
 /** 描边位置：外 / 内 / 居中。 */
 export const STROKE_POSITIONS = ["外", "内", "居中"] as const;
 
+/**
+ * Blend If（混合颜色带）：本图层 / 下一图层各一对黑白半三角。
+ * 亮度单位都是 0–255；feather 是半三角的羽化宽度（0 = 硬切）。
+ */
+export interface BlendIfState {
+  enabled: boolean;
+  thisBlack: number;
+  thisWhite: number;
+  underBlack: number;
+  underWhite: number;
+  feather: number;
+}
+
+/** 默认 Blend If：全范围、关闭，不改变任何像素。 */
+export function newBlendIf(): BlendIfState {
+  return {
+    enabled: false,
+    thisBlack: 0,
+    thisWhite: 255,
+    underBlack: 0,
+    underWhite: 255,
+    feather: 24,
+  };
+}
+
 /** 一条图层样式。 */
 export interface LayerStyle {
   id: StyleId;
@@ -1487,6 +1512,8 @@ export interface StrataLayer {
   clip?: boolean;
   /** 图层样式（投影 / 内阴影 / 外发光 / 内发光 / 描边 / 颜色叠加 / 斜面和浮雕 / 缎纹 / 渐变叠加 / 图案叠加），未设置时视为空 */
   styles?: LayerStyle[];
+  /** 图层级 Blend If（混合颜色带），未设置时不参与合成 */
+  blendIf?: BlendIfState;
   /**
    * 智能对象：原始像素的 data URL（PNG）。
    *
@@ -1659,6 +1686,7 @@ export function cloneLayer(layer: StrataLayer): StrataLayer {
     mask: layer.mask ? cloneSurface(layer.mask) : null,
     adjust: layer.adjust ? cloneAdjust(layer.adjust) : undefined,
     styles: layer.styles?.map(cloneStyle),
+    blendIf: layer.blendIf ? { ...layer.blendIf } : undefined,
   };
 }
 
@@ -1671,5 +1699,6 @@ export function dupLayer(layer: StrataLayer): StrataLayer {
     mask: layer.mask ? cloneSurface(layer.mask) : null,
     adjust: layer.adjust ? cloneAdjust(layer.adjust) : undefined,
     styles: layer.styles?.map(cloneStyle),
+    blendIf: layer.blendIf ? { ...layer.blendIf } : undefined,
   };
 }

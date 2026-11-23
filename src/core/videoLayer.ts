@@ -117,6 +117,31 @@ function mutate(
   return { ...doc, layers, dirty: true };
 }
 
+/**
+ * 分帧缩略图的取样下标：固定取 count 张，始终包含首尾与当前帧。
+ * 纯函数，缩略图条和 timeline 共用，避免两处各写一套「均匀取样」得到不同结果。
+ */
+export function sampleFrameIndices(total: number, current: number, count = 5): number[] {
+  if (total <= 0) return [];
+  const n = Math.min(Math.max(1, count), total);
+  if (n === 1) return [Math.max(0, Math.min(total - 1, current))];
+  const set = new Set<number>([0, total - 1, Math.max(0, Math.min(total - 1, current))]);
+  for (let i = 1; i < n - 1 && set.size < n; i += 1) {
+    set.add(Math.round((i / (n - 1)) * (total - 1)));
+  }
+  // 取样不足（帧数少或重复太多）时按顺序补齐
+  for (let i = 0; set.size < n && i < total; i += 1) set.add(i);
+  return [...set].sort((a, b) => a - b).slice(0, n);
+}
+
+/** 跳到指定帧（缩略图点击 / 时间轴拖动都走这里，surface 会同步刷新）。 */
+export function setFrameIndex(doc: StrataDoc, id: string, index: number): StrataDoc {
+  return mutate(doc, id, (v) => ({
+    ...v,
+    index: Math.max(0, Math.min(v.frames.length - 1, Math.round(index))),
+  }));
+}
+
 /** 插一张空帧（插在当前帧之后）。 */
 export function insertBlankFrame(doc: StrataDoc, id: string): StrataDoc {
   return mutate(doc, id, (v) => {

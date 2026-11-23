@@ -379,6 +379,50 @@
   color: var(--accent);
 }
 
+/* 视频层的分帧缩略图条：2×2 小格，当前帧高亮，点击直接跳帧 */
+.ly-frames {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 1px;
+  padding: 1px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.ly-frame {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.ly-frame canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
+.ly-frame:hover {
+  border-color: var(--border-strong);
+}
+
+.ly-frame.is-on {
+  border-color: var(--accent, #6fc0ff);
+  box-shadow: 0 0 0 1px var(--accent, #6fc0ff) inset;
+}
+
 .ly-thumb {
   flex: none;
   width: 30px;
@@ -701,6 +745,34 @@
 
 /* ---------- 图层样式（M2） ---------- */
 
+/* Blend If（图层级混合颜色带） */
+.ly-blendif {
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.ly-blendif-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  margin-bottom: var(--sp-1);
+}
+
+.ly-blendif-feather {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
 .ly-style-item {
   display: flex;
   flex-direction: column;
@@ -844,6 +916,44 @@
 }
 
 /* 曲线通道页签：RGB / 红 / 绿 / 蓝，选中的那条带本色标记 */
+/* 曲线三点吸管：与色阶吸管同一套语义，按钮状态在曲线面板内高亮 */
+.ly-curve-picks {
+  display: flex;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.ly-curve-pick {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  height: 22px;
+  padding: 0 2px;
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.ly-curve-pick:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.ly-curve-pick.is-on {
+  color: var(--accent, var(--text));
+  border-color: var(--accent, var(--border));
+  background: var(--pressed);
+}
+
+.ly-curve-pick-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--accent, var(--text-2));
+}
+
 .ly-curve-tabs {
   display: flex;
   gap: var(--sp-1);
@@ -1272,6 +1382,52 @@
 .lv-out-top {
   display: flex;
   gap: var(--sp-2);
+}
+
+/* 色阶三点吸管：黑 / 灰 / 白各一键，待命时高亮，避免用户以为没点中 */
+.lv-pickers {
+  display: flex;
+  gap: var(--sp-1);
+  margin: 4px 0 2px;
+}
+
+.lv-pick {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+}
+
+.lv-pick span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lv-pick:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.lv-pick.is-on {
+  color: var(--accent, var(--text));
+  border-color: var(--accent, var(--border));
+  background: var(--pressed);
+}
+
+.lv-pick-hint {
+  margin: 0 0 4px;
+  font-size: 10px;
+  color: var(--accent, var(--text-2));
 }
 
 .lv-num {

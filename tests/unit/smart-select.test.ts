@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   colorRangeHit,
+  colorRangeMultiHit,
   focusHit,
   growHit,
   skyHit,
@@ -41,6 +42,43 @@ describe("色彩范围 colorRangeHit", () => {
     const hit = colorRangeHit(d, 4, 2, [100, 100, 100], 0);
     expect(hit[1]).toBe(1);
     expect(hit[0]).toBe(0);
+  });
+});
+
+describe("色彩范围多吸管 colorRangeMultiHit", () => {
+  // x=0 红 / x=1 绿 / x=2 黄 / x=3 暗色
+  const d = rgba(4, 1, (x) =>
+    x === 0 ? [200, 40, 40, 255]
+    : x === 1 ? [40, 200, 40, 255]
+    : x === 2 ? [200, 200, 40, 255]
+    : [20, 20, 20, 255],
+  );
+
+  it("基础吸管与单色版本行为一致", () => {
+    expect(colorRangeMultiHit(d, 4, 1, [{ rgb: [200, 40, 40], op: "add" }], 30))
+      .toEqual(colorRangeHit(d, 4, 1, [200, 40, 40], 30));
+  });
+
+  it("Shift 加选取两种颜色的并集", () => {
+    const hit = colorRangeMultiHit(d, 4, 1, [
+      { rgb: [200, 40, 40], op: "add" },
+      { rgb: [40, 200, 40], op: "add" },
+    ], 20);
+    expect([...hit]).toEqual([1, 1, 0, 0]);
+  });
+
+  it("Alt 减选从已选范围里剔掉一种颜色", () => {
+    const hit = colorRangeMultiHit(d, 4, 1, [
+      { rgb: [200, 40, 40], op: "add" },
+      { rgb: [40, 200, 40], op: "add" },
+      { rgb: [200, 40, 40], op: "subtract" },
+    ], 20);
+    expect([...hit]).toEqual([0, 1, 0, 0]);
+  });
+
+  it("没有加选样本时返回空选区，不误把减选当基础", () => {
+    expect([...colorRangeMultiHit(d, 4, 1, [{ rgb: [200, 40, 40], op: "subtract" }], 30)])
+      .toEqual([0, 0, 0, 0]);
   });
 });
 

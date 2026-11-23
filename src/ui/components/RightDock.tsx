@@ -1,11 +1,15 @@
 /**
- * 右侧面板坞（对齐 PhotoCraft 的右侧 docker）。
+ * 右侧面板坞（对齐 PhotoCraft / PS 的真实 docker）。
  *
  * 一条 36px 的竖排开关轨 + 一列面板：点轨道上的图标开 / 关对应面板组，
- * 打开的面板自上而下堆叠。颜色、属性、图层、历史、导航器、直方图都是
- * 真实面板，没做的（路径、通道独立页）就不放入口 —— 不做假控件。
+ * 打开的面板自上而下堆叠。每个面板头部可以拖着改顺序、拆成独立浮窗；
+ * 浮窗能拖、能缩、能一键归位。顺序 / 拆离 / 浮窗位置都持久化。
+ * 颜色、属性、图层、历史、导航器、直方图都是真实面板，
+ * 没做的（路径、通道独立页）就不放入口 —— 不做假控件。
  */
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { reorderDockPanel } from "../../core/dockLayout";
 import { zh } from "../../i18n";
 import "./RightDock.css";
 
@@ -20,6 +24,12 @@ type GroupId =
   | "scopes";
 
 export type { GroupId };
+export interface DockFloatRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 interface Props {
   /** 调色台（一级 / 色轮 / 切片器 / 曲线） */
@@ -43,6 +53,13 @@ interface Props {
   /** 受控开关（「窗口 > 面板」菜单直接控制）；不传则坞内自持。 */
   open?: Record<GroupId, boolean>;
   onToggle?: (id: GroupId) => void;
+  /** 受控面板顺序 / 拆离状态（工作区保存恢复用）；不传则坞内自持。 */
+  order?: GroupId[];
+  onOrderChange?: (order: GroupId[]) => void;
+  detached?: Partial<Record<GroupId, DockFloatRect>>;
+  onDetachedChange?: (next: Partial<Record<GroupId, DockFloatRect>>) => void;
+  /** 工作区锁定时禁止重排 / 拆离。 */
+  locked?: boolean;
 }
 
 /* -------------------------------------------------- 面板高度常量与持久化 */
@@ -92,6 +109,76 @@ function readHeights(): Record<string, number> {
   } catch {
     return {};
   }
+}
+
+/* -------------------------------------------------- 顺序 / 拆离状态持久化 */
+
+const ORDER_KEY = "strata.dock.order";
+const DETACHED_KEY = "strata.dock.detached";
+const ALL_GROUPS: GroupId[] = [
+  "grade", "navigator", "scopes", "histogram", "color", "props", "layers", "history",
+];
+
+function isGroupId(v: unknown): v is GroupId {
+  return typeof v === "string" && (ALL_GROUPS as string[]).includes(v);
+}
+
+/** 读顺序：老数据缺项补在末尾，脏数据直接丢 —— 绝不让未知 id 把面板列搞空。 */
+function readOrder(): GroupId[] {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    if (!raw) return [...ALL_GROUPS];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [...ALL_GROUPS];
+    const seen = new Set<GroupId>();
+    const out: GroupId[] = [];
+    for (const v of parsed) {
+      if (isGroupId(v) && !seen.has(v)) {
+        seen.add(v);
+        out.push(v);
+      }
+    }
+    for (const id of ALL_GROUPS) if (!seen.has(id)) out.push(id);
+    return out;
+  } catch {
+    return [...ALL_GROUPS];
+  }
+}
+
+function isFloatRect(v: unknown): v is DockFloatRect {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  return [r.x, r.y, r.w, r.h].every(
+    (n) => typeof n === "number" && Number.isFinite(n),
+  );
+}
+
+function readDetached(): Partial<Record<GroupId, DockFloatRect>> {
+  try {
+    const raw = localStorage.getItem(DETACHED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<Record<GroupId, DockFloatRect>> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (isGroupId(k) && isFloatRect(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 工作区恢复时校验顺序里的 id，防止脏数据把面板列清空。 */
+export function isDockGroupId(v: unknown): v is GroupId {
+  return isGroupId(v);
+}
+
+/** 受控调用方（EditorShell / 工作区恢复）用它取已持久化的布局作初值。 */
+export function loadDockLayout(): {
+  order: GroupId[];
+  detached: Partial<Record<GroupId, DockFloatRect>>;
+} {
+  return { order: readOrder(), detached: readDetached() };
 }
 
 /** 轨道上的按钮：顺序与 PhotoCraft 一致（导航器 → 直方图 → 属性 → 颜色 → 图层 → 历史）。 */
@@ -183,6 +270,138 @@ const RAIL: { id: GroupId; label: string; icon: ReactNode }[] = [
   },
 ];
 
+/** 拆离出来的面板浮窗：标题栏拖动、右下角缩放、归位与关闭都是真操作。 */
+function FloatPanel({
+  label,
+  rect,
+  onRect,
+  onDock,
+  onClose,
+  locked,
+  children,
+}: {
+  label: string;
+  rect: DockFloatRect;
+  onRect: (r: DockFloatRect) => void;
+  onDock: () => void;
+  onClose: () => void;
+  locked: boolean;
+  children: ReactNode;
+}) {
+  const drag = useRef<{
+    mode: "move" | "resize";
+    sx: number;
+    sy: number;
+    start: DockFloatRect;
+  } | null>(null);
+
+  const down = (mode: "move" | "resize") => (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* 不支持捕获时退化成普通 pointermove */
+    }
+    drag.current = { mode, sx: e.clientX, sy: e.clientY, start: { ...rect } };
+  };
+
+  const move = (e: React.PointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.sx;
+    const dy = e.clientY - d.sy;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (d.mode === "move") {
+      onRect({
+        ...d.start,
+        // 标题栏至少留 120px 在视口内，窗口不会被拖丢
+        x: Math.min(vw - 120, Math.max(-d.start.w + 120, d.start.x + dx)),
+        y: Math.min(vh - 40, Math.max(0, d.start.y + dy)),
+      });
+    } else {
+      onRect({
+        ...d.start,
+        w: Math.min(vw - d.start.x, Math.max(260, d.start.w + dx)),
+        h: Math.min(vh - d.start.y, Math.max(140, d.start.h + dy)),
+      });
+    }
+  };
+
+  const up = (e: React.PointerEvent<HTMLElement>) => {
+    if (drag.current) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放 */
+      }
+    }
+    drag.current = null;
+  };
+
+  return createPortal(
+    <div
+      className="dock-float"
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+    >
+      <div
+        className="dock-float-head"
+        style={locked ? { cursor: "default" } : undefined}
+        onPointerDown={locked ? undefined : down("move")}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+      >
+        <span className="dock-float-grip" aria-hidden="true">⠿</span>
+        <span className="dock-float-title">{label}</span>
+        {!locked && (
+          <>
+            <button
+              type="button"
+              className="dock-float-btn"
+              title={zh.panel.dockDock}
+              aria-label={zh.panel.dockDock}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onDock}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="2" y="2.5" width="12" height="11" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M10.5 2.5v11" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="dock-float-btn"
+              title={zh.dialog.close}
+              aria-label={zh.dialog.close}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onClose}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4 4 8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+              </svg>
+            </button>
+          </>
+        )}
+      </div>
+      <div className="dock-float-body">{children}</div>
+      <div
+        className="dock-float-resize"
+        role="separator"
+        aria-label={zh.panel.dockResize}
+        style={locked ? { display: "none" } : undefined}
+        onPointerDown={locked ? undefined : down("resize")}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+      />
+    </div>,
+    document.body,
+  );
+}
+
 export default function RightDock({
   grade,
   color,
@@ -195,6 +414,11 @@ export default function RightDock({
   footer,
   open: outer,
   onToggle,
+  order: outerOrder,
+  onOrderChange,
+  detached: outerDetached,
+  onDetachedChange,
+  locked = false,
 }: Props) {
   // 默认开颜色 / 属性 / 图层，历史 / 导航器 / 直方图按需拉出 —— 与 PhotoCraft 的初始状态一致。
   const [inner, setInner] = useState<Record<GroupId, boolean>>({
@@ -213,6 +437,128 @@ export default function RightDock({
     if (onToggle) onToggle(id);
     else setInner((v) => ({ ...v, [id]: !v[id] }));
   };
+
+  /* ---------------------------------------------- 顺序 / 拆离（受控或自持） */
+
+  const [innerOrder, setInnerOrder] = useState<GroupId[]>(readOrder);
+  const order = outerOrder ?? innerOrder;
+  const [innerDetached, setInnerDetached] =
+    useState<Partial<Record<GroupId, DockFloatRect>>>(readDetached);
+  const detached = outerDetached ?? innerDetached;
+
+  const setOrder = useCallback(
+    (next: GroupId[]) => {
+      if (onOrderChange) onOrderChange(next);
+      else setInnerOrder(next);
+    },
+    [onOrderChange],
+  );
+
+  const setDetached = useCallback(
+    (next: Partial<Record<GroupId, DockFloatRect>>) => {
+      if (onDetachedChange) onDetachedChange(next);
+      else setInnerDetached(next);
+    },
+    [onDetachedChange],
+  );
+
+  const groupRefs = useRef(new Map<GroupId, HTMLDivElement>());
+  const visibleOrderRef = useRef<GroupId[]>([]);
+
+  // 无论如何都写一份本地：命名工作区恢复的顺序同样成为下次启动的默认布局。
+  useEffect(() => {
+    try {
+      localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+      localStorage.setItem(DETACHED_KEY, JSON.stringify(detached));
+    } catch {
+      /* 存储不可用时只在本次会话生效 */
+    }
+  }, [order, detached]);
+
+  const detach = useCallback(
+    (id: GroupId) => {
+      if (locked) return;
+      const r = groupRefs.current.get(id)?.getBoundingClientRect();
+      const w = Math.round(Math.max(260, Math.min(600, r?.width ?? 300)));
+      const h = Math.round(
+        Math.max(140, Math.min(window.innerHeight - 70, r?.height ?? 260)),
+      );
+      const x = Math.round(
+        Math.max(8, Math.min(window.innerWidth - w - 8, r?.left ?? window.innerWidth - w - 30)),
+      );
+      const y = Math.round(
+        Math.max(8, Math.min(window.innerHeight - h - 8, r?.top ?? 60)),
+      );
+      setDetached({ ...detached, [id]: { x, y, w, h } });
+    },
+    [detached, locked, setDetached],
+  );
+
+  const dockBack = useCallback(
+    (id: GroupId) => {
+      const next = { ...detached };
+      delete next[id];
+      setDetached(next);
+    },
+    [detached, setDetached],
+  );
+
+  /* ------------------------------------------ 拖拽重排（只出指示线，松手才换 DOM） */
+
+  const reorderRef = useRef<{ id: GroupId } | null>(null);
+  const dropRef = useRef<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
+  const onReorderDown = useCallback(
+    (id: GroupId) => (e: React.PointerEvent<HTMLElement>) => {
+      if (locked || e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* 退化成普通 pointermove */
+      }
+      reorderRef.current = { id };
+    },
+    [locked],
+  );
+
+  const onReorderMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    if (!reorderRef.current) return;
+    const y = e.clientY;
+    let idx = 0;
+    groupRefs.current.forEach((el, id) => {
+      if (!el.isConnected) return;
+      const r = el.getBoundingClientRect();
+      if (y > r.top + r.height / 2) {
+        // visibleOrder 的下标，稍后映射回全局 order
+        idx = Math.max(idx, (visibleOrderRef.current.indexOf(id) + 1) || 0);
+      }
+    });
+    dropRef.current = idx;
+    setDropIndex(idx);
+  }, []);
+
+  const onReorderUp = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      const d = reorderRef.current;
+      if (!d) return;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放 */
+      }
+      reorderRef.current = null;
+      const at = dropRef.current;
+      dropRef.current = null;
+      setDropIndex(null);
+      if (at == null || locked) return;
+
+      setOrder(reorderDockPanel(order, visibleOrderRef.current, d.id, at));
+    },
+    [locked, order, setOrder],
+  );
 
   /* ---------------------------------------------------- 面板高度（可拖） */
 
@@ -314,17 +660,26 @@ export default function RightDock({
     [],
   );
 
-  const groups: { id: GroupId; node: ReactNode; cls: string }[] = [];
-  if (open.grade) groups.push({ id: "grade", node: grade, cls: "is-grade" });
-  if (open.navigator) groups.push({ id: "navigator", node: navigator, cls: "is-navigator" });
-  if (open.scopes) groups.push({ id: "scopes", node: scopes, cls: "is-scopes" });
-  if (open.histogram) groups.push({ id: "histogram", node: histogram, cls: "is-histogram" });
-  if (open.color) groups.push({ id: "color", node: color, cls: "is-color" });
-  if (open.props) groups.push({ id: "props", node: properties, cls: "is-props" });
-  if (open.layers) groups.push({ id: "layers", node: layers, cls: "is-layers" });
-  if (open.history) groups.push({ id: "history", node: history, cls: "is-history" });
+  const PANELS: Record<GroupId, { node: ReactNode; cls: string }> = {
+    grade: { node: grade, cls: "is-grade" },
+    navigator: { node: navigator, cls: "is-navigator" },
+    scopes: { node: scopes, cls: "is-scopes" },
+    histogram: { node: histogram, cls: "is-histogram" },
+    color: { node: color, cls: "is-color" },
+    props: { node: properties, cls: "is-props" },
+    layers: { node: layers, cls: "is-layers" },
+    history: { node: history, cls: "is-history" },
+  };
+  // 顺序由 order 决定；拆出去的面板在坞里消失，但开关仍为 true，归位后原地回来。
+  const groups = order
+    .filter((id) => open[id] && !detached[id])
+    .map((id) => ({ id, ...PANELS[id] }));
+  visibleOrderRef.current = groups.map((g) => g.id);
+
+  const floats = ALL_GROUPS.filter((id) => open[id] && detached[id]);
 
   return (
+    <>
     <aside className="dock" aria-label={zh.panel.dock} style={{ width: dockW }}>
       {/* 上半部分：把手 + 开关轨 + 面板列（这部分才跟着窗口伸缩） */}
       <div className="dock-row">
@@ -360,7 +715,15 @@ export default function RightDock({
         {groups.map((g, i) => (
           <Fragment key={g.id}>
             <div
-              className={`dock-group ${g.cls}`}
+              ref={(el) => {
+                if (el) groupRefs.current.set(g.id, el);
+                else groupRefs.current.delete(g.id);
+              }}
+              className={
+                `dock-group ${g.cls}` +
+                (dropIndex === i ? " is-drop-before" : "") +
+                (dropIndex === groups.length && i === groups.length - 1 ? " is-drop-after" : "")
+              }
               style={{
                 height: heights[g.id] ?? DEFAULT_HEIGHTS[g.id],
                 /**
@@ -373,6 +736,35 @@ export default function RightDock({
               }}
             >
               {g.node}
+              {/* 悬浮操作条：不占布局、不顶掉面板原有页签；只有 hover 才显形 */}
+              {!locked && (
+                <div className="dock-group-tools">
+                  <span
+                    className="dock-group-drag"
+                    title={zh.panel.dockReorder}
+                    aria-label={zh.panel.dockReorder}
+                    onPointerDown={onReorderDown(g.id)}
+                    onPointerMove={onReorderMove}
+                    onPointerUp={onReorderUp}
+                    onPointerCancel={onReorderUp}
+                  >
+                    ⠿
+                  </span>
+                  <button
+                    type="button"
+                    className="dock-group-tool"
+                    title={zh.panel.dockDetach}
+                    aria-label={zh.panel.dockDetach}
+                    onClick={() => detach(g.id)}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M9 2.5h4.5V7" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M13.5 2.5 8 8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      <path d="M12.5 10v3.5H3V3h3.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             </div>
             {i < groups.length - 1 && (
               <div
@@ -401,5 +793,22 @@ export default function RightDock({
        */}
       {footer && <div className="dock-footer">{footer}</div>}
     </aside>
+
+    {floats.map((id) => (
+      <FloatPanel
+        key={id}
+        label={RAIL.find((g) => g.id === id)?.label ?? id}
+        rect={detached[id]!}
+        onRect={(r) => setDetached({ ...detached, [id]: r })}
+        onDock={() => dockBack(id)}
+        onClose={() => toggle(id)}
+        locked={locked}
+      >
+        <div className={`dock-group ${PANELS[id].cls} is-floating`}>
+          {PANELS[id].node}
+        </div>
+      </FloatPanel>
+    ))}
+    </>
   );
 }

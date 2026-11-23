@@ -45,6 +45,55 @@ export function colorRangeHit(
   return hit;
 }
 
+/** 色彩范围吸管样本：add = 基础 / Shift 加选，subtract = Alt 减选。 */
+export interface ColorRangeSample {
+  rgb: readonly [number, number, number];
+  op: "add" | "subtract";
+}
+
+/**
+ * 多吸管色彩范围：先并集所有 add 样本，再剔除任何 subtract 样本命中者。
+ *
+ * 与单色版本共用同一套 tol²·4 距离阈值，保证「基础吸管」的行为完全不变；
+ * 纯函数、不碰 canvas，便于给 Shift / Alt 语义写单测。
+ */
+export function colorRangeMultiHit(
+  d: Uint8ClampedArray,
+  w: number,
+  h: number,
+  samples: readonly ColorRangeSample[],
+  tolerance: number,
+): Uint8Array {
+  const out = new Uint8Array(w * h);
+  const adds = samples.filter((s) => s.op === "add");
+  if (!adds.length) return out;
+  const tol2 = Math.max(0, tolerance) * Math.max(0, tolerance) * 4;
+
+  for (let p = 0; p < w * h; p += 1) {
+    const i = p * 4;
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    let inside = false;
+    for (const s of adds) {
+      const dr = r - s.rgb[0], dg = g - s.rgb[1], db = b - s.rgb[2];
+      if (dr * dr + dg * dg + db * db <= tol2) {
+        inside = true;
+        break;
+      }
+    }
+    if (!inside) continue;
+    for (const s of samples) {
+      if (s.op !== "subtract") continue;
+      const dr = r - s.rgb[0], dg = g - s.rgb[1], db = b - s.rgb[2];
+      if (dr * dr + dg * dg + db * db <= tol2) {
+        inside = false;
+        break;
+      }
+    }
+    out[p] = inside ? 1 : 0;
+  }
+  return out;
+}
+
 /**
  * 扩大选取：sel 为 0/1 选区表。多源 BFS —— 新像素只要与「拉它进来的
  * 那个已选像素」颜色相近就加入。返回生长后的选区表（原地新表）。
@@ -247,6 +296,16 @@ export function colorRangeMask(
 ): HTMLCanvasElement | null {
   const { width: w, height: h } = surface;
   return maskFrom(w, h, colorRangeHit(readPixels(surface).data, w, h, rgb, tolerance));
+}
+
+/** 多吸管版本：Shift 加选 / Alt 减选后整张蒙版重算。 */
+export function colorRangeMaskMulti(
+  surface: HTMLCanvasElement,
+  samples: readonly ColorRangeSample[],
+  tolerance: number,
+): HTMLCanvasElement | null {
+  const { width: w, height: h } = surface;
+  return maskFrom(w, h, colorRangeMultiHit(readPixels(surface).data, w, h, samples, tolerance));
 }
 
 /** 扩大选取蒙版。mask 为空 / surface 尺寸不匹配时返回 null。 */
