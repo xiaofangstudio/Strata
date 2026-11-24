@@ -23,10 +23,12 @@ export type ToolId =
   | "shapeRect"
   | "shapeEllipse"
   | "shapeLine"
+  | "leafPen"
   | "text"
   | "crop"
   | "eyedropper"
   | "brush"
+  | "smudge"
   | "eraser"
   | "bucket"
   | "gradient"
@@ -90,11 +92,15 @@ export const TOOLS: ToolDef[] = [
   { id: "shapeRect", shortcut: "U", group: "shape", ready: true },
   { id: "shapeEllipse", shortcut: "U", group: "shape", ready: true },
   { id: "shapeLine", shortcut: "U", group: "shape", ready: true },
+  // 柳叶笔：拖出弧线自动闭合成色块，大面积铺色用；与形状工具共用 U 循环
+  { id: "leafPen", shortcut: "U", group: "shape", ready: true },
 
   { id: "text", shortcut: "T", group: "text", ready: true },
 
   { id: "brush", shortcut: "B", group: "paint", ready: true },
   { id: "pencil", shortcut: "B", group: "paint", ready: true },
+  // 涂抹：推颜色做过渡，与画笔 / 橡皮并列（画世界把它们叫「加 / 减 / 推」）
+  { id: "smudge", shortcut: "D", group: "paint", ready: true },
   { id: "eraser", shortcut: "E", group: "paint", ready: true },
   { id: "magicEraser", shortcut: "E", group: "paint", ready: true },
   { id: "bucket", shortcut: "G", group: "paint", ready: true },
@@ -162,6 +168,11 @@ export function usesBrush(id: ToolId): boolean {
   return id === "brush" || id === "pencil" || id === "eraser";
 }
 
+/** 涂抹工具：取样当前画布颜色沿轨迹推移，不是画笔也不是修饰工具。 */
+export function isSmudgeTool(id: ToolId): boolean {
+  return id === "smudge";
+}
+
 /** 走「点一下就落库」而不是「拖一圈」的选区工具。 */
 export function isClickSelectTool(id: ToolId): boolean {
   return id === "wand" || id === "singleRow" || id === "singleColumn";
@@ -169,7 +180,7 @@ export function isClickSelectTool(id: ToolId): boolean {
 
 /** 形状工具（矩形 / 椭圆 / 直线）：拖拽绘制，选项条给出填充与描边。 */
 export function isShapeTool(id: ToolId): boolean {
-  return id === "shapeRect" || id === "shapeEllipse" || id === "shapeLine";
+  return id === "shapeRect" || id === "shapeEllipse" || id === "shapeLine" || id === "leafPen";
 }
 
 /** 文字工具：在画布上点一下落一个文本框，输入后栅格化成像素。 */

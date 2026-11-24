@@ -42,6 +42,8 @@ interface FileLayer {
   opacity: number;
   blend: BlendId;
   locked: boolean;
+  /** 锁定透明像素（真时才写，老工程缺省为关） */
+  alphaLock?: boolean;
   kind: LayerKind;
   adjust?: AdjustState;
   maskActive: boolean;
@@ -222,6 +224,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
       maskActive: l.maskActive,
     };
     if (l.adjust) fl.adjust = l.adjust;
+    if (l.alphaLock) fl.alphaLock = true;
     if (l.clip) fl.clip = true;
     if (l.styles && l.styles.length) fl.styles = l.styles;
     if (l.blendIf?.enabled) fl.blendIf = { ...l.blendIf };
@@ -294,6 +297,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
       opacity: fl.opacity,
       blend: fl.blend,
       locked: fl.locked,
+      alphaLock: fl.alphaLock === true,
       mask,
       maskActive: fl.maskActive,
       clip: !!fl.clip,

@@ -205,6 +205,12 @@ import {
 } from "../core/batchOps";
 import { combineShapes, type CombineOp } from "../core/shapeCombine";
 import {
+  isLeafDrawable,
+  pushLeafPoint,
+  snapLeafEnd,
+  type LeafPoint,
+} from "../core/leafBrush";
+import {
   activeVideoLayer,
   deleteFrame,
   duplicateFrame,
@@ -259,6 +265,7 @@ import {
   newAdjustState,
   type AdjustId,
   type AdjustState,
+  type StrataLayer,
   type StyleId,
 } from "../core/layer";
 import {
@@ -295,6 +302,8 @@ import { composeForDisplay, shrinkSurfaceForDisplay } from "../engine/displayCom
 import { completeInpaint } from "../engine/algos/inpaintComplete";
 import { asRaster, createRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
+import { gaussianBlur } from "../engine/filters/kernels";
+import { blendWithSelection, toBuffer } from "../core/filterOps";
 import {
   DEFAULT_BRUSH,
   Stroke,
@@ -312,6 +321,7 @@ import {
   type RetouchMode,
   type RetouchSettings,
 } from "../engine/retouch";
+import { SmudgeStroke } from "../engine/smudge";
 import {
   DEFAULT_SHAPE,
   constrainEnd,
@@ -333,6 +343,7 @@ import {
   isRetouchTool,
   isSelectionTool,
   isShapeTool,
+  isSmudgeTool,
   isTextTool,
   toolByShortcut,
   toolsInGroup,
@@ -385,6 +396,7 @@ import InfoModals, { type InfoModalKind } from "./components/InfoModals";
 import ImageSizeDialog from "./components/ImageSizeDialog";
 import ExportDialog from "./components/ExportDialog";
 import { encodeCanvas, formatSpec, suggestFileName, type ExportFormat } from "../engine/exportImage";
+import { sendImageToGroma } from "../engine/handoff";
 import Modal from "./components/Modal";
 import ColorChip from "./components/ColorChip";
 import { Check } from "./components/controls";
@@ -544,6 +556,7 @@ const SHAPE_KIND: Record<string, ShapeKind> = {
   shapeRect: "rect",
   shapeEllipse: "ellipse",
   shapeLine: "line",
+  leafPen: "leaf",
 };
 
 /**
@@ -635,6 +648,8 @@ export default function EditorShell({
   }));
   /** 修饰工具参数（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵共用一套） */
   const [retouch, setRetouch] = useState<RetouchSettings>(DEFAULT_RETOUCH);
+  /** 涂抹力度：和画笔参数分开记，画笔预设换了也不改用户的推挤手感。 */
+  const [smudgeStrength, setSmudgeStrength] = useState(60);
   /** 形状工具参数（填充 / 描边 / 线宽），矩形 / 椭圆 / 直线共用一套 */
   const [shape, setShape] = useState<ShapeSettings>(DEFAULT_SHAPE);
   /** 仿制 / 修复的取样点（Alt + 单击设定），null 表示还没取样 */
@@ -1247,6 +1262,7 @@ export default function EditorShell({
   const strokeRef = useRef<Stroke | null>(null);
   /** 正在进行的修饰笔画（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵），同样是抬笔才落库 */
   const retouchRef = useRef<RetouchStroke | null>(null);
+  const smudgeRef = useRef<SmudgeStroke | null>(null);
   /** 拖拽起点（文档坐标） */
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   /** 平移起点（屏幕坐标） */
@@ -1287,6 +1303,8 @@ export default function EditorShell({
   } | null>(null);
   /** 正在拖绘的形状；抬笔前只画浮层，不动文档 */
   const shapeRef = useRef<ShapePaint | null>(null);
+  /** 柳叶笔的原始轨迹；Shift 吸附只改末端那一点，不能把吸附结果累进采样里。 */
+  const leafRawRef = useRef<LeafPoint[]>([]);
   /**
    * 当前自由变换的参数；null 表示没在变换。
    * 拖动时只改这个 ref 并 scheduleRender()，不进 React 状态 ——
@@ -1430,6 +1448,7 @@ export default function EditorShell({
     const act = activeLayer(docNow);
     const stroke = strokeRef.current;
     const rt = retouchRef.current;
+    const smudge = smudgeRef.current;
     const moving = moveRef.current;
     const offset = moving.dx !== 0 || moving.dy !== 0;
 
@@ -1561,7 +1580,7 @@ export default function EditorShell({
     }
 
     // 没有进行中的编辑：直接走与导出完全相同的合成路径（含蒙版与调整图层）。
-    if (!act || (!stroke && !rt && !offset)) {
+    if (!act || (!stroke && !rt && !smudge && !offset)) {
       composeForDisplay(docNow, comp, dispScale);
       present();
       return;
@@ -1583,6 +1602,10 @@ export default function EditorShell({
           tool === "eraser" ? "destination-out" : "source-over";
         mctx.drawImage(stroke.buffer, 0, 0);
         mctx.restore();
+      }
+      if (smudge) {
+        const mctx = mustCtx(eff);
+        mctx.drawImage(smudge.buffer, 0, 0);
       }
       composeForDisplay(docNow, comp, dispScale);
       present();
@@ -1635,6 +1658,7 @@ export default function EditorShell({
         mctx.drawImage(stroke.buffer, 0, 0);
         mctx.restore();
       }
+      if (smudge) mustCtx(mask).drawImage(smudge.buffer, 0, 0);
       composeForDisplay(docNow, comp, dispScale, { index: at, layer: { ...act, mask } });
       present();
       return;
@@ -1724,6 +1748,9 @@ export default function EditorShell({
       sctx.drawImage(stroke.buffer, 0, 0);
       sctx.restore();
     }
+    // 涂抹的 buffer 是「只含被推过像素」的增量层，直接 source-over 到本层副本，
+    // 预览与抬笔落库用的是同一张画布，不会出现松手才跳变。
+    if (smudge) sctx.drawImage(smudge.buffer, 0, 0);
     composeForDisplay(docNow, comp, dispScale, {
       index: at,
       layer: { ...act, surface: scratch },
@@ -1918,6 +1945,29 @@ export default function EditorShell({
   );
 
   /**
+   * 绘制蒙版 = 文档选区 ∩（图层 alphaLock 时的已有像素）。
+   * 画笔 / 涂抹 / 柳叶笔 / 油漆桶统一直达这一条，避免各画各的越界逻辑。
+   * 只有 alphaLock 开启时才复制整层 alpha，平时直接返回选区引用，零额外开销。
+   */
+  const paintingMask = useCallback(
+    (d: StrataDoc, layer: StrataLayer): HTMLCanvasElement | null => {
+      if (!layer.alphaLock) return d.selection ?? null;
+      const alpha = createSurface(d.width, d.height);
+      mustCtx(alpha).drawImage(layer.surface, 0, 0);
+      if (!d.selection) return alpha;
+      const both = createSurface(d.width, d.height);
+      const c = mustCtx(both);
+      c.drawImage(alpha, 0, 0);
+      c.save();
+      c.globalCompositeOperation = "destination-in";
+      c.drawImage(d.selection, 0, 0);
+      c.restore();
+      return both;
+    },
+    [],
+  );
+
+  /**
    * 吸附：把落点吸到最近的参考线 / 画布边。
    * 阈值按 6 个屏幕像素折算回文档坐标，所以放大时手感不会变松。
    */
@@ -1960,6 +2010,7 @@ export default function EditorShell({
   const resetGesture = useCallback(() => {
     strokeRef.current = null;
     retouchRef.current = null;
+    smudgeRef.current = null;
     dragRef.current = null;
     gradRef.current = null;
     moveRef.current = { dx: 0, dy: 0 };
@@ -1987,7 +2038,7 @@ export default function EditorShell({
       el.style.transform = `translate(${clientX - box.left}px, ${clientY - box.top}px)`;
 
       // 正在落笔时不画圆圈：笔迹本身就是反馈，再套个圈反而挡视线
-      if (strokeRef.current || retouchRef.current) {
+      if (strokeRef.current || retouchRef.current || smudgeRef.current) {
         el.dataset.mode = "none";
         return;
       }
@@ -2742,6 +2793,7 @@ export default function EditorShell({
         return;
       }
       if (isShapeTool(tool)) {
+        const leaf = tool === "leafPen";
         shapeRef.current = {
           kind: SHAPE_KIND[tool],
           a: p,
@@ -2751,8 +2803,30 @@ export default function EditorShell({
           strokeWidth: shape.strokeWidth,
           fillColor: fg,
           strokeColor: bg,
+          ...(leaf
+            ? {
+                points: [p] as LeafPoint[],
+                leafMode: shape.leafMode,
+                leafSmooth: shape.leafSmooth,
+                leafBlur: shape.leafBlur,
+              }
+            : {}),
         };
+        if (leaf) leafRawRef.current = [p];
         setShapeDragging(true);
+        return;
+      }
+      if (isSmudgeTool(tool)) {
+        // 涂抹的颜色来自画布本身，不是前景色；选区 / Alpha 锁定都走蒙版限制
+        const s = new SmudgeStroke(act.surface, {
+          size: brush.size,
+          hardness: brush.hardness,
+          flow: brush.flow,
+          strength: smudgeStrength,
+        }, paintingMask(doc, act));
+        s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false));
+        smudgeRef.current = s;
+        scheduleRender();
         return;
       }
       if (usesBrush(tool)) {
@@ -2786,7 +2860,7 @@ export default function EditorShell({
           docH,
           settings,
           tool === "eraser" || eraserEnd,
-          doc.selection ?? null,
+          paintingMask(doc, act),
         );
         s.setPen(pen);
         const press = pressureFrom(e, brush.penPressure !== false);
@@ -2819,7 +2893,7 @@ export default function EditorShell({
         }
         const rt = new RetouchStroke(act.surface, { ...retouch, mode }, {
           anchor: needsSample(mode) ? anchor : null,
-          mask: doc.selection ?? null,
+          mask: paintingMask(doc, act),
         });
         rt.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false), e.timeStamp);
         rt.pull();
@@ -2828,7 +2902,9 @@ export default function EditorShell({
         return;
       }
       if (tool === "bucket") {
-        if (floodFill(act.surface, p.x, p.y, fg, tolerance, doc.selection)) {
+        if (
+          floodFill(act.surface, p.x, p.y, fg, tolerance, paintingMask(doc, act), contiguous)
+        ) {
           onCommit({ ...doc, dirty: true }, zh.tools.bucket);
         }
         return;
@@ -2855,6 +2931,8 @@ export default function EditorShell({
       bg,
       scheduleRender,
       sampleAllLayers,
+      smudgeStrength,
+      paintingMask,
       scale,
       spaceDown,
       tolerance,
@@ -2881,7 +2959,9 @@ export default function EditorShell({
       // 正在连续画 / 拖图层：续一下"交互中"的计时，避免操作到一半就退回全质量
       // （移动工具以前漏了这一条，拖动时每帧都按视图全分辨率整档重合成，
       //  文字层这种整幅画布的大图层尤其明显；补上后走既有降档 + 停手 300ms 补全）
-      if (strokeRef.current || retouchRef.current || dragRef.current) markInteracting();
+      if (strokeRef.current || retouchRef.current || smudgeRef.current || dragRef.current) {
+        markInteracting();
+      }
       // 套索进行中：记下光标位置，覆盖层的 RAF 循环会读它画橡皮筋
       if (polyPts) polyHoverRef.current = docXY(e.clientX, e.clientY);
       const from = panRef.current;
@@ -3002,8 +3082,42 @@ export default function EditorShell({
       // 形状：同样只更新 ref；按住 Shift 时端点被约束成正方 / 45°
       const sp = shapeRef.current;
       if (sp) {
+        if (sp.kind === "leaf") {
+          // 柳叶笔收的是整条轨迹；合并事件里的中间点，松手前只改 ref 不进 state
+          const native = e.nativeEvent;
+          const batch =
+            typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
+          let raw = leafRawRef.current;
+          const feed = (ev: { clientX: number; clientY: number }) => {
+            raw = pushLeafPoint(raw, docXY(ev.clientX, ev.clientY), 1.5);
+          };
+          if (batch.length > 1) for (const ev of batch) feed(ev);
+          else feed(native);
+          leafRawRef.current = raw;
+          const at = raw[raw.length - 1] ?? docPoint(e);
+          const end = e.shiftKey && raw.length > 1 ? snapLeafEnd(raw[0], at) : at;
+          shapeRef.current = { ...sp, points: [...raw.slice(0, -1), end], b: end };
+          return;
+        }
         const q = docPoint(e);
         shapeRef.current = { ...sp, b: constrainEnd({ ...sp, b: q }, e.shiftKey) };
+        return;
+      }
+      const sm = smudgeRef.current;
+      if (sm) {
+        const native = e.nativeEvent;
+        const batch =
+          typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
+        if (batch.length > 1) {
+          for (const ev of batch) {
+            const q = docXY(ev.clientX, ev.clientY);
+            sm.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false));
+          }
+        } else {
+          const q = docXY(native.clientX, native.clientY);
+          sm.extend(q.x, q.y, pressureFrom(native, brush.penPressure !== false));
+        }
+        scheduleRender();
         return;
       }
       const s = strokeRef.current;
@@ -3062,7 +3176,7 @@ export default function EditorShell({
         scheduleRender();
       }
     },
-    [docPoint, docXY, doc, fg, scheduleRender, snapPoint, syncCursor, tool],
+    [docPoint, docXY, doc, fg, brush.penPressure, scheduleRender, snapPoint, syncCursor, tool],
   );
 
   const onUp = useCallback(() => {
@@ -3137,10 +3251,70 @@ export default function EditorShell({
     const act = activeLayer(doc);
     if (!act) return;
 
+    // 涂抹：整笔只用一张增量画布，抬笔时一次性盖回本层，保留一步可撤销
+    const sm = smudgeRef.current;
+    if (sm) {
+      sm.finish(act.surface);
+      resetGesture();
+      onCommit({ ...doc, dirty: true }, zh.tools.smudge);
+      return;
+    }
+
     // 形状：抬笔才真正落库（拖动过程全在浮层上）
     const sp = shapeRef.current;
     if (sp) {
+      // sp.points 是 move 里算好的轨迹（含 Shift 吸附后的末端）；
+      // leafRawRef 只是采样中转，抬笔时不能用它覆盖，否则吸附白做了。
       resetGesture();
+      if (sp.kind === "leaf") {
+        leafRawRef.current = [];
+        const leaf = sp;
+        if (!isLeafDrawable(leaf.points ?? [])) {
+          render();
+          return;
+        }
+        const hollow = sp.leafMode === "hollow";
+        const blur = sp.leafMode === "blur";
+        // 三种模式共用同一张柳叶形遮罩：实心拿它当墨水，空心拿它当橡皮，
+        // 模糊拿它当滤镜选区（边缘按 alpha 混合，不出现硬切边）。
+        const ink = createSurface(docW, docH);
+        if (
+          !drawShape(ink, {
+            ...leaf,
+            leafMode: "solid",
+            fillColor: hollow || blur ? "#ffffff" : sp.fillColor,
+          })
+        ) {
+          setError(zh.options.shapeNoPaint);
+          return;
+        }
+        const clip = paintingMask(doc, act);
+        if (clip) {
+          const ictx = mustCtx(ink);
+          ictx.save();
+          ictx.globalCompositeOperation = "destination-in";
+          ictx.drawImage(clip, 0, 0);
+          ictx.restore();
+        }
+        const next = cloneSurface(act.surface);
+        if (blur) {
+          const srcImg = readPixels(act.surface);
+          const src = toBuffer(srcImg);
+          const filtered = gaussianBlur(src, Math.max(1, Math.round(sp.leafBlur ?? 12)));
+          const maskImg = readPixels(ink);
+          const merged = blendWithSelection(src, filtered, maskImg);
+          writePixels(next, new ImageData(new Uint8ClampedArray(merged.data), docW, docH));
+        } else {
+          const nctx = mustCtx(next);
+          nctx.save();
+          if (hollow) nctx.globalCompositeOperation = "destination-out";
+          nctx.drawImage(ink, 0, 0);
+          nctx.restore();
+        }
+        const layers = doc.layers.map((l) => (l.id === act.id ? { ...l, surface: next } : l));
+        onCommit({ ...doc, layers, dirty: true }, zh.tools.leafPen);
+        return;
+      }
       const b = shapeBounds(sp);
       const tooSmall =
         sp.kind === "line"
@@ -3156,11 +3330,12 @@ export default function EditorShell({
         setError(zh.options.shapeNoPaint);
         return;
       }
-      if (doc.selection) {
+      const clip = paintingMask(doc, act);
+      if (clip) {
         const ictx = mustCtx(ink);
         ictx.save();
         ictx.globalCompositeOperation = "destination-in";
-        ictx.drawImage(doc.selection, 0, 0);
+        ictx.drawImage(clip, 0, 0);
         ictx.restore();
       }
       const next = cloneSurface(act.surface);
@@ -3182,7 +3357,7 @@ export default function EditorShell({
       // 蒙版涂抹只认蒙版，其余笔画被当前选区限制范围
       s.finish(
         maskEdit && act.mask ? act.mask : act.surface,
-        maskEdit ? null : doc.selection,
+        maskEdit ? null : paintingMask(doc, act),
       );
       // 解除 Shift 直线锁定（落点已在 onDown/onMove 记录）
       lineLockRef.current = false;
@@ -3230,7 +3405,7 @@ export default function EditorShell({
       }
       render();
     }
-  }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, quickMask, feather, commitSelection]);
+  }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, quickMask, feather, commitSelection, paintingMask]);
 
   /* ------------------------------------------------------------ 标尺拖参考线 */
 
@@ -3629,6 +3804,29 @@ export default function EditorShell({
     },
     [doc, docW, docH],
   );
+
+  /** 把当前处理好的画布交给 Groma：全分辨率干净合成 → PNG → 启动对方导入。 */
+  const sendToGroma = useCallback(async () => {
+    if (exportingRef.current) return;
+    exportingRef.current = true;
+    let canvas: HTMLCanvasElement | null = null;
+    try {
+      // 与导出走同一条干净合成路径：通道视图 / 校样色偏都不能跟着送过去。
+      canvas = createSurface(docW, docH);
+      composeDoc(doc, canvas);
+      const bytes = await encodeCanvas(canvas, "png", 100);
+      await sendImageToGroma(new Uint8Array(bytes), doc.name || "Strata 图片");
+      setToast(zh.editor.sendGromaDone);
+    } catch (e) {
+      setError(`${zh.editor.sendGromaFail}：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      exportingRef.current = false;
+    }
+  }, [doc, docW, docH]);
 
   /**
    * 打开文件的重入锁。
@@ -5844,6 +6042,8 @@ export default function EditorShell({
           return docs.length > 1 ? { run: closeOthers } : undefined;
         case "file.export.quickExportAsPng":
           return { run: () => void exportPng(), hint: "Ctrl+Shift+S" };
+        case "file.sendToGroma":
+          return { run: () => void sendToGroma() };
         case "file.export.exportAs":
           return { run: () => void exportPng() };
         case "file.export.psd":
@@ -9296,7 +9496,7 @@ export default function EditorShell({
       }
       // 变换进行中：Esc 优先放弃变换（PS 的老规矩）
       if (cancelFreeTransform()) return;
-      if (strokeRef.current) {
+      if (strokeRef.current || smudgeRef.current) {
         resetGesture();
         render();
       }
@@ -9825,6 +10025,8 @@ export default function EditorShell({
             onBrush={(patch) => setBrush((b) => ({ ...b, ...patch }))}
             retouch={retouch}
             onRetouch={(patch) => setRetouch((r) => ({ ...r, ...patch }))}
+            smudgeStrength={smudgeStrength}
+            onSmudgeStrength={setSmudgeStrength}
             shape={shape}
             onShape={(patch) => setShape((s2) => ({ ...s2, ...patch }))}
             text={textSet}

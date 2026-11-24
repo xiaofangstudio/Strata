@@ -17,6 +17,7 @@ export const RAW: RawRow[] = [
   ["File", "Revert", "F12", "file.revert"],
   ["File", "---", "", "---"],
   ["File/Export", "Quick Export as PNG", "", "file.export.quickExportAsPng"],
+  ["File/Export", "Send Processed Image to Groma", "", "file.sendToGroma"],
   ["File/Export", "Export As…", "Ctrl+Alt+Shift+W", "file.export.exportAs"],
   ["File/Export", "Photoshop PSD…", "", "file.export.psd"],
   ["File/Export", "Export Preferences…", "", "file.export.exportPreferences"],

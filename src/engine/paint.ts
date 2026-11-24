@@ -1434,6 +1434,9 @@ export function pickColor(
  * 油漆桶：按容差做四邻域洪水填充。
  *
  * 逐像素扫描，用显式栈而不是递归 —— 大图上递归会爆栈。
+ *
+ * `contiguous = false` 时不做连通扩散，直接把整幅图里所有与落点相近的像素
+ * 一次填掉 —— 这就是油漆桶的「填所有相近色」，仍然只算一步历史。
  */
 export function floodFill(
   surface: HTMLCanvasElement,
@@ -1443,6 +1446,8 @@ export function floodFill(
   tolerance = 32,
   /** 非空时只在选区内扩散：选区之外一律视作「不相近」，洪水到此为止 */
   mask?: HTMLCanvasElement | null,
+  /** true = 只填与落点相连的一片；false = 全图所有相近色一起填 */
+  contiguous = true,
 ): boolean {
   const w = surface.width;
   const h = surface.height;
@@ -1478,6 +1483,21 @@ export function floodFill(
     const da = d[i + 3] - sa;
     return dr * dr + dg * dg + db * db + da * da <= tol;
   };
+
+  if (!contiguous) {
+    let changed = false;
+    for (let i = 0; i < w * h; i += 1) {
+      const p = i * 4;
+      if (!near(p)) continue;
+      d[p] = tr;
+      d[p + 1] = tg;
+      d[p + 2] = tb;
+      d[p + 3] = 255;
+      changed = true;
+    }
+    if (changed) ctx.putImageData(img, 0, 0);
+    return changed;
+  }
 
   const filled = new Uint8Array(w * h);
   const stack: number[] = [x0, y0];

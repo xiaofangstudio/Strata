@@ -1457,6 +1457,8 @@ export interface StrataLayer {
   blend: BlendId;
   /** 锁定后禁止绘制与变换 */
   locked: boolean;
+  /** 锁定透明像素：只能在图层已有像素上落色，线稿上色不越界（默认关） */
+  alphaLock?: boolean;
   /** 像素层承载像素的离屏画布，尺寸恒等于文档尺寸；调整层不占像素 */
   surface: HTMLCanvasElement;
   /** 图层种类 */

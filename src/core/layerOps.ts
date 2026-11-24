@@ -63,6 +63,7 @@ export type LayerPatch = Partial<
     | "opacity"
     | "blend"
     | "locked"
+    | "alphaLock"
     | "surface"
     | "mask"
     | "maskActive"

@@ -2177,6 +2177,26 @@ function LayerRow({
       )}
 
       {layer.locked && <span className="ly-flag">{zh.layers.locked}</span>}
+      {layer.alphaLock && <span className="ly-flag is-accent">α</span>}
+
+      {layer.kind === "pixel" && (
+        <button
+          type="button"
+          className={layer.alphaLock ? "ly-lock ly-alpha is-on" : "ly-lock ly-alpha"}
+          title={layer.alphaLock ? zh.layers.alphaUnlock : zh.layers.alphaLock}
+          aria-label={layer.alphaLock ? zh.layers.alphaUnlock : zh.layers.alphaLock}
+          aria-pressed={Boolean(layer.alphaLock)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange(
+              updateLayer(doc, layer.id, { alphaLock: !layer.alphaLock }),
+              layer.alphaLock ? zh.layers.alphaUnlock : zh.layers.alphaLock,
+            );
+          }}
+        >
+          α
+        </button>
+      )}
 
       <button
         type="button"

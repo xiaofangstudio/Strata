@@ -20,6 +20,8 @@ mod strata_cms;
 // HEIC 解码封装与统一的解码 / 色彩管理命令
 mod heif;
 mod decode;
+// 与 Groma 的单向交接（Strata 成图 → Groma 图片节点）。
+mod handoff;
 
 /// 运行环境信息，开始页面的「关于」区块使用。
 #[derive(Serialize)]
@@ -268,6 +270,7 @@ pub fn run() {
             window_frost_acrylic,
             launch_intent,
             list_dir,
+            handoff::send_image_to_groma,
             exr::exr_part_info,
             exr::exr_read_all,
             wia::wia_devices,

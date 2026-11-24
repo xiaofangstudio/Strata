@@ -13,6 +13,7 @@ import {
   isRetouchTool,
   isSelectionTool,
   isShapeTool,
+  isSmudgeTool,
   isTextTool,
   usesBrush,
   type ToolId,
@@ -60,6 +61,9 @@ interface Props {
   /** 修饰工具参数（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵共用一套） */
   retouch: RetouchSettings;
   onRetouch: (patch: Partial<RetouchSettings>) => void;
+  /** 涂抹力度（推颜色强度 0–100） */
+  smudgeStrength: number;
+  onSmudgeStrength: (v: number) => void;
   /** 形状工具参数（矩形 / 椭圆 / 直线共用一套） */
   shape: ShapeSettings;
   onShape: (patch: Partial<ShapeSettings>) => void;
@@ -104,6 +108,8 @@ export default function OptionsBar({
   onBrush,
   retouch,
   onRetouch,
+  smudgeStrength,
+  onSmudgeStrength,
   shape,
   onShape,
   text,
@@ -136,6 +142,8 @@ export default function OptionsBar({
     onBrush,
     retouch,
     onRetouch,
+    smudgeStrength,
+    onSmudgeStrength,
     shape,
     onShape,
     text,
@@ -200,6 +208,8 @@ interface Ctx {
   onBrush: (patch: Partial<BrushSettings>) => void;
   retouch: RetouchSettings;
   onRetouch: (patch: Partial<RetouchSettings>) => void;
+  smudgeStrength: number;
+  onSmudgeStrength: (v: number) => void;
   shape: ShapeSettings;
   onShape: (patch: Partial<ShapeSettings>) => void;
   text: TextSettings;
@@ -276,6 +286,55 @@ function ColorPair({ c, compact }: { c: Ctx; compact?: boolean }) {
 }
 
 function buildControls(tool: ToolId, c: Ctx): Built {
+  // 涂抹：沿用画笔的笔尖 / 尺寸 / 硬度 / 流量，颜色由画布决定，另给一个推挤力度
+  if (isSmudgeTool(tool)) {
+    return {
+      main: [
+        <BrushTipPreview key="tip" brush={c.brush} isEraser={false} />,
+        <Slider
+          key="size"
+          label={zh.options.size}
+          min={1}
+          max={500}
+          value={c.brush.size}
+          onChange={(v) => c.onBrush({ size: v })}
+        />,
+        <Slider
+          key="strength"
+          label={zh.options.smudgeStrength}
+          min={1}
+          max={100}
+          value={c.smudgeStrength}
+          onChange={c.onSmudgeStrength}
+          suffix="%"
+        />,
+      ],
+      extra: (
+        <>
+          <p className="opt-note">{zh.options.smudgeHint}</p>
+          <Slider
+            key="hardness"
+            label={zh.options.hardness}
+            min={0}
+            max={100}
+            value={c.brush.hardness}
+            onChange={(v) => c.onBrush({ hardness: v })}
+            suffix="%"
+          />
+          <Slider
+            key="flow"
+            label={zh.options.flow}
+            min={1}
+            max={100}
+            value={c.brush.flow}
+            onChange={(v) => c.onBrush({ flow: v })}
+            suffix="%"
+          />
+        </>
+      ),
+    };
+  }
+
   if (usesBrush(tool)) {
     const isEraser = tool === "eraser";
     return {
@@ -653,6 +712,77 @@ function buildControls(tool: ToolId, c: Ctx): Built {
     return { main, extra: <>{extra}</> };
   }
 
+  // 柳叶笔：实心 / 空心是它的核心语义，不套用普通形状的填充 / 描边三件
+  if (tool === "leafPen") {
+    const st = c.shape;
+    return {
+      main: [
+        <SegGroup
+          key="leaf-mode"
+          label={zh.options.leafMode}
+          value={st.leafMode}
+          options={[
+            { value: "solid", label: zh.options.leafSolid, hint: zh.options.leafSolidHint },
+            { value: "hollow", label: zh.options.leafHollow, hint: zh.options.leafHollowHint },
+            { value: "blur", label: zh.options.leafBlur, hint: zh.options.leafBlurHint },
+          ]}
+          onChange={(v) => c.onShape({ leafMode: v })}
+        />,
+        <Slider
+          key="leaf-smooth"
+          label={zh.options.leafSmooth}
+          min={0}
+          max={100}
+          value={Math.round(st.leafSmooth * 100)}
+          onChange={(v) => c.onShape({ leafSmooth: v / 100 })}
+          suffix="%"
+        />,
+        ...(st.leafMode === "blur"
+          ? [
+              <Slider
+                key="leaf-blur"
+                label={zh.options.leafBlurRadius}
+                min={1}
+                max={80}
+                value={st.leafBlur ?? 12}
+                onChange={(v) => c.onShape({ leafBlur: v })}
+                suffix="px"
+              />,
+            ]
+          : []),
+      ],
+      extra: (
+        <>
+          <p className="opt-note">{zh.options.leafHint}</p>
+          <p className="opt-note">
+            {st.leafMode === "hollow"
+              ? zh.options.leafHollowHint
+              : st.leafMode === "blur"
+                ? zh.options.leafBlurHint
+                : zh.options.leafSolidHint}
+          </p>
+          <ColorField
+            label={zh.options.fill}
+            hex={c.fg}
+            onChange={c.onFg}
+            footer={
+              <button type="button" className="btn-ghost btn-xs" onClick={c.onSwap}>
+                {zh.options.swap}
+              </button>
+            }
+          />
+          <button
+            type="button"
+            className="btn-ghost btn-xs"
+            onClick={() => c.onShape(DEFAULT_SHAPE)}
+          >
+            {zh.options.reset}
+          </button>
+        </>
+      ),
+    };
+  }
+
   // 形状三件（矩形 / 椭圆 / 直线）：填充 / 描边 / 线宽恒定在前，说明进「⋯ 更多」
   if (isShapeTool(tool)) {
     const note =
@@ -952,6 +1082,13 @@ function buildControls(tool: ToolId, c: Ctx): Built {
           max={100}
           value={c.tolerance}
           onChange={c.onTolerance}
+        />,
+        <Check
+          key="contiguous"
+          label={zh.options.contiguous}
+          hint={zh.options.contiguousHint}
+          on={c.contiguous}
+          onChange={c.onContiguous}
         />,
         <ColorField
           key="fg"

@@ -7,8 +7,9 @@
  * 油漆桶处理选区的方式完全一致。
  */
 import { mustCtx } from "./surface";
+import { smoothLeafPoints, type LeafMode, type LeafPoint } from "../core/leafBrush";
 
-export type ShapeKind = "rect" | "ellipse" | "line";
+export type ShapeKind = "rect" | "ellipse" | "line" | "leaf";
 
 export interface ShapeSettings {
   /** 用前景色铺满形状内部 */
@@ -17,12 +18,21 @@ export interface ShapeSettings {
   stroke: boolean;
   /** 描边线宽（文档像素） */
   strokeWidth: number;
+  /** 柳叶笔：实心覆盖 / 空心擦除 / 模糊 */
+  leafMode: LeafMode;
+  /** 柳叶笔轨迹平滑强度 0..1 */
+  leafSmooth: number;
+  /** 柳叶笔模糊半径（文档像素） */
+  leafBlur: number;
 }
 
 export const DEFAULT_SHAPE: ShapeSettings = {
   fill: true,
   stroke: false,
   strokeWidth: 2,
+  leafMode: "solid",
+  leafSmooth: 0.5,
+  leafBlur: 12,
 };
 
 export interface ShapePaint {
@@ -34,6 +44,11 @@ export interface ShapePaint {
   strokeWidth: number;
   fillColor: string;
   strokeColor: string;
+  /** 柳叶笔：按下后拖出的轨迹；closePath 会自动补上「终点 → 起点」那条弦 */
+  points?: readonly LeafPoint[];
+  leafMode?: LeafMode;
+  leafSmooth?: number;
+  leafBlur?: number;
 }
 
 export interface ShapeBounds {
@@ -56,6 +71,23 @@ export function shapeBounds(s: ShapePaint): ShapeBounds {
 /** 把形状的路径放进上下文；太小画不出东西时返回 false。 */
 function pathOf(c: CanvasRenderingContext2D, s: ShapePaint): boolean {
   c.beginPath();
+  if (s.kind === "leaf") {
+    const src = s.points ?? [];
+    if (src.length < 3) return false;
+    const p = smoothLeafPoints(src, s.leafSmooth ?? 0.5);
+    c.moveTo(p[0].x, p[0].y);
+    // 中间点走二次贝塞尔控制点，落到相邻点中点；轨迹平滑但保留手腕的方向感
+    for (let i = 1; i < p.length - 1; i += 1) {
+      const cur = p[i];
+      const next = p[i + 1];
+      c.quadraticCurveTo(cur.x, cur.y, (cur.x + next.x) / 2, (cur.y + next.y) / 2);
+    }
+    const last = p[p.length - 1];
+    c.lineTo(last.x, last.y);
+    // 柳叶形的关键：自动把终点连回起点，围出闭合区域再填充
+    c.closePath();
+    return true;
+  }
   if (s.kind === "line") {
     c.moveTo(s.a.x, s.a.y);
     c.lineTo(s.b.x, s.b.y);
@@ -99,8 +131,9 @@ export function constrainEnd(s: ShapePaint, shift: boolean): { x: number; y: num
 
 /** 在目标画布上就地画一个形状；返回是否真的落下了像素。 */
 export function drawShape(target: HTMLCanvasElement, s: ShapePaint): boolean {
-  const wantsFill = s.kind !== "line" && s.fill;
-  const wantsStroke = s.stroke && s.strokeWidth > 0;
+  // 柳叶笔生来就是填充工具，不受「填充 / 描边」两个复选框影响
+  const wantsFill = s.kind === "leaf" || (s.kind !== "line" && s.fill);
+  const wantsStroke = s.kind !== "leaf" && s.stroke && s.strokeWidth > 0;
   if (!wantsFill && !wantsStroke) return false;
 
   const c = mustCtx(target);
@@ -108,6 +141,28 @@ export function drawShape(target: HTMLCanvasElement, s: ShapePaint): boolean {
   if (!pathOf(c, s)) {
     c.restore();
     return false;
+  }
+  // 模糊柳叶笔不改颜色而是柔化覆盖区域，预览用蓝色虚线与实心模式区分
+  if (s.kind === "leaf" && s.leafMode === "blur") {
+    c.fillStyle = "rgba(96, 165, 250, 0.24)";
+    c.fill();
+    c.strokeStyle = "rgba(96, 165, 250, 0.95)";
+    c.lineWidth = 1.5;
+    c.setLineDash([6, 4]);
+    c.stroke();
+    c.restore();
+    return true;
+  }
+  // 空心柳叶笔会把覆盖区域的颜色减掉，预览用红白虚线提示「这里是擦除」
+  if (s.kind === "leaf" && s.leafMode === "hollow") {
+    c.fillStyle = "rgba(255, 92, 92, 0.30)";
+    c.fill();
+    c.strokeStyle = "rgba(255, 92, 92, 0.95)";
+    c.lineWidth = 1.5;
+    c.setLineDash([6, 4]);
+    c.stroke();
+    c.restore();
+    return true;
   }
   if (wantsFill) {
     c.fillStyle = s.fillColor;

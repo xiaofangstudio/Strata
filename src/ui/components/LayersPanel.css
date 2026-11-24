@@ -379,6 +379,13 @@
   color: var(--accent);
 }
 
+/* 锁定透明像素：用 α 字面量直接提示「锁的是 Alpha，不是整层」 */
+.ly-alpha {
+  width: 20px;
+  font: 600 12px/1 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
 /* 视频层的分帧缩略图条：2×2 小格，当前帧高亮，点击直接跳帧 */
 .ly-frames {
   flex: none;
