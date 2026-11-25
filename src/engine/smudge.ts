@@ -7,6 +7,7 @@
  * 得到的是真正的混色过渡，不是模糊滤镜冒充的。
  */
 import { createSurface, mustCtx, readPixels } from "./surface";
+import { radialPoints, type RadialConfig } from "../core/radialSymmetry";
 
 export interface SmudgeSettings {
   /** 笔尖直径（文档像素） */
@@ -17,6 +18,8 @@ export interface SmudgeSettings {
   flow: number;
   /** 推挤强度 0–100：每次落笔尖混合多少取样色 */
   strength: number;
+  /** 径向对称参数；有值时每个笔尖按扇区同时推挤 */
+  radial?: RadialConfig | null;
 }
 
 /** 圆形范围内取平均色；范围外、透明像素参与会拉低颜色，故按 alpha 加权。 */
@@ -178,36 +181,46 @@ export class SmudgeStroke {
 
   private dab(x: number, y: number, radius: number, pressure: number): void {
     const r = Math.max(1, (radius / 2) * (0.4 + pressure * 0.6));
-    const color = sampleAvg(this.data, this.w, this.h, x, y, Math.max(1, r * 0.7));
     const amount =
       (this.settings.strength / 100) *
       (this.settings.flow / 100) *
       (0.25 + pressure * 0.75);
-    smudgeDeltaStamp(
-      this.delta,
-      this.w,
-      this.h,
-      x,
-      y,
-      r,
-      color,
-      amount,
-      this.settings.hardness,
-      this.maskData,
-    );
-    // 取样源同步推进：下一颗笔尖取到的就是刚刚被推过去的颜色
-    smudgeStamp(
-      this.data,
-      this.w,
-      this.h,
-      x,
-      y,
-      r,
-      color,
-      amount,
-      this.settings.hardness,
-      this.maskData,
-    );
+    const cfg = this.settings.radial;
+    const points = cfg
+      ? radialPoints(x, y, {
+          ...cfg,
+          center: cfg.center ?? { x: this.w / 2, y: this.h / 2 },
+        })
+      : [{ x, y }];
+    for (const p of points) {
+      // 每个扇区各自取样：颜色沿各自方向被推走，不是把同一个颜色贴 N 份
+      const color = sampleAvg(this.data, this.w, this.h, p.x, p.y, Math.max(1, r * 0.7));
+      smudgeDeltaStamp(
+        this.delta,
+        this.w,
+        this.h,
+        p.x,
+        p.y,
+        r,
+        color,
+        amount,
+        this.settings.hardness,
+        this.maskData,
+      );
+      // 取样源同步推进：下一颗笔尖取到的就是刚刚被推过去的颜色
+      smudgeStamp(
+        this.data,
+        this.w,
+        this.h,
+        p.x,
+        p.y,
+        r,
+        color,
+        amount,
+        this.settings.hardness,
+        this.maskData,
+      );
+    }
   }
 
   begin(x: number, y: number, pressure = 0.5): void {

@@ -16,6 +16,7 @@
  */
 import { cloneSurface, createSurface, mustCtx } from "./surface";
 import { tiltToBrush, type PenSample } from "./pen";
+import { radialPoints, type RadialConfig, type RadialPoint } from "../core/radialSymmetry";
 
 /**
  * 笔尖材质。
@@ -35,7 +36,7 @@ export type BrushTip = "round" | "pencil" | "chalk" | "bristle" | "spray";
 export type BrushTexture = "none" | "paper" | "canvas" | "grain" | "dots";
 
 /** 对称模式：绕画布中轴镜像落笔（PhotoCraft 的 Symmetry）。 */
-export type SymmetryMode = "none" | "vertical" | "horizontal" | "both";
+export type SymmetryMode = "none" | "vertical" | "horizontal" | "both" | "radial";
 
 /** 画笔参数。 */
 export interface BrushSettings {
@@ -144,8 +145,14 @@ export interface BrushSettings {
   /** 纹理对比度 -100–100：越大颗粒越硬、越分明 */
   textureContrast: number;
   /* ---------------- 对称 ---------------- */
-  /** 绕画布中轴镜像落笔；缺省 none */
+  /** 绕画布中轴镜像落笔；radial = 绕中心按扇区旋转复制 */
   symmetry?: SymmetryMode;
+  /** 径向对称扇区数 2–32 */
+  radialSectors?: number;
+  /** 径向对称每个扇区是否再镜像一份 */
+  radialMirror?: boolean;
+  /** 径向对称中心；缺省为画布中心 */
+  radialCenter?: RadialPoint | null;
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
@@ -833,8 +840,10 @@ export class Stroke {
   private readonly settings: BrushSettings;
   /** 选区蒙版：非空时每个笔尖落下即刻裁进选区（拖动中实时生效，而非抬笔才裁） */
   private readonly clipMask: HTMLCanvasElement | null;
-  /** 对称模式：每个笔尖按中轴镜像再补落 */
+  /** 对称模式：每个笔尖按中轴镜像或径向扇区补落 */
   private readonly symmetry: SymmetryMode;
+  /** 径向对称参数；只有 symmetry === "radial" 时非空 */
+  private readonly radial: RadialConfig | null;
   /** 最近一次数位板采样；鼠标 / 触摸也会给一份恒等采样 */
   private pen: PenSample | null = null;
 
@@ -930,6 +939,14 @@ export class Stroke {
     this.erase = erase;
     this.clipMask = clipMask ?? null;
     this.symmetry = settings.symmetry ?? "none";
+    this.radial =
+      this.symmetry === "radial"
+        ? {
+            sectors: settings.radialSectors ?? 6,
+            mirror: settings.radialMirror === true,
+            center: settings.radialCenter ?? null,
+          }
+        : null;
     this.buf = document.createElement("canvas");
     this.buf.width = Math.max(1, Math.round(width));
     this.buf.height = Math.max(1, Math.round(height));
@@ -1237,10 +1254,19 @@ export class Stroke {
       // 镜像点共享同一颗 alpha / 半径 / 滤镜，落点与轨迹完全对称。
       const W = this.buf.width;
       const H = this.buf.height;
-      const pts: Array<[number, number]> = [[px, py]];
-      if (this.symmetry === "vertical" || this.symmetry === "both") pts.push([W - px, py]);
-      if (this.symmetry === "horizontal" || this.symmetry === "both") pts.push([px, H - py]);
-      if (this.symmetry === "both") pts.push([W - px, H - py]);
+      const pts: Array<[number, number]> = [];
+      if (this.radial) {
+        const cfg: RadialConfig = {
+          ...this.radial,
+          center: this.radial.center ?? { x: W / 2, y: H / 2 },
+        };
+        for (const p of radialPoints(px, py, cfg)) pts.push([p.x, p.y]);
+      } else {
+        pts.push([px, py]);
+        if (this.symmetry === "vertical" || this.symmetry === "both") pts.push([W - px, py]);
+        if (this.symmetry === "horizontal" || this.symmetry === "both") pts.push([px, H - py]);
+        if (this.symmetry === "both") pts.push([W - px, H - py]);
+      }
       for (const [sx, sy] of pts) {
         this.stampDab(sx, sy, r, filter);
       }
