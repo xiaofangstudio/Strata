@@ -1,0 +1,132 @@
+/**
+ * 新建文档对话框：两列高度紧凑的表单。只用 .ndd- 前缀。
+ */
+.ndd-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.ndd-section-title {
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.ndd-chipgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 6px;
+}
+
+.ndd-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ndd-chip:hover { border-color: var(--accent); }
+
+.ndd-chip.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+
+.ndd-chip-size {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.ndd-chip-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.ndd-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.ndd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.ndd-field > span { white-space: nowrap; }
+
+.ndd-bgrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.ndd-bgchip {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ndd-bgchip.is-active {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+
+.ndd-bgcolor {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.ndd-save {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ndd-name {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+}
+
+.ndd-spacer { flex: 1 1 auto; }

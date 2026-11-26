@@ -67,4 +67,15 @@ describe("柳叶笔几何", () => {
     expect(isLeafDrawable(pts(0, 0, 20, 0, 40, 0))).toBe(false);
     expect(isLeafDrawable(pts(0, 0, 10, 8, 20, 0))).toBe(true);
   });
+
+  it("放大视图下的小叶片按折算阈值落笔，不再误拒", () => {
+    // 400% 视图：屏幕拖约 23px，文档坐标轨迹只有 5.8px 长、面积 3.75px²。
+    const tiny = pts(0, 0, 2.5, 1.5, 5, 0);
+    // 默认阈值（100% 全图）会把这片小叶子拒掉 —— 正是「画了没反应」的场景。
+    expect(isLeafDrawable(tiny)).toBe(false);
+    // 按 1/scale 折算后同一笔必须能落笔。
+    expect(isLeafDrawable(tiny, Math.max(0.25, 4 / 16), Math.max(2, 8 / 4))).toBe(true);
+    // 点一下（不足三个点）在任意缩放下都拒绝。
+    expect(isLeafDrawable(pts(0, 0), Math.max(0.25, 4 / 16), Math.max(2, 8 / 4))).toBe(false);
+  });
 });

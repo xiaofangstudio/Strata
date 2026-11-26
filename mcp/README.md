@@ -55,7 +55,7 @@ node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 
 | 工具 | 作用 |
 | --- | --- |
-| `strata_open_image` | 打开 PNG / JPEG 进内存会话（`maxSide` 可先缩） |
+| `strata_open_image` | 打开图片进内存会话（PNG/JPEG/WebP/TIFF/BMP/GIF/HEIC/RAW 家族，见 capabilities 的 importFormats）（`maxSide` 可先缩） |
 | `strata_image_info` / `strata_image_preview` | 查会话信息 / 取 base64 预览 |
 | `strata_adjust_image` | 按算子序列调色（15 种：亮度对比度、饱和度、自然饱和度、色阶、曲线、通道混合器、黑白、曝光、白平衡、色相、色彩平衡、反相、去色、色调分离、阈值） |
 | `strata_filter_image` | 施加**任意已注册滤镜**（与应用内「滤镜」菜单同一份实现，共 73 个，见 `strata_capabilities` 的 `imageOps.filters`）。老短名（`gaussianBlur` 等）仍兼容 |
@@ -68,7 +68,7 @@ node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 | `strata_composite` | 把叠层贴到底图上（`overlayWidth` 等比缩放、`x/y` 落点、`opacity`） |
 | `strata_light` | 打光：`glow` 径向光斑 / `beam` 自然光束 / `shadow` 接触阴影 / `vignette` 暗角 |
 | `strata_edit_image` | 一步到位：打开 → 调色 → 滤镜 → 导出 |
-| `strata_export_image` | 导出为 PNG / JPEG |
+| `strata_export_image` | 导出为 PNG / JPEG / WebP |
 
 ### 图层文档（Mark 4：插画排版）
 
@@ -80,7 +80,7 @@ node strata-mcp.mjs              :: 正常服务，等待 stdio 输入
 | `strata_doc_add_shape` | 加形状层：矩形（圆角/虚线框）、椭圆、渐变；`blur` 做柔光/软阴影 |
 | `strata_doc_adjust_layer` | 给**单层**调色，可用 `region`（矩形/椭圆+羽化）做**分区调色** |
 | `strata_doc_drop_shadow` | 按图层轮廓生成投影（multiply），塑造阴影感 |
-| `strata_doc_preview` / `strata_doc_export` | 压平预览 / 导出 PNG·JPEG |
+| `strata_doc_preview` / `strata_doc_export` | 压平预览 / 导出 PNG·JPEG·WebP |
 
 图层自上而下即叠放顺序，`flatten` 时逐层合成，支持 normal / multiply / screen /
 overlay / softLight / darken / lighten / add。文字与形状由 `@napi-rs/canvas` 调系统字体渲染

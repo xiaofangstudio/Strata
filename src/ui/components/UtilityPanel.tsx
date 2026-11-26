@@ -250,7 +250,8 @@ export default function UtilityPanel({
       case "notes":
         return (
           <>
-            <p className="isz-hint">备注跟着文档走（存进 .strata 工程），跨会话保留。</p>
+            {!note && <p className="isz-hint">{zh.hint.notesEmpty}</p>}
+            {note && <p className="isz-hint">{zh.hint.notesExisting}</p>}
             <textarea
               rows={6}
               style={{ width: "100%", resize: "vertical" }}
@@ -261,9 +262,9 @@ export default function UtilityPanel({
               <button
                 type="button"
                 className="btn-primary btn-sm"
-                onClick={() => onApply({ ...doc, note }, "保存备注")}
+                onClick={() => onApply({ ...doc, note }, zh.hint.notesSave)}
               >
-                保存备注
+                {zh.hint.notesSave}
               </button>
             </div>
           </>

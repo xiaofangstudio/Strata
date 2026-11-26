@@ -1,0 +1,163 @@
+/**
+ * 内容识别填充工作区：左边可以直接刷取样平面，右边是填充结果与参数。
+ * 只用 .caf- 前缀，不碰 .pw-* / .fpv-* / .calc-* 的栅格。
+ */
+.caf-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.8fr);
+  gap: 12px;
+  height: 100%;
+  min-height: 380px;
+}
+
+.caf-canvas-pane,
+.caf-params-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.caf-pane-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.caf-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+.caf-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-left: 6px;
+}
+
+.caf-dot-sample { background: #3ce68f; }
+.caf-dot-hole { background: #ff6b6b; }
+
+.caf-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 200px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--surface-2);
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.caf-stage-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.caf-hint {
+  flex: 0 0 auto;
+  margin-top: 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.caf-result {
+  flex: 0 0 auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.caf-params-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.caf-section-title {
+  margin: 10px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.caf-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.caf-segment button {
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  padding: 5px 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.caf-segment button.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.caf-count {
+  margin: 6px 0;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.caf-warn {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--danger, #d9534f);
+  border-radius: var(--r-sm);
+  color: var(--danger, #d9534f);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.caf-spacer {
+  flex: 1 1 auto;
+}

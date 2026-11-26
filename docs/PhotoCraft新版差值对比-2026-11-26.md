@@ -29,18 +29,19 @@
 | Rotate Canvas 任意角度 + 插值 | `engine-core/src/cmd/mode_cmds.rs:833`，`angle -359.99..359.99`，`bicubic/bilinear/nearest` | 有 90/180 旋转和 `rotateDocumentArbitrary()`，但没有角度窗与插值选择 | **本次补**：对话框 + 三档插值 + 预览 |
 | Star points 3–20 | `star_points_field_tests.rs`、2026-11-25 `fcd6eed99` | 形状只有 rect/ellipse/line/leaf，无星形 | **本次移植**：星形工具 + 点数 3–20 纯函数与测试 |
 | Move tool 方向拖拽距离 | 2026-11-25 `9a9c391d6` | 移动图层无方向/距离提示 | **本次补**：浮层即时显示 dx/dy |
-| Calculations 结果通道灰度预览 | `feat(dialogs): Calculations dialog previews its result channel in grey`、`calculations_ui.rs` | `image.calculations` 只支持两个 Alpha 通道 | 后续项：扩到任意通道运算 |
+| Calculations 结果通道灰度预览 | `feat(dialogs): Calculations dialog previews its result channel in grey`、`calculations_ui.rs` | `image.calculations` 只支持两个 Alpha 通道 | **已落地（P10）**：任意通道运算 + 整幅灰度预览 + 存通道/替换选区 |
 | Pen 形状模式 Fill/Stroke/W/H/Align Edges | `feat(pen)`、`shape_options.rs` | 无钢笔形状模式 | 后续项：工作量大，另立批次 |
 | Add Anchor Point 拖出手柄 | `12707/12708/12732` 系列提交 | 无锚点编辑 | 后续项 |
 | Layer Comps to Files | `13940` 系列提交 | 有图层复合面板，没有批量导出 | 后续项 |
-| Content-Aware Fill 自定义取样笔刷 / 内容感知裁剪 | `12118`、`14253`、`15338` | 基础 inpaint + `inpaintComplete`，无取样笔刷 UI | 后续项 |
-| Notes 面板空态 / 新建文档预设 Recent | `11793`、`14038`、`14043` | 注释面板与新建文档有基础实现 | 后续项 |
+| Content-Aware Fill 自定义取样笔刷 / 内容感知裁剪 | `12118`、`14253`、`15338`；`crates/algo/src/content_aware.rs::paint_strokes`；`ui-egui/src/dialogs/caf_ui.rs` | 基础 inpaint + `inpaintComplete`，无取样笔刷 UI | **已落地（P11）**：取样平面笔刷 + 工作区 + 真约束 PatchMatch 候选源（内容感知裁剪仍不适用） |
+| Notes 面板空态 / 新建文档预设 Recent | `11793`、`14038`、`14043` | 注释面板与新建文档有基础实现 | **已落地**：新建文档对话框（最近使用 + 我的预设 + 保存预设，localStorage 持久化）替换 Ctrl+N 直接开默认档；Notes 空态引导 + 文案 i18n 化 |
 | Droplet Destination | `#13711` | 无 Droplet 机制 | 不适用 |
 | Engine crate 拆分 / 自绘窗 / CMYK / RAW | 多提交 | 架构与色彩管线不同源 | 不搬 |
 
 ## 3. 本次移植范围
 
-P6 调整画笔、P7 旋转画布对话框与插值、P8 星形工具、P9 移动方向距离提示。
+P6 调整画笔、P7 旋转画布对话框与插值、P8 星形工具、P9 移动方向距离提示、
+P10 Calculations 任意通道运算、P11 内容识别填充自定义取样笔刷。
 每项仍按硬口径：纯函数 + 单测 + 六语言 + 真接线，不做假按钮，不改 `activeLayerId`，
 完成后跑 tsc / 全量 vitest / 滤镜真值 / Tauri 构建并覆盖根目录 `Strata.exe`。
 
@@ -59,5 +60,20 @@ P6 调整画笔、P7 旋转画布对话框与插值、P8 星形工具、P9 移�
   拖动图层时在浮层即时显示，不进像素 / 历史。
 
 新增单测 4 组（调整画笔 8、旋转 4、星形 4、移动读数 2），六语言字典同步。
-后续对比项（Calculations 任意通道、钢笔形状模式、锚点手柄、图层复合批量导出、
-内容识别填充自定义取样等）保留为下一批，不在这里硬凑。
+
+- **P10 Calculations**：`src/core/calculations.ts` + `src/engine/calculations.ts` +
+  `CalculationsDialog`。两个来源都能选像素层 R/G/B/灰度/透明度或已存 Alpha 通道，
+  支持 Add / Subtract / Multiply / Screen / Difference / Normal、不透明度、scale、offset
+  与三处反相；左侧显示整幅灰度结果，结果可存成新 Alpha 通道或替换选区。预览与落库共用
+  同一份 `computeCalculation()` 像素。菜单不再要求两个 Alpha 通道。
+- **P11 内容识别填充工作区**：按上游 `caf_ui` 的三平面模型，新增
+  `src/core/contentAwareSampling.ts`（硬边圆刷 Add/Subtract、自动取样窗口、窗口掩码、
+  降采样）与 `src/engine/contentAwareFill.ts`（计划 / 预览 / 落库）。关键是
+  `InpaintOptions.sample` 真正约束 PatchMatch 的源候选与面积表判定，多尺度各层同步降采样，
+  回归测试用「左边红、右边蓝」的图证明笔刷换取样区会改变填充颜色。`ContentAwareFillDialog`
+  左侧可在图上直接刷，拖动中走尾随节流实时预览，确定时用同一份取样平面在全分辨率重算后落库。
+  旧的一次性 `doInpaint` 已移除。
+
+新增单测另计：Calculations 4、取样平面 7、填充引擎 3。六语言字典同步。
+剩余对比项（钢笔形状模式、锚点手柄、Layer Comps to Files、Notes 空态、
+RAW Develop 锐利预览等）保留为下一批，不在这里硬凑。

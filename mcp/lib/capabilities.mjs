@@ -76,7 +76,7 @@ export const PROTOCOL_VERSION = "2024-11-05";
 
 /** ServerInfo 名称与版本。 */
 export const SERVER_NAME = "strata";
-export const SERVER_VERSION = "2.6.2";
+export const SERVER_VERSION = "2.6.3";
 
 /* ------------------------------------------------ .strata 工程格式常量 */
 
@@ -632,9 +632,15 @@ export const TOOLS = [
   { id: "shapeRect", label: "矩形", shortcut: "U", group: "shape", ready: true },
   { id: "shapeEllipse", label: "椭圆", shortcut: "U", group: "shape", ready: true },
   { id: "shapeLine", label: "直线", shortcut: "U", group: "shape", ready: true },
+  // 星形：点数独立 3–20（catalog.ts shapeStar），与柳叶笔共用 U 循环
+  { id: "shapeStar", label: "星形", shortcut: "U", group: "shape", ready: true },
+  // 柳叶笔：拖出弧线自动闭合成色块（catalog.ts leafPen）
+  { id: "leafPen", label: "柳叶笔", shortcut: "U", group: "shape", ready: true },
   { id: "text", label: "文字", shortcut: "T", group: "text", ready: true },
   { id: "brush", label: "画笔", shortcut: "B", group: "paint", ready: true },
   { id: "pencil", label: "铅笔", shortcut: "B", group: "paint", ready: true },
+  // 涂抹：推颜色做过渡（catalog.ts 同款分组与快捷键）
+  { id: "smudge", label: "涂抹", shortcut: "D", group: "paint", ready: true },
   { id: "eraser", label: "橡皮", shortcut: "E", group: "paint", ready: true },
   { id: "magicEraser", label: "魔术橡皮擦", shortcut: "E", group: "paint", ready: true },
   { id: "bucket", label: "油漆桶", shortcut: "G", group: "paint", ready: true },
@@ -646,6 +652,8 @@ export const TOOLS = [
   { id: "dodge", label: "减淡", shortcut: "O", group: "retouch", ready: true },
   { id: "burn", label: "加深", shortcut: "O", group: "retouch", ready: true },
   { id: "sponge", label: "海绵", shortcut: "O", group: "retouch", ready: true },
+  // 调整画笔：把调整画进局部蒙版（catalog.ts adjustmentBrush）
+  { id: "adjustmentBrush", label: "调整画笔", shortcut: "A", group: "retouch", ready: true },
   { id: "eyedropper", label: "吸管", shortcut: "I", group: "sample", ready: true },
   { id: "ruler", label: "标尺", shortcut: "I", group: "sample", ready: true },
   { id: "count", label: "计数", shortcut: "N", group: "sample", ready: true },
@@ -654,18 +662,92 @@ export const TOOLS = [
   { id: "zoom", label: "缩放", shortcut: "Z", group: "nav", ready: true },
 ];
 
+/**
+ * 本服务器实际注册的 MCP 工具（strata-mcp.mjs 的 registerTool 名单）。
+ * 这是「单一事实来源」的对外声明侧；防漂测试
+ * tests/unit/mcp-capabilities.test.ts 会把这个清单与 strata-mcp.mjs 的
+ * 真实注册名逐个比对，两边不一致就红灯 —— 不允许再手抄漂移。
+ */
+export const MCP_TOOLS = [
+  { id: "strata_capabilities", title: "Strata 能力清单" },
+  { id: "strata_read_project", title: "读取 .strata 工程" },
+  { id: "strata_write_project", title: "写入 .strata 工程" },
+  { id: "strata_patch_layer", title: "修改图层属性" },
+  { id: "strata_add_layer", title: "新增图层" },
+  { id: "strata_remove_layer", title: "删除图层" },
+  { id: "strata_move_layer", title: "移动图层顺序" },
+  { id: "strata_duplicate_layer", title: "复制图层" },
+  { id: "strata_validate", title: "校验工程" },
+  { id: "strata_build_recipe", title: "按配方生成工程" },
+  { id: "strata_open_image", title: "打开图片" },
+  { id: "strata_image_info", title: "查看会话图片信息" },
+  { id: "strata_adjust_image", title: "调色（按算子序列）" },
+  { id: "strata_filter_image", title: "施加滤镜" },
+  { id: "strata_color_mode", title: "转换颜色模式" },
+  { id: "strata_content_aware_scale", title: "内容识别缩放" },
+  { id: "strata_mesh_warp", title: "木偶变形（钉点）" },
+  { id: "strata_smart_select", title: "智能选区" },
+  { id: "strata_color_profile", title: "转换色彩配置文件" },
+  { id: "strata_crop_photos", title: "裁正照片（切成多张）" },
+  { id: "strata_export_lut", title: "导出 3D LUT（.cube）" },
+  { id: "strata_proofread", title: "文字检查（排版/错拼）" },
+  { id: "strata_export_image", title: "导出会话图片" },
+  { id: "strata_edit_image", title: "一步编辑图片（打开→调色→滤镜→导出）" },
+  { id: "strata_image_preview", title: "预览会话图片" },
+  { id: "strata_cutout", title: "抠图（拆主体 / 拆背景）" },
+  { id: "strata_composite", title: "合成（把一层贴到另一层上）" },
+  { id: "strata_light", title: "打光（光斑 / 光束 / 接触阴影 / 暗角）" },
+  { id: "strata_doc_new", title: "新建图层文档" },
+  { id: "strata_doc_add_image", title: "往文档加图片层" },
+  { id: "strata_doc_add_text", title: "加文字层" },
+  { id: "strata_doc_add_shape", title: "加形状层（虚线框 / 椭圆 / 渐变）" },
+  { id: "strata_doc_adjust_layer", title: "给单层调色（可限定区域）" },
+  { id: "strata_doc_drop_shadow", title: "给图层加投影（阴影感）" },
+  { id: "strata_doc_preview", title: "预览图层文档" },
+  { id: "strata_doc_export", title: "导出图层文档" },
+  { id: "strata_doc_save", title: "保存图层文档为 .strata 工程" },
+  { id: "strata_doc_add_path", title: "加矢量路径层（手绘挂钩 / 链子 / 任意图形）" },
+  { id: "strata_doc_transform_layer", title: "变换图层（放大缩小 / 旋转 / 关节枢轴）" },
+  { id: "strata_doc_add_contour", title: "加贴边虚线轮廓（描着图层剪影走）" },
+  { id: "strata_doc_layer_effect", title: "图层质感效果（胶封 / 高光）" },
+  { id: "strata_doc_add_glow", title: "加光晕层（给整个画面打光）" },
+  { id: "strata_doc_add_glass", title: "加玻璃膜（明玻璃质感覆盖层）" },
+  { id: "strata_exr_parts", title: "列出 EXR 部件" },
+  { id: "strata_exr_read", title: "读取 EXR 部件到会话" },
+  { id: "strata_list_dir", title: "浏览文件夹" },
+  { id: "strata_trace_paths", title: "轮廓描迹成 SVG 路径" },
+  { id: "strata_make_gif", title: "多帧合成 GIF" },
+  { id: "strata_make_droplet", title: "生成 Droplet 配方文件" },
+  { id: "strata_local_grade", title: "局部调色（按范围）" },
+  { id: "strata_delete_hidden_layers", title: "删除全部隐藏图层" },
+  { id: "strata_reverse_layers", title: "反转图层顺序" },
+  { id: "strata_transform_layer", title: "变换图层 / 整份文档（翻转 / 整倍旋转）" },
+  { id: "strata_set_layer_mask", title: "读写图层蒙版" },
+  { id: "strata_grayscale_project", title: "灰度文档（全部像素层去色）" },
+  { id: "strata_extract_palette", title: "提取调色板（中位切分）" },
+  { id: "strata_split_channels", title: "通道拆分（R/G/B/Alpha）" },
+  { id: "strata_orient_image", title: "翻转 / 旋转会话图片" },
+  { id: "strata_align_shift", title: "估计两图对齐偏移（堆栈前置）" },
+  { id: "strata_make_pdf", title: "多图合成 PDF" },
+];
+
 /* ------------------------------------------------ 导出 / 导入格式（image.ts） */
 
 /**
- * 导出格式。真实实现只有 PNG 一条落盘编码路径
- * （image.ts: encodePng → canvas.toBlob("image/png")）。
- * 缩略图另有 WebP data URL（makeThumbnail），但不作为工程导出格式。
+ * 导出格式（src/engine/exportImage.ts 的 EXPORT_FORMATS 同源：
+ * PNG 无损、JPEG 白底有损、WebP 有损留透明）。防漂测试对齐。
  */
 export const EXPORT_FORMATS = [
   { id: "png", label: "PNG", mime: "image/png", lossless: true },
+  { id: "jpeg", label: "JPEG", mime: "image/jpeg", lossless: false },
+  { id: "webp", label: "WebP", mime: "image/webp", lossless: false },
 ];
 
-/** 可打开 / 可导入的图片扩展名（image.ts: IMAGE_EXTENSIONS）。 */
+/**
+ * 可打开 / 可导入的扩展名（src/engine/image.ts IMAGE_EXTENSIONS 全量同源）。
+ * bmp/gif 走浏览器 Image 解码；heic/heif/hif 与 RAW 家族走 Rust 侧
+ * decode.rs（heic-rs / strata_raw）显影；工程文件 .strata 另有专用读写工具。
+ */
 export const IMPORT_FORMATS = [
   { ext: "png", mime: "image/png" },
   { ext: "jpg", mime: "image/jpeg" },
@@ -675,6 +757,29 @@ export const IMPORT_FORMATS = [
   { ext: "tiff", mime: "image/tiff" },
   { ext: "bmp", mime: "image/bmp" },
   { ext: "gif", mime: "image/gif" },
+  { ext: "heic", mime: "image/heic" },
+  { ext: "heif", mime: "image/heif" },
+  { ext: "hif", mime: "image/heif" },
+  { ext: "dng", mime: "image/x-adobe-dng" },
+  { ext: "cr2", mime: "image/x-canon-cr2" },
+  { ext: "cr3", mime: "image/x-canon-cr3" },
+  { ext: "nef", mime: "image/x-nikon-nef" },
+  { ext: "arw", mime: "image/x-sony-arw" },
+  { ext: "orf", mime: "image/x-olympus-orf" },
+  { ext: "raf", mime: "image/x-fuji-raf" },
+  { ext: "rw2", mime: "image/x-panasonic-rw2" },
+  { ext: "pef", mime: "image/x-pentax-pef" },
+  { ext: "srw", mime: "image/x-samsung-srw" },
+  { ext: "3fr", mime: "image/x-hasselblad-3fr" },
+  { ext: "fff", mime: "image/x-hasselblad-fff" },
+  { ext: "iiq", mime: "image/x-phaseone-iiq" },
+  { ext: "mos", mime: "image/x-leaf-mos" },
+  { ext: "erf", mime: "image/x-epson-erf" },
+  { ext: "mef", mime: "image/x-mamiya-mef" },
+  { ext: "kdc", mime: "image/x-kodak-kdc" },
+  { ext: "dcr", mime: "image/x-kodak-dcr" },
+  { ext: "nrw", mime: "image/x-nikon-nrw" },
+  { ext: "raw", mime: "image/x-panasonic-raw" },
 ];
 
 /* ------------------------------------------------ 工程格式说明 */
@@ -720,6 +825,9 @@ export function buildCapabilities() {
     selectionModes: SELECTION_MODES,
     selectionOps: SELECTION_EDIT_OPS,
     tools: { groups: TOOL_GROUPS, list: TOOLS },
+    /** 本服务器实际注册的 MCP 工具名单（与 strata-mcp.mjs 的 registerTool 一致，防漂测试对账）。 */
+    mcpTools: MCP_TOOLS,
+    mcpToolCount: MCP_TOOLS.length,
     imageOps: {
       filters: FILTERS,
       filterCount: FILTERS.length,

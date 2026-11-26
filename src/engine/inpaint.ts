@@ -43,6 +43,11 @@ export interface InpaintOptions {
   skipBase?: boolean;
   /** Image Melding：按洞边已知像素做 gain/bias 颜色适应后再投票 */
   meld?: boolean;
+  /**
+   * 1 = 允许作为参考源的内容识别填充取样平面（工作区笔刷画出来的那张）。
+   * 未提供时沿用旧行为：除洞以外整张图都能借。洞内像素永远不能当源。
+   */
+  sample?: Uint8Array;
 }
 
 const DEFAULTS = { patch: 3, iterations: 4, search: 64, seed: 0x5eed };
@@ -124,6 +129,9 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
   if (targets.length === 0) return out;
   if (targets.length >= w * h) return out; // 整张都选上了，没有可借的样本
   const isMask = (i: number) => mask[i] !== 0;
+  // 取样平面是「能不能借」的硬约束：笔刷刷掉的区域，PatchMatch 不许从那里取块。
+  const sample = opts.sample;
+  const allowed = (i: number) => !sample || (sample[i] !== 0 && !isMask(i));
 
   // ---- 第一步：Poisson 调和打底 ----
   // 以洞外像素为边界解 Δv=0；cascadic multigrid 让大洞/细长洞都有稳定起点。
@@ -133,8 +141,12 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
   }
 
   // ---- 第二步：PatchMatch 长纹理 ----
-  const sat = buildSat(mask, w, h);
-  /** 补丁范围内一个已知像素都没有？ */
+  // 面积表统计的是「不可作为源的像素」：洞，以及被取样笔刷排除的区域。
+  // 没有传 sample 时 blocked 与 mask 完全相同，旧行为逐位不变。
+  const blocked = new Uint8Array(w * h);
+  for (let i = 0; i < blocked.length; i += 1) blocked[i] = allowed(i) ? 0 : 1;
+  const sat = buildSat(blocked, w, h);
+  /** 补丁范围内一个可用源像素都没有？ */
   const patchAllMasked = (x: number, y: number): boolean => {
     const x0 = x - patch;
     const y0 = y - patch;
@@ -153,7 +165,7 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
   for (let y = patch; y < h - patch; y += 1) {
     for (let x = patch; x < w - patch; x += 1) {
       const i = y * w + x;
-      if (!isMask(i) && !patchAllMasked(x, y)) sources.push(i);
+      if (allowed(i) && !patchAllMasked(x, y)) sources.push(i);
     }
   }
   if (sources.length === 0) return out;
@@ -221,7 +233,7 @@ export function inpaint(src: Raster, mask: Uint8Array, opts: InpaintOptions = {}
   // ---- 迭代：传播 + 随机搜索 ----
   const tryCandidate = (i: number, x: number, y: number, sx: number, sy: number): void => {
     if (sx < patch || sy < patch || sx >= w - patch || sy >= h - patch) return;
-    if (isMask(sy * w + sx)) return;
+    if (!allowed(sy * w + sx)) return;
     const d = patchDist(x, y, sx, sy);
     if (d < nnc[i]) {
       nnc[i] = d;

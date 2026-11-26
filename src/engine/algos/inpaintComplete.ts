@@ -89,11 +89,18 @@ function any(mask: Uint8Array): boolean {
   return false;
 }
 
-function downsample(src: Raster, mask: Uint8Array, factor: number): { img: Raster; mask: Uint8Array } {
+function downsample(
+  src: Raster,
+  mask: Uint8Array,
+  sample: Uint8Array | undefined,
+  factor: number,
+): { img: Raster; mask: Uint8Array; sample: Uint8Array } {
   const w = Math.max(1, Math.ceil(src.width / factor));
   const h = Math.max(1, Math.ceil(src.height / factor));
   const img = createRaster(w, h);
   const outMask = new Uint8Array(w * h);
+  // 取样区在粗层取交集：只要有一个子像素被笔刷排除，整块就不可借。
+  const outSample = new Uint8Array(w * h).fill(1);
   for (let y = 0; y < h; y += 1) {
     for (let x = 0; x < w; x += 1) {
       const o = (y * w + x) * 4;
@@ -103,6 +110,7 @@ function downsample(src: Raster, mask: Uint8Array, factor: number): { img: Raste
       let a = 0;
       let n = 0;
       let hole = 0;
+      let canSample = 1;
       for (let dy = 0; dy < factor; dy += 1) {
         const sy = Math.min(src.height - 1, y * factor + dy);
         for (let dx = 0; dx < factor; dx += 1) {
@@ -114,6 +122,7 @@ function downsample(src: Raster, mask: Uint8Array, factor: number): { img: Raste
           b += src.data[p + 2];
           a += src.data[p + 3];
           hole = Math.max(hole, mask[i]);
+          if (sample && !sample[i]) canSample = 0;
           n += 1;
         }
       }
@@ -122,9 +131,10 @@ function downsample(src: Raster, mask: Uint8Array, factor: number): { img: Raste
       img.data[o + 2] = b / n;
       img.data[o + 3] = a / n;
       outMask[y * w + x] = hole;
+      outSample[y * w + x] = canSample;
     }
   }
-  return { img, mask: outMask };
+  return { img, mask: outMask, sample: outSample };
 }
 
 function upsample(src: Raster, w: number, h: number): Raster {
@@ -141,7 +151,12 @@ function upsample(src: Raster, w: number, h: number): Raster {
 }
 
 /** 从洞边向内逐环重建，让外环已填好的像素成为内环的真实样本。 */
-function onionPeel(cur: Raster, mask: Uint8Array, opts: InpaintOptions): Raster {
+function onionPeel(
+  cur: Raster,
+  mask: Uint8Array,
+  sample: Uint8Array | undefined,
+  opts: InpaintOptions,
+): Raster {
   const w = cur.width;
   const h = cur.height;
   const thickness = holeThickness(mask, w, h);
@@ -151,7 +166,8 @@ function onionPeel(cur: Raster, mask: Uint8Array, opts: InpaintOptions): Raster 
   for (let pass = 0; pass < 6 && any(active); pass += 1) {
     const inner = erodeMask(active, w, h, step);
     if (!any(inner)) break;
-    out = inpaint(out, inner, { ...opts, skipBase: true, meld: true });
+    // sample 在进入本函数前已扣掉整个洞，外环刚填出来的像素本来就不在允许源里。
+    out = inpaint(out, inner, { ...opts, sample, skipBase: true, meld: true });
     active = inner;
   }
   return out;
@@ -219,11 +235,11 @@ export function completeInpaint(src: Raster, mask: Uint8Array, opts: CompleteOpt
   const thickness = holeThickness(mask, w, h);
   const auto = Math.min(3, Math.floor(Math.log2(Math.max(2, Math.min(thickness, Math.min(w, h))))));
   const levels = Math.max(1, Math.min(4, opts.levels ?? auto));
-  const pyramid: { img: Raster; mask: Uint8Array; factor: number }[] = [];
+  const pyramid: { img: Raster; mask: Uint8Array; sample: Uint8Array; factor: number }[] = [];
   for (let i = 0; i < levels; i += 1) {
     const factor = 2 ** i;
     if (Math.ceil(w / factor) < 8 || Math.ceil(h / factor) < 8) break;
-    pyramid.push({ ...downsample(src, mask, factor), factor });
+    pyramid.push({ ...downsample(src, mask, opts.sample, factor), factor });
   }
   if (!pyramid.length) {
     return inpaint(src, mask, { ...opts, meld: opts.meld ?? true });
@@ -246,10 +262,11 @@ export function completeInpaint(src: Raster, mask: Uint8Array, opts: CompleteOpt
       iterations: opts.iterations,
       search: opts.search,
       seed: opts.seed,
+      sample: level.sample,
       skipBase: base !== null,
       meld: opts.meld ?? true,
     });
-    if (li === 0 && (opts.onion ?? true)) filled = onionPeel(filled, level.mask, opts);
+    if (li === 0 && (opts.onion ?? true)) filled = onionPeel(filled, level.mask, level.sample, opts);
     base = filled;
   }
   return base ?? createRaster(w, h);

@@ -104,8 +104,16 @@ export function snapLeafEnd(a: LeafPoint, b: LeafPoint): LeafPoint {
   return { x: a.x + Math.cos(ang) * len, y: a.y + Math.sin(ang) * len };
 }
 
-/** 是否值得落笔：至少三个采样点、轨迹够长、闭合面积不为零。 */
-export function isLeafDrawable(points: readonly LeafPoint[], minArea = 4): boolean {
-  if (points.length < 3 || leafPathLength(points) < 8) return false;
+/**
+ * 是否值得落笔：至少三个采样点、轨迹够长、闭合面积不为零。
+ * 阈值按文档坐标给出；调用方在放大视图下要按 1/scale 折算，
+ * 否则「屏幕上拖了一大段、文档里只有几像素」的细小叶片会被误拒。
+ */
+export function isLeafDrawable(
+  points: readonly LeafPoint[],
+  minArea = 4,
+  minLength = 8,
+): boolean {
+  if (points.length < 3 || leafPathLength(points) < minLength) return false;
   return leafArea(points) >= minArea;
 }

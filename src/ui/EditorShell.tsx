@@ -66,7 +66,6 @@ import {
   nextDocId,
   type StrataDoc,
 } from "../core/document";
-import { DEFAULT_DPI, PRESETS } from "../core/presets";
 import {
   addAdjustLayer,
   addLocalGradeLayer,
@@ -331,8 +330,7 @@ import {
 import { autoOn } from "../engine/auto";
 import { composeDoc } from "../engine/compositor";
 import { composeForDisplay, shrinkSurfaceForDisplay } from "../engine/displayCompose";
-import { completeInpaint } from "../engine/algos/inpaintComplete";
-import { asRaster, createRaster } from "../engine/raster";
+import { asRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
 import { gaussianBlur } from "../engine/filters/kernels";
 import { blendWithSelection, toBuffer } from "../core/filterOps";
@@ -418,10 +416,13 @@ import FilterFxDialog from "./components/FilterFxDialog";
 import BlurGalleryDialog from "./components/BlurGalleryDialog";
 import BlurGalleryOverlay from "./components/BlurGalleryOverlay";
 import {
-  ChannelCalcDialog,
   LoadSelectionDialog,
   SaveSelectionDialog,
 } from "./components/ChannelDialogs";
+import CalculationsDialog from "./components/CalculationsDialog";
+import ContentAwareFillDialog from "./components/ContentAwareFillDialog";
+import NewDocumentDialog from "./components/NewDocumentDialog";
+import type { NewDocSettings } from "../core/newDocSettings";
 import RefineEdgeDialog from "./components/RefineEdgeDialog";
 import { filterDef } from "../engine/filters/defs";
 import { alphaChannelsOf } from "../core/channelOps";
@@ -1170,6 +1171,8 @@ export default function EditorShell({
   const [saveSelOpen, setSaveSelOpen] = useState(false);
   const [loadSelOpen, setLoadSelOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
+  const [cafOpen, setCafOpen] = useState(false);
+  const [newDocOpen, setNewDocOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   /** 选区组合方式（选项条的四态：新建 / 添加 / 减去 / 交叉） */
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("new");
@@ -3930,7 +3933,12 @@ export default function EditorShell({
       if (sp.kind === "leaf") {
         leafRawRef.current = [];
         const leaf = sp;
-        if (!isLeafDrawable(leaf.points ?? [])) {
+        // 阈值折算回「屏幕感知」：放大视图下画小叶片，文档坐标只有几像素，
+        // 不能拿全图 100% 的固定阈值把它静默拒掉 —— 这是「画了却没反应」的根因。
+        const minLen = Math.max(2, 8 / scale);
+        const minArea = Math.max(0.25, 4 / (scale * scale));
+        if (!isLeafDrawable(leaf.points ?? [], minArea, minLen)) {
+          setToast(zh.hint.leafTooShort);
           render();
           return;
         }
@@ -4579,20 +4587,26 @@ export default function EditorShell({
   }, [openFileAt]);
 
   /**
-   * 新建画布：编辑器内 Ctrl+N / 文件菜单直接开一张空白档。
-   * 尺寸取 core/presets 的首档（全高清），与开始页共用同一份数字，
-   * 不在两处各写一套。
+   * 新建画布：Ctrl+N / 文件菜单打开「新建文档」对话框（预设 / 最近使用 /
+   * 保存预设），确认后才落档 —— 与开始页共用同一份预设数字，不在两处各写一套。
    */
   const newCanvas = useCallback(() => {
-    try {
-      const p = PRESETS[0];
-      const dpi = p.dpi ?? Number(DEFAULT_DPI);
-      onOpenDoc(docFromBlank(p.w, p.h, zh.editor.untitled, "white", dpi));
-      setToast(zh.menu.newCanvasNow);
-    } catch (e) {
-      setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, [onOpenDoc]);
+    setNewDocOpen(true);
+  }, []);
+
+  /** 对话框确认：按用户选的宽高 / DPI / 背景落一张空白档。 */
+  const createNewDoc = useCallback(
+    (s: NewDocSettings, label: string) => {
+      setNewDocOpen(false);
+      try {
+        onOpenDoc(docFromBlank(s.w, s.h, zh.editor.untitled, s.bg, s.dpi));
+        setToast(`${zh.menu.newCanvasNow} · ${label}`);
+      } catch (e) {
+        setError(`${zh.error.openFailed}：${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [onOpenDoc],
+  );
 
   /** 关闭全部文档：走 App 层的统一出口，避免这里逐份 delete 撤销栈。 */
   const closeAll = useCallback(() => onCloseAll(), [onCloseAll]);
@@ -6112,79 +6126,7 @@ export default function EditorShell({
     onCommit(next, zh.selection.deleted);
   }, [doc, hasSelection, onCommit]);
 
-  /**
-   * 内容识别填充：把选区里的东西抹掉，再用图里别处的纹理补回来。
-   *
-   * 只在「选区包围盒外扩一圈」的区域里跑 PatchMatch —— 整张图跑一遍在大图上
-   * 会有明显卡顿，而外扩那圈正是借纹理要用的样本；选区之外一个像素都不动。
-   * 内核只改掩膜为真的像素、其余原样抄回，所以整块贴回去等价于「只改选区」。
-   */
-  const doInpaint = useCallback(() => {
-    const act = activeLayer(doc);
-    if (!act || act.kind !== "pixel" || act.locked) {
-      setError(zh.selection.noPixelLayer);
-      return;
-    }
-    const mask = doc.selection;
-    const box = mask && hasSelection ? selectionBounds(mask) : null;
-    if (!mask || !box) {
-      setError(zh.inpaint.needSelection);
-      return;
-    }
-    const full = readPixels(act.surface);
-    const fw = full.width;
-    const fh = full.height;
-    // 羽化边取「一半选中」的等值线：与蚂蚁线、反选等处的判定保持一致。
-    const sel = mustCtx(mask).getImageData(0, 0, fw, fh).data;
-    // 外扩 24px 留出可借的纹理，再夹回画布内。
-    const pad = 24;
-    const x0 = Math.max(0, Math.floor(box.x) - pad);
-    const y0 = Math.max(0, Math.floor(box.y) - pad);
-    const x1 = Math.min(fw, Math.ceil(box.x + box.width) + pad);
-    const y1 = Math.min(fh, Math.ceil(box.y + box.height) + pad);
-    const rw = x1 - x0;
-    const rh = y1 - y0;
-    if (rw <= 2 || rh <= 2) {
-      setError(zh.selection.empty);
-      return;
-    }
-
-    // 把「要处理的这一块」从图层里抠出来，连同掩膜一起交给内核。
-    const sub = createRaster(rw, rh);
-    const subMask = new Uint8Array(rw * rh);
-    let holes = 0;
-    for (let y = 0; y < rh; y += 1) {
-      const row = (y0 + y) * fw + x0;
-      sub.data.set(full.data.subarray(row * 4, (row + rw) * 4), y * rw * 4);
-      for (let x = 0; x < rw; x += 1) {
-        if (sel[(row + x) * 4 + 3] >= 128) {
-          subMask[y * rw + x] = 1;
-          holes += 1;
-        }
-      }
-    }
-    if (holes >= rw * rh) {
-      setError(zh.inpaint.noSource);
-      return;
-    }
-
-    // 大区域少迭代几轮：PatchMatch 的收益随轮数递减，先保住不卡。
-    const area = rw * rh;
-    const filled = completeInpaint(sub, subMask, {
-      iterations: area > 1_500_000 ? 2 : 4,
-      search: area > 1_500_000 ? 32 : 64,
-    });
-
-    // 整块贴回图层：内核保证掩膜之外的像素原样不动。
-    const next = cloneSurface(act.surface);
-    const nctx = mustCtx(next);
-    const patch = nctx.createImageData(rw, rh);
-    patch.data.set(filled.data);
-    nctx.putImageData(patch, x0, y0);
-    const layers = doc.layers.map((l) => (l.id === act.id ? { ...l, surface: next } : l));
-    onCommit({ ...doc, layers, dirty: true }, zh.menu.inpaint);
-    setToast(zh.inpaint.done);
-  }, [doc, hasSelection, onCommit]);
+  /* 内容识别填充已交给 ContentAwareFillDialog：工作区里可直接刷取样区，落库走引擎薄壳。 */
 
   const doTrim = useCallback(() => {
     const next = trimToSelection(doc);
@@ -8862,7 +8804,7 @@ export default function EditorShell({
           return { run: () => setPalette(true) };
         case "edit.contentAwareFill":
           return hasSelection
-            ? { run: doInpaint }
+            ? { run: () => setCafOpen(true) }
             : { hint: "需要先建立选区（告诉程序补哪一块）" };
         case "edit.freeTransform":
           return freeActive
@@ -9085,10 +9027,8 @@ export default function EditorShell({
         case "image.imageRotation.flipCanvasVertical":
           return { run: () => onCommit(flipDocument(doc, "v"), zh.menu.flipCanvasV) };
         case "image.calculations":
-          // 通道运算：两个 Alpha 通道逐像素运算，至少得有两个通道
-          return alphaChannelsOf(doc).length >= 2
-            ? { run: () => setCalcOpen(true) }
-            : { run: () => setToast(zh.dialog.channelCalcNeed2) };
+          // 计算：任意图层的原色 / 灰度 / Alpha 通道两两运算，不再要求两个已存通道
+          return { run: () => setCalcOpen(true) };
 
         /* ---------------------------------------------------------- 选择 */
         case "select.editInQuickMaskMode":
@@ -10057,7 +9997,6 @@ export default function EditorShell({
     doExpand,
     doFeather,
     doFill,
-    doInpaint,
     doInvert,
     doPaste,
     doSelectAll,
@@ -11259,13 +11198,7 @@ export default function EditorShell({
                 }
                 setLoadSelOpen(true);
               }}
-              onChannelCalc={() => {
-                if (alphaChannelsOf(doc).length < 2) {
-                  setToast(zh.dialog.channelCalcNeed2);
-                  return;
-                }
-                setCalcOpen(true);
-              }}
+              onChannelCalc={() => setCalcOpen(true)}
               viewAlpha={viewAlpha}
               onViewAlpha={setViewAlpha}
               onLayerContextMenu={openLayerMenu}
@@ -13014,14 +12947,27 @@ export default function EditorShell({
         />
       )}
       {calcOpen && (
-        <ChannelCalcDialog
+        <CalculationsDialog
           doc={doc}
-          onApply={(next) => {
+          onApply={(next, label) => {
             setCalcOpen(false);
-            onCommit(next, zh.dialog.channelCalcTitle);
+            onCommit(next, label);
           }}
           onClose={() => setCalcOpen(false)}
         />
+      )}
+      {cafOpen && (
+        <ContentAwareFillDialog
+          doc={doc}
+          onApply={(next, label) => {
+            setCafOpen(false);
+            onCommit(next, label);
+          }}
+          onClose={() => setCafOpen(false)}
+        />
+      )}
+      {newDocOpen && (
+        <NewDocumentDialog onCreate={createNewDoc} onClose={() => setNewDocOpen(false)} />
       )}
       {refineOpen && (
         <RefineEdgeDialog

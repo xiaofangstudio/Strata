@@ -131,14 +131,14 @@ export function docFromBlank(
   width: number,
   height: number,
   name: string,
-  bg: "white" | "transparent",
+  bg: "white" | "transparent" | "black" | (string & {}),
   dpi?: number,
 ): StrataDoc {
   const layer = createLayer(
     width,
     height,
     "背景",
-    bg === "white" ? "#ffffff" : undefined,
+    bg === "transparent" ? undefined : bg === "white" ? "#ffffff" : bg === "black" ? "#000000" : bg,
   );
   return {
     id: nextDocId(),
