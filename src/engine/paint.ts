@@ -16,7 +16,13 @@
  */
 import { cloneSurface, createSurface, mustCtx } from "./surface";
 import { tiltToBrush, type PenSample } from "./pen";
-import { radialPoints, type RadialConfig, type RadialPoint } from "../core/radialSymmetry";
+import {
+  radialConfigFrom,
+  radialPoints,
+  type RadialConfig,
+  type RadialPoint,
+} from "../core/radialSymmetry";
+import { maskTipCanvas } from "../core/brushImport";
 
 /**
  * 笔尖材质。
@@ -153,6 +159,8 @@ export interface BrushSettings {
   radialMirror?: boolean;
   /** 径向对称中心；缺省为画布中心 */
   radialCenter?: RadialPoint | null;
+  /** 导入的笔尖遮罩（base64）；有值时真的替换内置笔尖形状 */
+  tipMask?: string | null;
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
@@ -513,6 +521,7 @@ function makeTip(
   angleDeg = 0,
   kind: BrushTip = "round",
   hueJitter = 0,
+  tipMask?: string | null,
 ): Tip {
   const R = Math.max(radius, TIP_MIN_RADIUS);
   // 超采样倍率：细笔多倍出图再缩小，边缘才不会有台阶；粗笔 1 倍已足够。
@@ -530,6 +539,7 @@ function makeTip(
   const q = clamp(roundness, 10, 100) / 100;
   const straight = q >= 0.999 && angleDeg % 360 === 0;
 
+  const imported = tipMask ? maskTipCanvas(tipMask, color, hardness, d) : null;
   const canvases = factors.map((f, i) => {
     const canvas = document.createElement("canvas");
     canvas.width = d;
@@ -542,7 +552,8 @@ function makeTip(
       g.scale(1, q);
       g.translate(-c, -c);
     }
-    paintTip(g, c, rs, shiftHue(color, f * spread), hardness, kind, seed + i * 7919);
+    if (imported) g.drawImage(imported, 0, 0);
+    else paintTip(g, c, rs, shiftHue(color, f * spread), hardness, kind, seed + i * 7919);
     return canvas;
   });
 
@@ -778,6 +789,7 @@ export function drawBrushTipSample(
     brush.angle,
     brush.tip,
     isEraser ? 0 : brush.hueJitter,
+    isEraser ? null : brush.tipMask,
   );
 
   // 画在离屏画布上：纹理要按整块小样一次性裁，不能逐个笔尖裁
@@ -939,14 +951,7 @@ export class Stroke {
     this.erase = erase;
     this.clipMask = clipMask ?? null;
     this.symmetry = settings.symmetry ?? "none";
-    this.radial =
-      this.symmetry === "radial"
-        ? {
-            sectors: settings.radialSectors ?? 6,
-            mirror: settings.radialMirror === true,
-            center: settings.radialCenter ?? null,
-          }
-        : null;
+    this.radial = radialConfigFrom(settings);
     this.buf = document.createElement("canvas");
     this.buf.width = Math.max(1, Math.round(width));
     this.buf.height = Math.max(1, Math.round(height));
@@ -1003,6 +1008,7 @@ export class Stroke {
       settings.angle,
       settings.tip,
       erase ? 0 : settings.hueJitter,
+      erase ? null : settings.tipMask,
     );
   }
 

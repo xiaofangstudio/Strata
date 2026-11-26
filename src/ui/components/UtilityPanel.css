@@ -102,3 +102,48 @@
   color: var(--accent);
   background: var(--accent-soft);
 }
+
+/* 时间轴：真缩略图 + 关键帧标记，横向可滚，不挤压面板宽度 */
+.util-timeline {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+  scrollbar-width: thin;
+}
+
+.util-frame {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.util-frame:hover { border-color: var(--accent); }
+.util-frame.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.util-frame.is-key { color: var(--warning, #ffd166); }
+
+.util-frame-thumb {
+  display: block;
+  width: 56px;
+  height: 40px;
+  border-radius: 3px;
+  background-image:
+    linear-gradient(45deg, var(--checker-a, #c9c9cf) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a, #c9c9cf) 25%, transparent 25%);
+  background-size: 8px 8px;
+  image-rendering: auto;
+}

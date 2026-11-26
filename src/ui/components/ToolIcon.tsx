@@ -130,6 +130,14 @@ const PATHS: Record<IconId, ReactNode> = {
       <path d="M16.6 7.2c1.6.6 2.7 2 2.9 3.7M17.2 13c1.3.8 2.1 2 2.3 3.4" />
     </g>
   ),
+  // 调整画笔：笔尖 + 半黑半白的蒙版圆点（白 = 添加调整，黑 = 减去）
+  adjustmentBrush: (
+    <g {...stroke}>
+      <path d="M4.6 19.4 15.8 8.2l2.6 2.6L7.2 22a1.6 1.6 0 0 1-2.6-2.6Z" />
+      <circle cx="17.4" cy="6.4" r="3.6" />
+      <path d="M17.4 2.8a3.6 3.6 0 0 1 0 7.2" fill="currentColor" stroke="none" />
+    </g>
+  ),
   // 橡皮
   eraser: (
     <g {...stroke}>
@@ -240,6 +248,12 @@ const PATHS: Record<IconId, ReactNode> = {
       <path d="M4.2 19.8 19.8 4.2" />
       <circle cx="4.2" cy="19.8" r="1.5" />
       <circle cx="19.8" cy="4.2" r="1.5" />
+    </g>
+  ),
+  // 星形：五角轮廓，独立于多边形边数设置
+  shapeStar: (
+    <g {...stroke}>
+      <path d="M12 3.2l2.6 5.7 6.2.7-4.7 4.1 1.4 6.1L12 16.9 6.5 19.8l1.4-6.1-4.7-4.1 6.2-.7L12 3.2Z" />
     </g>
   ),
   // 柳叶笔：两道弧围成的叶片 + 中脉，尾端收尖

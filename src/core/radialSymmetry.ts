@@ -71,3 +71,27 @@ export function radialDistanceToCenter(
 ): number {
   return Math.hypot(p.x - center.x, p.y - center.y);
 }
+
+/**
+ * 从画笔 / 涂抹选项派生引擎用的径向配置。
+ *
+ * 只有 `symmetry === "radial"` 才返回配置；扇区数在这里统一夹取，
+ * 避免画笔和涂抹两条管线各自写一份导致行为分叉。`fallbackCenter`
+ * 由调用方给画布中心，配置没显式设中心时用它。
+ */
+export function radialConfigFrom(
+  settings: {
+    symmetry?: string | null;
+    radialSectors?: number;
+    radialMirror?: boolean;
+    radialCenter?: RadialPoint | null;
+  } | null | undefined,
+  fallbackCenter?: RadialPoint | null,
+): RadialConfig | null {
+  if (!settings || settings.symmetry !== "radial") return null;
+  return {
+    sectors: clampRadialSectors(settings.radialSectors ?? 6),
+    mirror: settings.radialMirror === true,
+    center: settings.radialCenter ?? fallbackCenter ?? null,
+  };
+}

@@ -1,0 +1,94 @@
+/* 录制 / 回放小窗：独占 .pbw- 前缀，避免撞全局按钮样式 */
+.pbw {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 130;
+  display: grid;
+  gap: 8px;
+  width: 320px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.pbw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pbw-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pbw-hint,
+.pbw-status {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.pbw-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.pbw-row input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.pbw-btn,
+.pbw-speed {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pbw-btn:hover:not(:disabled),
+.pbw-speed:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pbw-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pbw-btn.is-rec {
+  color: #e5484d;
+  border-color: #e5484d;
+}
+
+.pbw-speed.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pbw-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}

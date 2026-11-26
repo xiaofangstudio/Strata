@@ -501,6 +501,55 @@
   padding: 0 var(--sp-3);
 }
 
+/* 笔尖导入：真文件 → 灰度遮罩 → 预览 → 存库，坏文件在下方明确报错 */
+.brl-import {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
+.brl-import-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.brl-import-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.brl-import-row input[type="range"] { flex: 1; min-width: 60px; }
+.brl-import-row .brl-name { width: 100%; }
+
+.brl-tip-preview {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background-image:
+    linear-gradient(45deg, #c9c9cf 25%, transparent 25%),
+    linear-gradient(-45deg, #c9c9cf 25%, transparent 25%);
+  background-size: 8px 8px;
+}
+
+.brl-import-error {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: #e5484d;
+}
+
 .brl-save.is-on {
   color: var(--text);
   border-style: solid;

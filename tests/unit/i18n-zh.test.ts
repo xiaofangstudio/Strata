@@ -34,6 +34,8 @@ const TOP_GROUPS = [
   "status",
   "dialog",
   "guide",
+  "onion",
+  "playback",
   "liquify",
   "puppet",
   "inpaint",

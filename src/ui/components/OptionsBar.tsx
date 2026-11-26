@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { zh } from "../../i18n";
 import {
+  isAdjustmentBrushTool,
   isRetouchTool,
   isSelectionTool,
   isShapeTool,
@@ -18,7 +19,11 @@ import {
   usesBrush,
   type ToolId,
 } from "../../tools/catalog";
-import { type BrushSettings, type GradientStyle } from "../../engine/paint";
+import {
+  type BrushSettings,
+  type GradientStyle,
+  type SymmetryMode,
+} from "../../engine/paint";
 import {
   WARP_STYLES,
   type WarpStyle,
@@ -39,6 +44,13 @@ import {
   type ToneRange,
 } from "../../engine/retouch";
 import type { SelectionMode } from "../../core/selection";
+import { clampStarInner, clampStarPoints } from "../../core/starShape";
+import {
+  ADJUST_BRUSH_KINDS,
+  type AdjustBrushKind,
+  type AdjustBrushSettings,
+} from "../../core/adjustmentBrush";
+import type { PerspectiveMode, PerspectiveState } from "../../core/perspective";
 import {
   BrushLibrary,
   BrushPresetGroup,
@@ -51,6 +63,7 @@ import {
   resetBrush,
   type SegOption,
 } from "./controls";
+import NumericField from "./NumericField";
 import ToolIcon from "./ToolIcon";
 import "./OptionsBar.css";
 
@@ -64,6 +77,12 @@ interface Props {
   /** 涂抹力度（推颜色强度 0–100） */
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  /** 调整画笔：调整类型 / Add-Subtract / 蒙版叠加显示 */
+  adjustBrush: AdjustBrushSettings;
+  onAdjustBrush: (patch: Partial<AdjustBrushSettings>) => void;
+  /** 透视绘图辅助：灭点导线只画在浮层上，端点可吸附 */
+  perspective: PerspectiveState;
+  onPerspective: (patch: Partial<PerspectiveState>) => void;
   /** 形状工具参数（矩形 / 椭圆 / 直线共用一套） */
   shape: ShapeSettings;
   onShape: (patch: Partial<ShapeSettings>) => void;
@@ -100,6 +119,8 @@ interface Props {
   docSize: string;
   /** 打开画笔设置面板（F5）；只有画笔类工具会显示入口 */
   onOpenBrushPanel?: () => void;
+  /** 打开绘制录制 / 回放小窗 */
+  onOpenPlayback?: () => void;
 }
 
 export default function OptionsBar({
@@ -110,6 +131,10 @@ export default function OptionsBar({
   onRetouch,
   smudgeStrength,
   onSmudgeStrength,
+  adjustBrush,
+  onAdjustBrush,
+  perspective,
+  onPerspective,
   shape,
   onShape,
   text,
@@ -136,14 +161,19 @@ export default function OptionsBar({
   onSampleAllLayers,
   docSize,
   onOpenBrushPanel,
+  onOpenPlayback,
 }: Props) {
-  const { main, extra } = buildControls(tool, {
+  const ctx: Ctx = {
     brush,
     onBrush,
     retouch,
     onRetouch,
     smudgeStrength,
     onSmudgeStrength,
+    adjustBrush,
+    onAdjustBrush,
+    perspective,
+    onPerspective,
     shape,
     onShape,
     text,
@@ -169,7 +199,8 @@ export default function OptionsBar({
     sampleAllLayers,
     onSampleAllLayers,
     docSize,
-  });
+  };
+  const { main, extra } = buildControls(tool, ctx);
 
   return (
     <div className="optbar" role="toolbar" aria-label={zh.tools[tool]}>
@@ -196,7 +227,15 @@ export default function OptionsBar({
         </button>
       )}
 
-      <MoreMenu>{extra}</MoreMenu>
+      <MoreMenu>
+        {extra}
+        <PerspectiveControls c={ctx} />
+        {onOpenPlayback && (
+          <button type="button" className="btn-ghost btn-sm" onClick={onOpenPlayback}>
+            {zh.playback.open}
+          </button>
+        )}
+      </MoreMenu>
     </div>
   );
 }
@@ -210,6 +249,10 @@ interface Ctx {
   onRetouch: (patch: Partial<RetouchSettings>) => void;
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  adjustBrush: AdjustBrushSettings;
+  onAdjustBrush: (patch: Partial<AdjustBrushSettings>) => void;
+  perspective: PerspectiveState;
+  onPerspective: (patch: Partial<PerspectiveState>) => void;
   shape: ShapeSettings;
   onShape: (patch: Partial<ShapeSettings>) => void;
   text: TextSettings;
@@ -285,6 +328,103 @@ function ColorPair({ c, compact }: { c: Ctx; compact?: boolean }) {
   );
 }
 
+/**
+ * 对称控件：画笔与涂抹共用同一套。
+ * 径向模式才显示扇区数 / 镜像开关 / 复位中心，避免给镜像模式摆一堆假参数。
+ */
+function SymmetryControls({ c }: { c: Ctx }) {
+  const mode = c.brush.symmetry ?? "none";
+  return (
+    <>
+      <SegGroup
+        label={zh.options.symmetry}
+        value={mode}
+        onChange={(symmetry: SymmetryMode) => c.onBrush({ symmetry })}
+        options={[
+          { value: "none", label: zh.options.symmetryNone },
+          { value: "vertical", label: zh.options.symmetryVertical, hint: zh.options.symmetryHint },
+          { value: "horizontal", label: zh.options.symmetryHorizontal, hint: zh.options.symmetryHint },
+          { value: "both", label: zh.options.symmetryBoth, hint: zh.options.symmetryHint },
+          { value: "radial", label: zh.options.radial, hint: zh.options.radialHint },
+        ]}
+      />
+      {mode === "radial" && (
+        <>
+          <div className="opt-extra-row">
+            <Slider
+              key="radialSectors"
+              label={zh.options.radialSectors}
+              min={2}
+              max={32}
+              value={c.brush.radialSectors ?? 6}
+              onChange={(v) => c.onBrush({ radialSectors: v })}
+              hint={zh.options.radialHint}
+            />
+            <Check
+              key="radialMirror"
+              label={zh.options.radialMirror}
+              on={c.brush.radialMirror === true}
+              onChange={(v) => c.onBrush({ radialMirror: v })}
+              hint={zh.options.radialHint}
+            />
+          </div>
+          <p className="opt-note">{zh.options.radialCenterHint}</p>
+          <button
+            type="button"
+            className="btn-ghost btn-xs"
+            onClick={() => c.onBrush({ radialCenter: null })}
+          >
+            {zh.options.radialCenterReset}
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+/** 透视辅助：所有工具都能开，导线只画在浮层，端点吸附由画布管线执行。 */
+function PerspectiveControls({ c }: { c: Ctx }) {
+  const p = c.perspective;
+  return (
+    <>
+      <SegGroup
+        label={zh.options.perspective}
+        value={p.mode}
+        onChange={(mode: PerspectiveMode) => c.onPerspective({ mode })}
+        options={[
+          { value: "off", label: zh.options.perspectiveOff },
+          { value: "one", label: zh.options.perspectiveOne, hint: zh.options.perspectiveHint },
+          { value: "two", label: zh.options.perspectiveTwo, hint: zh.options.perspectiveHint },
+          { value: "three", label: zh.options.perspectiveThree, hint: zh.options.perspectiveHint },
+        ]}
+      />
+      {p.mode !== "off" && (
+        <>
+          <div className="opt-extra-row">
+            <Check
+              key="perspectiveSnap"
+              label={zh.options.perspectiveSnap}
+              on={p.snap}
+              onChange={(v) => c.onPerspective({ snap: v })}
+              hint={zh.options.perspectiveHint}
+            />
+            <Slider
+              key="perspectiveStrength"
+              label={zh.options.perspectiveStrength}
+              min={0}
+              max={100}
+              value={p.strength}
+              onChange={(v) => c.onPerspective({ strength: v })}
+              suffix="%"
+            />
+          </div>
+          <p className="opt-note">{zh.options.perspectiveHint}</p>
+        </>
+      )}
+    </>
+  );
+}
+
 function buildControls(tool: ToolId, c: Ctx): Built {
   // 涂抹：沿用画笔的笔尖 / 尺寸 / 硬度 / 流量，颜色由画布决定，另给一个推挤力度
   if (isSmudgeTool(tool)) {
@@ -319,6 +459,93 @@ function buildControls(tool: ToolId, c: Ctx): Built {
             max={100}
             value={c.brush.hardness}
             onChange={(v) => c.onBrush({ hardness: v })}
+            suffix="%"
+          />
+          <Slider
+            key="flow"
+            label={zh.options.flow}
+            min={1}
+            max={100}
+            value={c.brush.flow}
+            onChange={(v) => c.onBrush({ flow: v })}
+            suffix="%"
+          />
+          <SymmetryControls c={c} />
+        </>
+      ),
+    };
+  }
+
+  // 调整画笔：核心是「画哪种调整 / 加还是减」，笔尖参数沿用画笔那一套
+  if (isAdjustmentBrushTool(tool)) {
+    const kindLabels = zh.options.adjustBrushKinds as Record<string, string>;
+    return {
+      main: [
+        <span className="opt" key="adjust-kind">
+          <span className="opt-label">{zh.options.adjustBrushAdjustment}</span>
+          <select
+            className="opt-select"
+            value={c.adjustBrush.kind}
+            onChange={(e) => c.onAdjustBrush({ kind: e.target.value as AdjustBrushKind })}
+          >
+            {ADJUST_BRUSH_KINDS.map((entry) => (
+              <option key={entry.kind} value={entry.kind}>
+                {kindLabels[entry.kind] ?? entry.kind}
+              </option>
+            ))}
+          </select>
+        </span>,
+        <SegGroup
+          key="mask-mode"
+          label={zh.options.adjustBrushMaskMode}
+          value={c.adjustBrush.subtract ? "subtract" : "add"}
+          options={[
+            { value: "add", label: "+", hint: zh.options.adjustBrushAdd },
+            { value: "subtract", label: "−", hint: zh.options.adjustBrushSubtract },
+          ]}
+          onChange={(v) => c.onAdjustBrush({ subtract: v === "subtract" })}
+        />,
+        <BrushTipPreview key="tip" brush={c.brush} isEraser={false} />,
+        <Slider
+          key="size"
+          label={zh.options.size}
+          min={1}
+          max={500}
+          value={c.brush.size}
+          onChange={(v) => c.onBrush({ size: v })}
+        />,
+        <Check
+          key="overlay"
+          label={zh.options.adjustBrushOverlay}
+          on={c.adjustBrush.overlay}
+          onChange={(v) => c.onAdjustBrush({ overlay: v })}
+          hint={zh.options.adjustBrushOverlayHint}
+        />,
+      ],
+      extra: (
+        <>
+          <p className="opt-note">{zh.options.adjustBrushHint}</p>
+          <p className="opt-note">
+            {c.adjustBrush.subtract
+              ? zh.options.adjustBrushSubtract
+              : zh.options.adjustBrushAdd}
+          </p>
+          <Slider
+            key="hardness"
+            label={zh.options.hardness}
+            min={0}
+            max={100}
+            value={c.brush.hardness}
+            onChange={(v) => c.onBrush({ hardness: v })}
+            suffix="%"
+          />
+          <Slider
+            key="opacity"
+            label={zh.options.opacity}
+            min={1}
+            max={100}
+            value={c.brush.opacity}
+            onChange={(v) => c.onBrush({ opacity: v })}
             suffix="%"
           />
           <Slider
@@ -499,19 +726,7 @@ function buildControls(tool: ToolId, c: Ctx): Built {
               ]}
             />
           </div>
-          <div className="opt-extra-row">
-            <SegGroup
-              label={zh.options.symmetry}
-              value={c.brush.symmetry ?? "none"}
-              onChange={(symmetry) => c.onBrush({ symmetry })}
-              options={[
-                { value: "none", label: zh.options.symmetryNone },
-                { value: "vertical", label: zh.options.symmetryVertical, hint: zh.options.symmetryHint },
-                { value: "horizontal", label: zh.options.symmetryHorizontal, hint: zh.options.symmetryHint },
-                { value: "both", label: zh.options.symmetryBoth, hint: zh.options.symmetryHint },
-              ]}
-            />
-          </div>
+          <SymmetryControls c={c} />
           <p className="opt-note">{zh.options.tipHint}</p>
           <p className="opt-note">{zh.options.textureHint}</p>
           <div className="opt-extra-row">
@@ -790,7 +1005,9 @@ function buildControls(tool: ToolId, c: Ctx): Built {
         ? zh.options.shapeRectHint
         : tool === "shapeEllipse"
           ? zh.options.shapeEllipseHint
-          : zh.options.shapeLineHint;
+          : tool === "shapeStar"
+            ? zh.options.starHint
+            : zh.options.shapeLineHint;
     const st = c.shape;
     return {
       main: [
@@ -821,6 +1038,28 @@ function buildControls(tool: ToolId, c: Ctx): Built {
       extra: (
         <>
           <p className="opt-note">{note}</p>
+          {tool === "shapeStar" && (
+            <>
+              <NumericField
+                label={zh.options.starPoints}
+                value={clampStarPoints(st.starPoints)}
+                min={3}
+                max={20}
+                step={1}
+                dec={0}
+                onChange={(v) => c.onShape({ starPoints: clampStarPoints(v) })}
+              />
+              <Slider
+                label={zh.options.starInner}
+                min={5}
+                max={95}
+                value={Math.round(clampStarInner(st.starInner) * 100)}
+                onChange={(v) => c.onShape({ starInner: clampStarInner(v / 100) })}
+                suffix="%"
+              />
+              <p className="opt-note">{zh.options.starPointsHint}</p>
+            </>
+          )}
           <p className="opt-note">{zh.options.shapeHint}</p>
           <div className="opt-extra-row">
             <ColorField

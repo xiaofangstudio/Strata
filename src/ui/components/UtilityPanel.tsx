@@ -10,7 +10,7 @@
  * - 路径 / 动作：Strata 没有矢量路径与动作录制器，界面里如实说明，
  *   不摆一排点了没反应的假按钮。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { StrataDoc } from "../../core/document";
 import { ADJUST_DEFS, STYLE_DEFS } from "../../core/layer";
 import {
@@ -21,7 +21,17 @@ import {
 } from "../../core/layerOps";
 import { measureDocument } from "../../core/imageOps";
 import { patternList } from "../../core/patterns";
-import { isVideoLayer, videoSummary } from "../../core/videoLayer";
+import {
+  deleteFrame,
+  duplicateFrame,
+  insertBlankFrame,
+  isVideoLayer,
+  setFrameIndex,
+  setFrameRate,
+  toggleKeyframe,
+  videoSummary,
+} from "../../core/videoLayer";
+import type { OnionSettings } from "../../core/onionSkin";
 import { TEXT_FAMILIES } from "../../engine/text";
 import { zh } from "../../i18n";
 import Modal from "./Modal";
@@ -57,6 +67,9 @@ interface Props {
   onFg: (hex: string) => void;
   onApply: (next: StrataDoc, label: string) => void;
   onClose: () => void;
+  /** 洋葱皮是视图状态，不写进文档历史 */
+  onion: OnionSettings;
+  onOnion: (patch: Partial<OnionSettings>) => void;
 }
 
 const TITLES: Record<PanelKind, string> = {
@@ -147,6 +160,19 @@ const MODIFIERS: { tool: string; rows: [string, string][] }[] = [
   },
 ];
 
+/** 帧缩略图：直接把帧画布缩绘到小画布，不缓存假图。 */
+function FrameThumb({ frame }: { frame: HTMLCanvasElement }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const c = ref.current;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(frame, 0, 0, c.width, c.height);
+  }, [frame]);
+  return <canvas ref={ref} width={56} height={40} className="util-frame-thumb" />;
+}
+
 export default function UtilityPanel({
   kind,
   doc,
@@ -157,6 +183,8 @@ export default function UtilityPanel({
   onFg,
   onApply,
   onClose,
+  onion,
+  onOnion,
 }: Props) {
   const [note, setNote] = useState(doc.note ?? "");
   const [compName, setCompName] = useState("");
@@ -437,26 +465,153 @@ export default function UtilityPanel({
         );
       }
       case "timeline": {
-        const v = isVideoLayer(layer) ? layer.video : null;
-        if (!v) return <p className="isz-hint">当前图层不是视频（帧序列）层。</p>;
+        const vl = isVideoLayer(layer) ? layer : null;
+        if (!vl) return <p className="isz-hint">{zh.onion.noVideo}</p>;
+        const v = vl.video;
         return (
           <>
-            <p className="isz-hint">{videoSummary(layer as never)}</p>
-            <div className="util-grid">
-              {v.frames.map((_f, i) => (
+            <p className="isz-hint">{videoSummary(vl as never)}</p>
+            <div className="util-timeline">
+              {v.frames.map((f, i) => (
                 <button
                   key={i}
                   type="button"
-                  className={`btn-ghost btn-sm${i === v.index ? " is-on" : ""}`}
-                  onClick={() => onApply({ ...doc }, `跳到第 ${i + 1} 帧`)}
+                  className={`util-frame${i === v.index ? " is-on" : ""}${f.key ? " is-key" : ""}`}
+                  onClick={() => onApply(setFrameIndex(doc, vl.id, i), `跳到第 ${i + 1} 帧`)}
+                  title={f.key ? zh.onion.keyframe : undefined}
                 >
-                  {i + 1}
+                  <FrameThumb frame={f.surface} />
+                  <span>
+                    {i + 1}
+                    {f.key ? " ◆" : ""}
+                  </span>
                 </button>
               ))}
             </div>
-            <p className="isz-hint">
-              帧的增删在「图层 &gt; 视频图层」菜单里；这里只做索引查看。
-            </p>
+            <div className="isz-row">
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onApply(insertBlankFrame(doc, vl.id), zh.onion.addFrame)}
+              >
+                {zh.onion.addFrame}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onApply(duplicateFrame(doc, vl.id), zh.onion.dupFrame)}
+              >
+                {zh.onion.dupFrame}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                disabled={v.frames.length <= 1}
+                onClick={() => onApply(deleteFrame(doc, vl.id), zh.onion.deleteFrame)}
+              >
+                {zh.onion.deleteFrame}
+              </button>
+              <button
+                type="button"
+                className={`btn-ghost btn-sm${v.frames[v.index].key ? " is-on" : ""}`}
+                onClick={() => onApply(toggleKeyframe(doc, vl.id), zh.onion.keyframe)}
+              >
+                {zh.onion.keyframe}
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">{zh.onion.fps}</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={v.fps}
+                  onChange={(e) => {
+                    const fps = Number(e.target.value);
+                    if (Number.isFinite(fps) && fps >= 1 && fps <= 60) {
+                      onApply(setFrameRate(doc, vl.id, fps), zh.onion.fps);
+                    }
+                  }}
+                />
+              </span>
+            </label>
+            <h4 className="util-h">{zh.onion.title}</h4>
+            <div className="isz-row">
+              <label className="field">
+                <span className="field-label">{zh.onion.enabled}</span>
+                <input
+                  type="checkbox"
+                  checked={onion.enabled}
+                  onChange={(e) => onOnion({ enabled: e.target.checked })}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.onion.keyframesOnly}</span>
+                <input
+                  type="checkbox"
+                  checked={onion.keyframesOnly}
+                  onChange={(e) => onOnion({ keyframesOnly: e.target.checked })}
+                />
+              </label>
+            </div>
+            <div className="isz-row">
+              <label className="field">
+                <span className="field-label">{zh.onion.prev}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    max={8}
+                    value={onion.prev}
+                    onChange={(e) => onOnion({ prev: Number(e.target.value) || 0 })}
+                  />
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.onion.next}</span>
+                <span className="field-input">
+                  <input
+                    type="number"
+                    min={0}
+                    max={8}
+                    value={onion.next}
+                    onChange={(e) => onOnion({ next: Number(e.target.value) || 0 })}
+                  />
+                </span>
+              </label>
+            </div>
+            <label className="field">
+              <span className="field-label">{zh.onion.opacity}</span>
+              <span className="field-input">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={onion.opacity}
+                  onChange={(e) => onOnion({ opacity: Number(e.target.value) })}
+                />
+              </span>
+            </label>
+            <div className="isz-row">
+              <label className="field">
+                <span className="field-label">{zh.onion.colorPrev}</span>
+                <input
+                  type="color"
+                  value={onion.colorPrev}
+                  onChange={(e) => onOnion({ colorPrev: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{zh.onion.colorNext}</span>
+                <input
+                  type="color"
+                  value={onion.colorNext}
+                  onChange={(e) => onOnion({ colorNext: e.target.value })}
+                />
+              </label>
+            </div>
+            <p className="isz-hint">{zh.onion.hint}</p>
           </>
         );
       }

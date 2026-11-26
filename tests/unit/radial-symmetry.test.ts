@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampRadialSectors,
+  radialConfigFrom,
   radialDistanceToCenter,
   radialPoints,
 } from "../../src/core/radialSymmetry";
@@ -55,5 +56,25 @@ describe("径向对称几何", () => {
     expect(clampRadialSectors(99)).toBe(32);
     expect(clampRadialSectors(Number.NaN)).toBe(2);
     expect(radialPoints(Number.NaN, 1, { sectors: 4 })).toEqual([]);
+  });
+
+  it("画笔选项派生配置：非径向返回 null，扇区夹取，中心回退", () => {
+    expect(radialConfigFrom({ symmetry: "both", radialSectors: 8 })).toBeNull();
+    expect(radialConfigFrom(null)).toBeNull();
+    expect(radialConfigFrom({ symmetry: "radial", radialSectors: 99 })).toEqual({
+      sectors: 32,
+      mirror: false,
+      center: null,
+    });
+    const c = { x: 120, y: 80 };
+    expect(
+      radialConfigFrom({ symmetry: "radial", radialSectors: 4, radialMirror: true }, c),
+    ).toEqual({ sectors: 4, mirror: true, center: c });
+    expect(
+      radialConfigFrom(
+        { symmetry: "radial", radialSectors: 6, radialCenter: { x: 3, y: 4 } },
+        c,
+      )?.center,
+    ).toEqual({ x: 3, y: 4 });
   });
 });

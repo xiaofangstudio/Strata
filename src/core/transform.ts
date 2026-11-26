@@ -19,6 +19,39 @@ export type FlipAxis = "h" | "v";
 /** 90 度整倍的旋转角度。 */
 export type QuarterTurn = 90 | 180 | 270;
 
+/* ---------------------------------------------------------- 任意角度旋转 */
+
+/** 插值档位：映射到 Canvas2D 的重采样开关（移植自 PhotoCraft 的命令参数）。 */
+export type RotateInterpolation = "bicubic" | "bilinear" | "nearest";
+export const ROTATE_INTERPOLATIONS: readonly RotateInterpolation[] = [
+  "bicubic",
+  "bilinear",
+  "nearest",
+];
+
+/** 角度字段只保留两位小数，非有限值归零（与 PhotoCraft settle() 同口径）。 */
+export function settleRotationAngle(input: number): number {
+  if (!Number.isFinite(input)) return 0;
+  return Math.round(Math.min(359.99, Math.max(-359.99, input)) * 100) / 100;
+}
+
+/** 方向：Strata 的正角是顺时针（Canvas 的 y 轴向下）。 */
+export function signedRotationDegrees(angle: number, direction: "cw" | "ccw"): number {
+  const a = settleRotationAngle(angle);
+  return direction === "ccw" ? -a : a;
+}
+
+/** 旋转后的外接矩形；对话框拿它显示输出尺寸，落库拿它分配画布。 */
+export function rotateOutputSize(width: number, height: number, deg: number): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  return {
+    width: Math.max(1, Math.round(width * cos + height * sin)),
+    height: Math.max(1, Math.round(width * sin + height * cos)),
+  };
+}
+
 /* -------------------------------------------------------------- 基础表面操作 */
 
 /** 翻转一张表面（尺寸不变）。 */
@@ -305,15 +338,20 @@ export function applyFreeTransform(doc: StrataDoc, t: FreeTransform): StrataDoc 
  * 画布按旋转后的外接矩形扩张；所有像素层、蒙版与选区用同一套变换，
  * 保证图层之间不错位。落在新画布外的部分自然被裁掉。
  */
-export function rotateDocumentArbitrary(doc: StrataDoc, deg: number): StrataDoc {
+export function rotateDocumentArbitrary(
+  doc: StrataDoc,
+  deg: number,
+  interpolation: RotateInterpolation = "bicubic",
+): StrataDoc {
   const rad = (deg * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const w = Math.max(1, Math.round(doc.width * cos + doc.height * sin));
-  const h = Math.max(1, Math.round(doc.width * sin + doc.height * cos));
+  const { width: w, height: h } = rotateOutputSize(doc.width, doc.height, deg);
   const turn = (src: HTMLCanvasElement): HTMLCanvasElement => {
     const out = createSurface(w, h);
     const ctx = mustCtx(out);
+    ctx.imageSmoothingEnabled = interpolation !== "nearest";
+    // Canvas2D 没有真正的三次卷积开关，high 是浏览器最接近的实现
+    ctx.imageSmoothingQuality =
+      interpolation === "bicubic" ? "high" : interpolation === "bilinear" ? "low" : "low";
     ctx.translate(w / 2, h / 2);
     ctx.rotate(rad);
     ctx.drawImage(src, -doc.width / 2, -doc.height / 2);

@@ -487,3 +487,15 @@
     var(--shadow-sm),
     var(--shadow-lg);
 }
+
+/* 调整画笔的下拉：14 种调整平铺不下，用原生 select 保证键盘可用 */
+.opt-select {
+  max-width: 170px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  font: inherit;
+  font-size: var(--fs-sm);
+}

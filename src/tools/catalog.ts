@@ -23,6 +23,7 @@ export type ToolId =
   | "shapeRect"
   | "shapeEllipse"
   | "shapeLine"
+  | "shapeStar"
   | "leafPen"
   | "text"
   | "crop"
@@ -39,6 +40,7 @@ export type ToolId =
   | "dodge"
   | "burn"
   | "sponge"
+  | "adjustmentBrush"
   | "ruler"
   | "count"
   | "hand"
@@ -92,6 +94,8 @@ export const TOOLS: ToolDef[] = [
   { id: "shapeRect", shortcut: "U", group: "shape", ready: true },
   { id: "shapeEllipse", shortcut: "U", group: "shape", ready: true },
   { id: "shapeLine", shortcut: "U", group: "shape", ready: true },
+  // 星形：点数独立设置 3–20（PhotoCraft #16867），与柳叶笔共用 U 循环
+  { id: "shapeStar", shortcut: "U", group: "shape", ready: true },
   // 柳叶笔：拖出弧线自动闭合成色块，大面积铺色用；与形状工具共用 U 循环
   { id: "leafPen", shortcut: "U", group: "shape", ready: true },
 
@@ -113,6 +117,8 @@ export const TOOLS: ToolDef[] = [
   { id: "dodge", shortcut: "O", group: "retouch", ready: true },
   { id: "burn", shortcut: "O", group: "retouch", ready: true },
   { id: "sponge", shortcut: "O", group: "retouch", ready: true },
+  // 调整画笔：把调整直接「画」进局部蒙版，连续落笔落在同一张调整层上
+  { id: "adjustmentBrush", shortcut: "A", group: "retouch", ready: true },
 
   { id: "eyedropper", shortcut: "I", group: "sample", ready: true },
   // 分析与测量：标尺量距离/角度，计数工具打编号标记
@@ -173,6 +179,11 @@ export function isSmudgeTool(id: ToolId): boolean {
   return id === "smudge";
 }
 
+/** 调整画笔：笔迹进调整层蒙版，不碰图层像素。 */
+export function isAdjustmentBrushTool(id: ToolId): boolean {
+  return id === "adjustmentBrush";
+}
+
 /** 走「点一下就落库」而不是「拖一圈」的选区工具。 */
 export function isClickSelectTool(id: ToolId): boolean {
   return id === "wand" || id === "singleRow" || id === "singleColumn";
@@ -180,7 +191,13 @@ export function isClickSelectTool(id: ToolId): boolean {
 
 /** 形状工具（矩形 / 椭圆 / 直线）：拖拽绘制，选项条给出填充与描边。 */
 export function isShapeTool(id: ToolId): boolean {
-  return id === "shapeRect" || id === "shapeEllipse" || id === "shapeLine" || id === "leafPen";
+  return (
+    id === "shapeRect" ||
+    id === "shapeEllipse" ||
+    id === "shapeLine" ||
+    id === "shapeStar" ||
+    id === "leafPen"
+  );
 }
 
 /** 文字工具：在画布上点一下落一个文本框，输入后栅格化成像素。 */

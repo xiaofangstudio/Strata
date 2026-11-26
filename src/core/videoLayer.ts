@@ -21,6 +21,8 @@ export interface VideoFrame {
   surface: HTMLCanvasElement;
   /** 该帧停留时长（秒），默认按帧率算 */
   hold: number;
+  /** 关键帧：洋葱皮「只显示关键帧」会用到 */
+  key?: boolean;
 }
 
 /** 写进图层的帧序列状态。 */
@@ -85,7 +87,7 @@ export function makeVideoLayer(
     mask: null,
     maskActive: true,
     video: {
-      frames: [{ surface: cloneSurface(frame), hold: 1 / fps }],
+      frames: [{ surface: cloneSurface(frame), hold: 1 / fps, key: true }],
       index: 0,
       fps,
       footagePath,
@@ -197,6 +199,15 @@ export function setFrameRate(doc: StrataDoc, id: string, fps: number): StrataDoc
     fps: f,
     frames: v.frames.map((fr) => ({ ...fr, hold: 1 / f })),
   }));
+}
+
+/** 把当前帧标记为 / 取消关键帧。 */
+export function toggleKeyframe(doc: StrataDoc, id: string): StrataDoc {
+  return mutate(doc, id, (v) => {
+    const frames = v.frames.slice();
+    frames[v.index] = { ...frames[v.index], key: !frames[v.index].key };
+    return { ...v, frames };
+  });
 }
 
 /** 切换「显示改动后的画面 / 原始画面」。 */

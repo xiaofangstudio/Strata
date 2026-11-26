@@ -150,7 +150,6 @@ import {
   freeTransformSurface,
   initialFreeTransform,
   rotateDocument,
-  rotateDocumentArbitrary,
   rotateLayerHalf,
   rotateLayerQuarter,
   transformCorners,
@@ -179,6 +178,7 @@ import CompareView, { type CompareLayout } from "./components/CompareView";
 import GradePanel, { type GradeOverlayState } from "./components/GradePanel";
 import GradeWindowOverlay from "./components/GradeWindowOverlay";
 import AdjustDialog from "./components/AdjustDialog";
+import RotateCanvasDialog from "./components/RotateCanvasDialog";
 import type { CanvasPickCallback, CanvasPickRequest } from "./components/LevelsEditor";
 import ColorRangeDialog from "./components/ColorRangeDialog";
 import CameraRawDialog from "./components/CameraRawDialog";
@@ -210,6 +210,25 @@ import {
   snapLeafEnd,
   type LeafPoint,
 } from "../core/leafBrush";
+import { radialConfigFrom, type RadialPoint } from "../core/radialSymmetry";
+import {
+  perspectiveFor,
+  perspectiveSegments,
+  perspectiveThreshold,
+  snapToPerspective,
+  type PerspectiveState,
+} from "../core/perspective";
+import { DEFAULT_ONION, onionGhosts, type OnionSettings } from "../core/onionSkin";
+import {
+  newRecording,
+  normalizeRecording,
+  pushStrokeEvent,
+  recordingDuration,
+  type StrokeEvent,
+  type StrokeRecording,
+} from "../core/strokeRecord";
+import { renderRecording } from "../engine/strokeReplay";
+import StrokePlaybackPanel from "./components/StrokePlaybackPanel";
 import {
   activeVideoLayer,
   deleteFrame,
@@ -267,7 +286,20 @@ import {
   type AdjustState,
   type StrataLayer,
   type StyleId,
+  createLayer,
+  createMask,
 } from "../core/layer";
+import { moveReadoutText } from "../core/moveReadout";
+import {
+  DEFAULT_ADJUST_BRUSH,
+  adjustBrushEntry as adjustBrushEntryFor,
+  adjustBrushFollowKind,
+  adjustBrushRefused,
+  adjustBrushTargetLayer,
+  buildAdjustBrushDoc,
+  type AdjustBrushKind,
+  type AdjustBrushSettings,
+} from "../core/adjustmentBrush";
 import {
   borderSelection,
   cloneSelection,
@@ -340,6 +372,7 @@ import {
 } from "../engine/text";
 import {
   TOOL_GROUPS,
+  isAdjustmentBrushTool,
   isRetouchTool,
   isSelectionTool,
   isShapeTool,
@@ -556,6 +589,7 @@ const SHAPE_KIND: Record<string, ShapeKind> = {
   shapeRect: "rect",
   shapeEllipse: "ellipse",
   shapeLine: "line",
+  shapeStar: "star",
   leafPen: "leaf",
 };
 
@@ -650,6 +684,8 @@ export default function EditorShell({
   const [retouch, setRetouch] = useState<RetouchSettings>(DEFAULT_RETOUCH);
   /** 涂抹力度：和画笔参数分开记，画笔预设换了也不改用户的推挤手感。 */
   const [smudgeStrength, setSmudgeStrength] = useState(60);
+  /** 调整画笔：调整类型 / Add-Subtract / 蒙版叠加染色 */
+  const [adjustBrush, setAdjustBrush] = useState<AdjustBrushSettings>(DEFAULT_ADJUST_BRUSH);
   /** 形状工具参数（填充 / 描边 / 线宽），矩形 / 椭圆 / 直线共用一套 */
   const [shape, setShape] = useState<ShapeSettings>(DEFAULT_SHAPE);
   /** 仿制 / 修复的取样点（Alt + 单击设定），null 表示还没取样 */
@@ -790,6 +826,19 @@ export default function EditorShell({
   const [snapBounds, setSnapBounds] = useState(true);
   /** 对齐到网格（视图 > 对齐到 > 网格） */
   const [snapGrid, setSnapGrid] = useState(false);
+  /** 透视绘图辅助：灭点导线只作视图提示，端点吸附由绘制管线执行 */
+  const [perspective, setPerspective] = useState<PerspectiveState>(() =>
+    perspectiveFor("off", 1, 1),
+  );
+  /** 洋葱皮：纯视图状态，切帧 / 开关都不写进文档，也不进撤销历史 */
+  const [onion, setOnion] = useState<OnionSettings>(DEFAULT_ONION);
+  /** 绘制过程录制 / 回放：录制真实事件，回放只画临时画布 */
+  const [playbackOpen, setPlaybackOpen] = useState(false);
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recording, setRecording] = useState<StrokeRecording | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   /** 新建参考线对话框；pos 以字符串保存，方便输入中间态 */
   const [guideDialog, setGuideDialog] = useState<{ axis: "x" | "y"; pos: string } | null>(null);
   /** 描边对话框：宽度 / 颜色 / 位置 / 不透明度，数字字段用字符串保存输入中间态 */
@@ -1263,6 +1312,25 @@ export default function EditorShell({
   /** 正在进行的修饰笔画（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵），同样是抬笔才落库 */
   const retouchRef = useRef<RetouchStroke | null>(null);
   const smudgeRef = useRef<SmudgeStroke | null>(null);
+  /**
+   * 调整画笔的进行态：笔迹落在调整层的蒙版上，不碰任何图层像素。
+   * doc 是这一笔开始时的工作文档（新层时已含新层），baseMask 是原始蒙版副本，
+   * 预览只叠 stroke.buffer，抬笔才一次落库 —— 与画笔同一套「不跳变」口径。
+   */
+  const adjustPaintRef = useRef<{
+    doc: StrataDoc;
+    layerId: string;
+    baseMask: HTMLCanvasElement;
+    subtract: boolean;
+    stroke: Stroke;
+    created: boolean;
+  } | null>(null);
+  /** 连续两笔记住的调整层：不改 activeLayerId，靠它续画同一张蒙版 */
+  const adjustTargetRef = useRef<string | null>(null);
+  /** 预览中的蒙版副本，供叠加染色读取（不进文档） */
+  const adjustPreviewMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const adjustTintRef = useRef<HTMLCanvasElement | null>(null);
+  const adjustFollowedRef = useRef<string | null>(null);
   /** 拖拽起点（文档坐标） */
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   /** 平移起点（屏幕坐标） */
@@ -1319,8 +1387,31 @@ export default function EditorShell({
     start: FreeTransform;
     grab: Point;
   } | null>(null);
+  /** 洋葱皮幽灵帧：独立画在主画布下方，不进像素管线 */
+  const ghostRef = useRef<HTMLCanvasElement | null>(null);
+  /** 回放临时画布：画在主画布上方、浮层下方，不接指针事件 */
+  const playbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const recordingRef = useRef<StrokeRecording | null>(null);
+  const strokeIdRef = useRef(0);
+  const recordStartRef = useRef(0);
+  const playheadRef = useRef(0);
   /** 蚂蚁线与裁剪框的浮层画布 */
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  /**
+   * 径向对称中心：拖动时只更新 ref，由浮层 rAF 现读现画；松手才写回画笔选项。
+   * 只有十字准星附近十几像素会抢指针，不挡正常落笔。
+   */
+  const radialCenterRef = useRef<RadialPoint | null>(null);
+  const radialDragRef = useRef(false);
+  useEffect(() => {
+    if (!radialDragRef.current) radialCenterRef.current = brush.radialCenter ?? null;
+  }, [brush.radialCenter]);
+  /** 透视辅助：拖动灭点时只走 ref，松手写回 state；导线和吸附都读同一份 */
+  const perspectiveRef = useRef<PerspectiveState>(perspective);
+  const vpDragRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (vpDragRef.current === null) perspectiveRef.current = perspective;
+  }, [perspective]);
   /** 跟随光标（笔尖圆圈 / 吸管取样环）：纯 DOM，直接改样式，不走 React 状态 */
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const cursorRingRef = useRef<HTMLDivElement | null>(null);
@@ -1432,6 +1523,7 @@ export default function EditorShell({
 
   const render = useCallback(() => {
     frameStartRef.current = performance.now();
+    adjustPreviewMaskRef.current = null;
     /**
      * 这一帧要画的文档。
      *
@@ -1512,6 +1604,35 @@ export default function EditorShell({
        * 这里若写 docW/docH 会把缩小图当成缩略图拉伸，反而糊。
        */
       cx.drawImage(comp, 0, 0, comp.width, comp.height, 0, 0, w, h);
+      // 调整画笔 Overlay：只给蒙版覆盖区染色，不改合成结果、不进像素
+      if (tool === "adjustmentBrush" && adjustBrush.overlay) {
+        const aid = adjustPaintRef.current?.layerId ?? adjustTargetRef.current;
+        const src =
+          adjustPreviewMaskRef.current ??
+          docNow.layers.find((l) => l.id === aid)?.mask ??
+          null;
+        if (src) {
+          let tint = adjustTintRef.current;
+          if (!tint || tint.width !== docW || tint.height !== docH) {
+            tint = createSurface(docW, docH);
+            adjustTintRef.current = tint;
+          }
+          const tctx = mustCtx(tint);
+          tctx.setTransform(1, 0, 0, 1, 0, 0);
+          tctx.globalAlpha = 1;
+          tctx.globalCompositeOperation = "source-over";
+          tctx.filter = "none";
+          tctx.clearRect(0, 0, docW, docH);
+          tctx.drawImage(src, 0, 0);
+          tctx.globalCompositeOperation = "source-in";
+          tctx.fillStyle = "#ff9f43";
+          tctx.fillRect(0, 0, docW, docH);
+          cx.save();
+          cx.globalAlpha = 0.26;
+          cx.drawImage(tint, 0, 0, docW, docH, 0, 0, w, h);
+          cx.restore();
+        }
+      }
       applyChannelView(c, channelVis, activeChannel);
       // Alpha 通道灰度查看：在合成与颜色通道视图之上再叠一道显示滤镜
       if (viewAlpha) {
@@ -1573,6 +1694,28 @@ export default function EditorShell({
         composeForDisplay(docNow, comp, dispScale, {
           index: fi,
           layer: { ...base, surface: freeTransformSurface(docNow, ft) },
+        });
+        present();
+        return;
+      }
+    }
+
+    // 调整画笔：合成「工作文档 + 蒙版副本 + 这一笔」，预览与落库走同一条蒙版路径
+    const ab = adjustPaintRef.current;
+    if (ab && tool === "adjustmentBrush") {
+      const li = docNow.layers.findIndex((l) => l.id === ab.layerId);
+      if (li >= 0) {
+        const mask = cloneSurface(ab.baseMask);
+        const mctx = mustCtx(mask);
+        mctx.save();
+        mctx.globalAlpha = brush.opacity / 100;
+        if (ab.subtract) mctx.globalCompositeOperation = "destination-out";
+        mctx.drawImage(ab.stroke.buffer, 0, 0);
+        mctx.restore();
+        adjustPreviewMaskRef.current = mask;
+        composeForDisplay(docNow, comp, dispScale, {
+          index: li,
+          layer: { ...docNow.layers[li], mask, maskActive: true },
         });
         present();
         return;
@@ -1756,7 +1899,7 @@ export default function EditorShell({
       layer: { ...act, surface: scratch },
     });
     present();
-  }, [doc, docW, docH, brush.opacity, tool, maskEdit, quickMask, channelVis, activeChannel, viewAlpha, scale]);
+  }, [doc, docW, docH, brush.opacity, tool, maskEdit, quickMask, channelVis, activeChannel, viewAlpha, scale, adjustBrush.overlay]);
 
   /**
    * 文档变了就重画 —— 但攒到下一帧统一画一次。
@@ -1850,7 +1993,23 @@ export default function EditorShell({
   /** 文档真正更新后，预览作废（否则会一直画着已经落库之前的那一帧）。 */
   useEffect(() => {
     previewDocRef.current = null;
+    adjustTargetRef.current = null;
   }, [doc]);
+
+  /** 选中同类调整层时，选项条下拉跟着走（与 PhotoCraft 的 follow_active_layer 一致）。 */
+  useEffect(() => {
+    const id = doc.activeLayerId;
+    if (adjustFollowedRef.current === id) return;
+    adjustFollowedRef.current = id;
+    const kind = adjustBrushFollowKind(doc.layers.find((l) => l.id === id));
+    if (kind) {
+      adjustTargetRef.current = id;
+      setAdjustBrush((a) => ({ ...a, kind }));
+    } else if (adjustTargetRef.current && adjustTargetRef.current !== id) {
+      // 用户显式选了别的层：不再把下一笔偷偷送回上一次的目标层
+      adjustTargetRef.current = null;
+    }
+  }, [doc.activeLayerId, doc.layers]);
 
   /** pan 状态 → DOM 变量（滚轮缩放、居中、松手对齐都靠这一条）。 */
   useEffect(() => {
@@ -1967,6 +2126,37 @@ export default function EditorShell({
     [],
   );
 
+  /** 透视端点吸附：阈值按屏幕像素折算，命中才改写坐标 */
+  const snapPerspective = useCallback(
+    (pt: { x: number; y: number }) => {
+      const st = perspectiveRef.current;
+      if (st.mode === "off") return pt;
+      return (
+        snapToPerspective(
+          pt,
+          st,
+          docW,
+          docH,
+          perspectiveThreshold(st.strength) / scale,
+        ) ?? pt
+      );
+    },
+    [docW, docH, scale],
+  );
+
+  /** 切换灭点数量时重新摆默认位置；改吸附参数时保留用户拖过的灭点 */
+  const updatePerspective = useCallback(
+    (patch: Partial<PerspectiveState>) => {
+      setPerspective((prev) => {
+        if (patch.mode && patch.mode !== prev.mode) {
+          return perspectiveFor(patch.mode, docW, docH);
+        }
+        return { ...prev, ...patch };
+      });
+    },
+    [docW, docH],
+  );
+
   /**
    * 吸附：把落点吸到最近的参考线 / 画布边。
    * 阈值按 6 个屏幕像素折算回文档坐标，所以放大时手感不会变松。
@@ -2002,15 +2192,19 @@ export default function EditorShell({
         if (Math.abs(sy) <= thr) sy = 0;
         else if (Math.abs(sy - docH) <= thr) sy = docH;
       }
-      return { x: sx, y: sy };
+      return snapPerspective({ x: sx, y: sy });
     },
-    [snapOn, snapGuides, snapGrid, snapBounds, guides, docW, docH, scale],
+    [snapOn, snapGuides, snapGrid, snapBounds, guides, docW, docH, scale, snapPerspective],
   );
 
   const resetGesture = useCallback(() => {
+    adjustPaintRef.current = null;
+    adjustPreviewMaskRef.current = null;
     strokeRef.current = null;
     retouchRef.current = null;
     smudgeRef.current = null;
+    radialDragRef.current = false;
+    vpDragRef.current = null;
     dragRef.current = null;
     gradRef.current = null;
     moveRef.current = { dx: 0, dy: 0 };
@@ -2274,6 +2468,22 @@ export default function EditorShell({
       getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() ||
       "#6fc0ff";
 
+    // 径向对称导线：纯视图提示，既不改像素也不进历史。
+    const radial = radialConfigFrom(
+      {
+        symmetry: brush.symmetry,
+        radialSectors: brush.radialSectors,
+        radialMirror: brush.radialMirror,
+      },
+      { x: docW / 2, y: docH / 2 },
+    );
+    const perspectiveActive = perspectiveRef.current.mode !== "off";
+    // 移动中的方向距离读数：纯浮层，抬笔即消失（不进像素、不进历史）
+    const moveRead =
+      tool === "move" && dragRef.current && (moveRef.current.dx !== 0 || moveRef.current.dy !== 0)
+        ? moveRef.current
+        : null;
+
     /**
      * 智能参考线：框与画布中线 / 已有参考线对齐时拉一条品红线，
      * 右下角再贴一个「宽 × 高」徽标。全部画在浮层上，不碰像素。
@@ -2334,7 +2544,16 @@ export default function EditorShell({
     };
 
     // 既没有选区、没在拖框、没在拖形状、没在变换、没有取样点、也没有多边形折线：清一次就收工
-    if (!antsPath && !selDragging && !shapeDragging && !anchorPt && !freeActive && !polyPts) {
+    if (
+      !antsPath &&
+      !selDragging &&
+      !shapeDragging &&
+      !anchorPt &&
+      !freeActive &&
+      !polyPts &&
+      !radial &&
+      !perspectiveActive
+    ) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, c.width, c.height);
       return;
@@ -2416,11 +2635,86 @@ export default function EditorShell({
 
       const ft = freeTRef.current;
 
-      if (ft || path || anchorPt || painted) {
+      if (ft || path || anchorPt || painted || radial || perspectiveActive || moveRead) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, c.width, c.height);
         const k = dpr * scale;
         ctx.setTransform(k, 0, 0, k, 0, 0);
+
+        // 径向对称：扇区导线 + 可拖动中心准星，全部只画在浮层上
+        if (radial) {
+          const u = 1 / scale;
+          const cx = radialCenterRef.current?.x ?? radial.center?.x ?? docW / 2;
+          const cy = radialCenterRef.current?.y ?? radial.center?.y ?? docH / 2;
+          const reach = Math.hypot(docW, docH);
+          ctx.save();
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = 0.42;
+          ctx.lineWidth = u;
+          ctx.setLineDash([5 * u, 6 * u]);
+          ctx.beginPath();
+          const count = radial.sectors;
+          for (let i = 0; i < count; i += 1) {
+            const a = (Math.PI * 2 * i) / count;
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(a) * reach, cy + Math.sin(a) * reach);
+            if (radial.mirror) {
+              ctx.moveTo(cx, cy);
+              ctx.lineTo(cx + Math.cos(-a) * reach, cy + Math.sin(-a) * reach);
+            }
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 2.5 * u;
+          ctx.strokeStyle = "rgba(255,255,255,0.95)";
+          ctx.beginPath();
+          ctx.arc(cx, cy, 7 * u, 0, Math.PI * 2);
+          ctx.moveTo(cx - 12 * u, cy);
+          ctx.lineTo(cx + 12 * u, cy);
+          ctx.moveTo(cx, cy - 12 * u);
+          ctx.lineTo(cx, cy + 12 * u);
+          ctx.stroke();
+          ctx.lineWidth = 1.2 * u;
+          ctx.strokeStyle = accent;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // 透视导线与灭点手柄：纯浮层提示，拖动灭点只改 ref
+        if (perspectiveActive) {
+          const st = perspectiveRef.current;
+          const u = 1 / scale;
+          ctx.save();
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = 0.28;
+          ctx.lineWidth = u;
+          ctx.beginPath();
+          for (const seg of perspectiveSegments(st, docW, docH)) {
+            ctx.moveTo(seg.x1, seg.y1);
+            ctx.lineTo(seg.x2, seg.y2);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+          const colors = ["#ff6b6b", "#5b9bff", "#ffd166"];
+          st.points.forEach((vp, i) => {
+            const color = colors[i % colors.length];
+            ctx.strokeStyle = color;
+            ctx.fillStyle = "#ffffff";
+            ctx.lineWidth = 2 * u;
+            ctx.beginPath();
+            ctx.arc(vp.x, vp.y, 6 * u, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(vp.x, vp.y, 2 * u, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.font = `${10 * u}px "Segoe UI", system-ui, sans-serif`;
+            ctx.fillText(`VP${i + 1}`, vp.x + 9 * u, vp.y - 8 * u);
+          });
+          ctx.restore();
+        }
 
         // 裁剪时把框外压暗，一眼看清会丢掉哪些像素
         if (live && live.tool === "crop" && box) {
@@ -2550,14 +2844,198 @@ export default function EditorShell({
           }
           ctx.restore();
         }
-        painted = !!(path || anchorPt || ft);
+        // 移动读数：箭头 + 绝对距离徽标，贴在拖拽末端；屏幕像素恒定大小
+        if (moveRead && dragRef.current) {
+          const u = 1 / scale;
+          const start = dragRef.current;
+          const end = { x: start.x + moveRead.dx, y: start.y + moveRead.dy };
+          ctx.save();
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = 0.75;
+          ctx.lineWidth = 1.4 * u;
+          ctx.setLineDash([5 * u, 4 * u]);
+          ctx.beginPath();
+          ctx.moveTo(start.x, start.y);
+          ctx.lineTo(end.x, end.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const label = moveReadoutText(moveRead.dx, moveRead.dy);
+          const fs = 12 * u;
+          ctx.font = `600 ${fs}px "Segoe UI", system-ui, sans-serif`;
+          const tw = ctx.measureText(label).width;
+          const bw = tw + 12 * u;
+          const bh = 24 * u;
+          const bx = Math.min(Math.max(2 * u, end.x - bw / 2), Math.max(2 * u, docW - bw - 2 * u));
+          const by = Math.min(Math.max(2 * u, end.y - bh - 10 * u), Math.max(2 * u, docH - bh - 2 * u));
+          ctx.globalAlpha = 0.92;
+          ctx.fillStyle = "rgba(16, 19, 26, 0.88)";
+          ctx.fillRect(bx, by, bw, bh);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = "#ffffff";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, bx + 6 * u, by + bh / 2);
+          ctx.restore();
+        }
+
+        painted = !!(path || anchorPt || ft || radial || perspectiveActive || moveRead);
       }
       raf = requestAnimationFrame(paint);
     };
 
     raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive, smartGuides, guides, polyPts]);
+  }, [docW, docH, scale, antsPath, selDragging, shapeDragging, anchor, tool, freeActive, smartGuides, guides, polyPts, brush.symmetry, brush.radialSectors, brush.radialMirror, perspective.mode]);
+
+  /**
+   * 洋葱皮幽灵帧：画在主画布下方的独立画布上。
+   * 按距离衰减透明度、按前后帧染不同色；只改这块显示画布，不碰文档像素。
+   */
+  useEffect(() => {
+    const c = ghostRef.current;
+    if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = Math.max(1, Math.round(docW * scale * dpr));
+    c.height = Math.max(1, Math.round(docH * scale * dpr));
+    const ctx = mustCtx(c);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    const vl = activeVideoLayer(doc);
+    if (!vl || !onion.enabled) return;
+    const v = vl.video;
+    const ghosts = onionGhosts(v.frames.length, v.index, onion, (i) => !!v.frames[i].key);
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    for (const g of ghosts) {
+      const tmp = createSurface(docW, docH);
+      const tc = mustCtx(tmp);
+      tc.drawImage(v.frames[g.index].surface, 0, 0);
+      tc.globalCompositeOperation = "source-atop";
+      tc.fillStyle = g.tint;
+      tc.fillRect(0, 0, docW, docH);
+      tc.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = g.alpha;
+      ctx.drawImage(tmp, 0, 0);
+    }
+    ctx.globalAlpha = 1;
+  }, [doc, docW, docH, scale, onion]);
+
+  /** 录制一个真实笔画事件；只记文档坐标与笔参数，不记屏幕坐标 */
+  const emitRecord = useCallback(
+    (
+      kind: StrokeEvent["kind"],
+      p: { x: number; y: number },
+      pressure: number,
+      tool: StrokeEvent["tool"],
+      mods: { shift: boolean; alt: boolean; ctrl: boolean },
+    ) => {
+      const rec = recordingRef.current;
+      if (!rec) return;
+      pushStrokeEvent(rec, {
+        strokeId: strokeIdRef.current,
+        kind,
+        t: performance.now() - recordStartRef.current,
+        x: p.x,
+        y: p.y,
+        pressure,
+        tool,
+        color: fg,
+        size: brush.size,
+        flow: brush.flow,
+        hardness: brush.hardness,
+        tipMask: brush.tipMask ?? null,
+        ...mods,
+      });
+    },
+    [fg, brush.size, brush.flow, brush.hardness, brush.tipMask],
+  );
+
+  const startRecording = useCallback(() => {
+    recordingRef.current = newRecording(docW, docH);
+    strokeIdRef.current = 0;
+    recordStartRef.current = performance.now();
+    setRecording(null);
+    setRecordingActive(true);
+    setPlaying(false);
+    setToast(zh.playback.start);
+  }, [docW, docH]);
+
+  const stopRecording = useCallback(() => {
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    setRecordingActive(false);
+    if (rec) setRecording(normalizeRecording(rec));
+    setToast(zh.playback.stop);
+  }, []);
+
+  const beginPlayback = useCallback(() => {
+    if (!recording) return;
+    playheadRef.current = 0;
+    setProgress(0);
+    setPlaying(true);
+  }, [recording]);
+
+  const seekPlayback = useCallback(
+    (f: number) => {
+      const clamped = Math.max(0, Math.min(1, f));
+      playheadRef.current = recording ? recordingDuration(recording) * clamped : 0;
+      setProgress(clamped);
+    },
+    [recording],
+  );
+
+  /** 只有用户明确点这一键，回放结果才落到新图层；不改活动层 */
+  const bakePlayback = useCallback(() => {
+    const c = playbackCanvasRef.current;
+    if (!c || !recording) return;
+    const layer = {
+      ...createLayer(doc.width, doc.height, `${zh.playback.title} ${doc.layers.length + 1}`),
+      surface: cloneSurface(c),
+    };
+    const at = doc.layers.findIndex((l) => l.id === doc.activeLayerId);
+    const layers = doc.layers.slice();
+    layers.splice(at >= 0 ? at + 1 : layers.length, 0, layer);
+    onCommit({ ...doc, layers, dirty: true }, zh.playback.bake);
+    setPlaying(false);
+  }, [doc, onCommit, recording]);
+
+  // 非播放态按进度画一帧；播放态的时间推进交给下面那支 rAF，避免每帧重渲染整个编辑器
+  useEffect(() => {
+    const c = playbackCanvasRef.current;
+    if (!c) return;
+    c.width = Math.max(1, docW);
+    c.height = Math.max(1, docH);
+    if (!recording) {
+      mustCtx(c).clearRect(0, 0, c.width, c.height);
+    } else if (!playing) {
+      renderRecording(c, recording, recordingDuration(recording) * progress);
+    }
+  }, [recording, progress, playing, docW, docH]);
+
+  useEffect(() => {
+    if (!playing || !recording) return;
+    let raf = 0;
+    let last = performance.now();
+    let lastUi = last;
+    const tick = (now: number) => {
+      playheadRef.current += Math.max(0, now - last) * playbackSpeed;
+      last = now;
+      const dur = recordingDuration(recording);
+      const frac = dur > 0 ? Math.min(1, playheadRef.current / dur) : 1;
+      const c = playbackCanvasRef.current;
+      if (c) renderRecording(c, recording, playheadRef.current);
+      if (now - lastUi > 100) {
+        setProgress(frac);
+        lastUi = now;
+      }
+      if (frac >= 1) {
+        setPlaying(false);
+        setProgress(1);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, recording, playbackSpeed]);
 
   const onDown = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -2584,6 +3062,33 @@ export default function EditorShell({
         levelPickRef.current = null;
         levelPick(p.x, p.y, { shift: e.shiftKey, alt: e.altKey });
         return;
+      }
+
+      // 径向对称中心准星：命中即拖动中心，不落笔。
+      // 这只在使用画笔 / 涂抹类工具、且确实开着径向对称时生效。
+      if (
+        brush.symmetry === "radial" &&
+        (usesBrush(tool) || isSmudgeTool(tool))
+      ) {
+        const c = radialCenterRef.current ?? { x: docW / 2, y: docH / 2 };
+        if (Math.hypot(p.x - c.x, p.y - c.y) <= 12 / scale) {
+          radialDragRef.current = true;
+          capturePointer(e.currentTarget, e.pointerId);
+          return;
+        }
+      }
+
+      // 透视灭点手柄：命中即拖动，导线与吸附实时跟着变，不落笔。
+      if (perspectiveRef.current.mode !== "off" && !guidesLocked) {
+        const pts = perspectiveRef.current.points;
+        const hitR = 10 / scale;
+        for (let i = 0; i < pts.length; i += 1) {
+          if (Math.hypot(p.x - pts[i].x, p.y - pts[i].y) <= hitR) {
+            vpDragRef.current = i;
+            capturePointer(e.currentTarget, e.pointerId);
+            return;
+          }
+        }
       }
 
       // 分析工具：标尺拖一段量距离/角度，计数工具落一个编号点。
@@ -2765,17 +3270,85 @@ export default function EditorShell({
       // 调整层与组都没有自己的像素（surface 只是 1×1 占位），画笔落上去只会
       // 把占位面画花，画面上什么也看不见 —— 直接拦下来说清楚。
       // 例外是移动工具：拖动一个组在画面上就是把它整棵子树一起搬走。
-      if (act.kind === "group" && tool !== "move") {
+      if (act.kind === "group" && tool !== "move" && !isAdjustmentBrushTool(tool)) {
         setError(zh.hint.layerGroupDenied);
         return;
       }
-      if (act.kind === "adjust") {
+      if (act.kind === "adjust" && !isAdjustmentBrushTool(tool)) {
         // 只是"这层没有像素可画"，不是错误 —— 用灰色提示，红色错误太吓人
         setToast(zh.hint.layerAdjustDenied);
         return;
       }
       setError("");
       capturePointer(e.currentTarget, e.pointerId);
+
+      if (isAdjustmentBrushTool(tool)) {
+        if (adjustBrushRefused(doc)) {
+          setError(zh.options.adjustBrushIndexedAlert);
+          return;
+        }
+        const existing = adjustBrushTargetLayer(doc, adjustBrush.kind, adjustTargetRef.current);
+        let work = doc;
+        let mask: HTMLCanvasElement;
+        let layerId: string;
+        let created = false;
+        if (existing?.mask) {
+          layerId = existing.id;
+          // 从当前蒙版副本起笔，不让这一笔直接改到文档里的画布
+          mask = cloneSurface(existing.mask);
+          setToast(
+            zh.options.adjustBrushEditing.replace(
+              "{name}",
+              existing.adjust ? adjustDef(existing.adjust.id).label : existing.name,
+            ),
+          );
+        } else {
+          const fresh = createMask(docW, docH);
+          if (doc.selection) {
+            // 选区直接成为初始蒙版：白色填充按选区 alpha 裁一刀
+            const mctx = mustCtx(fresh);
+            mctx.fillStyle = "#ffffff";
+            mctx.fillRect(0, 0, docW, docH);
+            mctx.globalCompositeOperation = "destination-in";
+            mctx.drawImage(doc.selection, 0, 0);
+            mctx.globalCompositeOperation = "source-over";
+          }
+          const built = buildAdjustBrushDoc(doc, adjustBrush.kind as AdjustBrushKind, fresh);
+          work = built.doc;
+          layerId = built.layerId;
+          mask = fresh;
+          created = true;
+          // 新层只进预览文档，不改 activeLayerId（调色台变脸的老坑）
+          previewDocRef.current = work;
+          markInteracting();
+          setToast(
+            zh.options.adjustBrushCreated.replace(
+              "{name}",
+              adjustDef(adjustBrushEntryFor(adjustBrush.kind).adjustId).label,
+            ),
+          );
+        }
+        const s = new Stroke(
+          docW,
+          docH,
+          { ...brush, color: "#ffffff" },
+          adjustBrush.subtract,
+          null,
+        );
+        s.setPen(penSampleOf(e.nativeEvent));
+        s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false), e.timeStamp);
+        adjustPaintRef.current = {
+          doc: work,
+          layerId,
+          baseMask: mask,
+          subtract: adjustBrush.subtract,
+          stroke: s,
+          created,
+        };
+        adjustTargetRef.current = layerId;
+        scheduleRender();
+        return;
+      }
 
       if (tool === "magicEraser") {
         // 与魔棒同一套容差判定，只是「选中」变成「擦成透明」；一笔一步可撤销
@@ -2801,6 +3374,8 @@ export default function EditorShell({
           fill: shape.fill,
           stroke: shape.stroke,
           strokeWidth: shape.strokeWidth,
+          starPoints: shape.starPoints,
+          starInner: shape.starInner,
           fillColor: fg,
           strokeColor: bg,
           ...(leaf
@@ -2823,6 +3398,7 @@ export default function EditorShell({
           hardness: brush.hardness,
           flow: brush.flow,
           strength: smudgeStrength,
+          radial: radialConfigFrom(brush, { x: docW / 2, y: docH / 2 }),
         }, paintingMask(doc, act));
         s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false));
         smudgeRef.current = s;
@@ -2864,13 +3440,23 @@ export default function EditorShell({
         );
         s.setPen(pen);
         const press = pressureFrom(e, brush.penPressure !== false);
+        // 录制真实落笔（文档坐标 + 笔参数）；涂抹的取样依赖当时画布，明确不记
+        strokeIdRef.current += 1;
+        emitRecord(
+          "down",
+          p,
+          press,
+          tool as StrokeEvent["tool"],
+          { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey },
+        );
         // Shift+单击：从上一落点连直线（速查面板承诺的行为，这次是真的）。
         // 期间锁定 onMove 的轨迹喂点，终点严格=按下点，两点必成直线。
         const from = e.shiftKey ? lastPaintPointRef.current : null;
         if (from) {
           lineLockRef.current = true;
           s.begin(from.x, from.y, press, e.timeStamp);
-          s.extend(p.x, p.y, press, e.timeStamp);
+          const end = snapPerspective(p);
+          s.extend(end.x, end.y, press, e.timeStamp);
           lastPaintPointRef.current = p;
         } else {
           s.begin(p.x, p.y, press, e.timeStamp);
@@ -2924,6 +3510,7 @@ export default function EditorShell({
       doc,
       docPoint,
       brush,
+      adjustBrush,
       retouch,
       shape,
       anchor,
@@ -2933,6 +3520,8 @@ export default function EditorShell({
       sampleAllLayers,
       smudgeStrength,
       paintingMask,
+      snapPerspective,
+      emitRecord,
       scale,
       spaceDown,
       tolerance,
@@ -2956,6 +3545,20 @@ export default function EditorShell({
   const onMove = useCallback(
     (e: ReactPointerEvent<HTMLCanvasElement>) => {
       syncCursor(e.clientX, e.clientY);
+      // 拖径向中心：只改 ref，浮层 rAF 每帧现读现画，全程零 React 重渲染
+      if (radialDragRef.current) {
+        const q = docPoint(e);
+        radialCenterRef.current = { x: q.x, y: q.y };
+        return;
+      }
+      // 拖透视灭点：同样只改 ref，松手才落 state
+      if (vpDragRef.current !== null) {
+        const q = docPoint(e);
+        const st = perspectiveRef.current;
+        const points = st.points.map((pt, i) => (i === vpDragRef.current ? { x: q.x, y: q.y } : pt));
+        perspectiveRef.current = { ...st, points };
+        return;
+      }
       // 正在连续画 / 拖图层：续一下"交互中"的计时，避免操作到一半就退回全质量
       // （移动工具以前漏了这一条，拖动时每帧都按视图全分辨率整档重合成，
       //  文字层这种整幅画布的大图层尤其明显；补上后走既有降档 + 停手 300ms 补全）
@@ -3095,12 +3698,34 @@ export default function EditorShell({
           else feed(native);
           leafRawRef.current = raw;
           const at = raw[raw.length - 1] ?? docPoint(e);
-          const end = e.shiftKey && raw.length > 1 ? snapLeafEnd(raw[0], at) : at;
+          const end = snapPerspective(
+            e.shiftKey && raw.length > 1 ? snapLeafEnd(raw[0], at) : at,
+          );
           shapeRef.current = { ...sp, points: [...raw.slice(0, -1), end], b: end };
           return;
         }
-        const q = docPoint(e);
+        const q = snapPerspective(docPoint(e));
         shapeRef.current = { ...sp, b: constrainEnd({ ...sp, b: q }, e.shiftKey) };
+        return;
+      }
+      const ab = adjustPaintRef.current;
+      if (ab) {
+        // 与画笔同源的合并事件采样，保证快拖不断笔、预览不跳变
+        const native = e.nativeEvent;
+        const batch =
+          typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
+        if (batch.length > 1) {
+          for (const ev of batch) {
+            const q = docXY(ev.clientX, ev.clientY);
+            ab.stroke.setPen(penSampleOf(ev));
+            ab.stroke.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false), ev.timeStamp);
+          }
+        } else {
+          const q = docXY(native.clientX, native.clientY);
+          ab.stroke.setPen(penSampleOf(native));
+          ab.stroke.extend(q.x, q.y, pressureFrom(native, brush.penPressure !== false), native.timeStamp);
+        }
+        scheduleRender();
         return;
       }
       const sm = smudgeRef.current;
@@ -3135,12 +3760,22 @@ export default function EditorShell({
             lastPaintPointRef.current = q;
             s.setPen(penSampleOf(ev));
             s.extend(q.x, q.y, pressureFrom(ev, brush.penPressure !== false), ev.timeStamp);
+            emitRecord("move", q, pressureFrom(ev, brush.penPressure !== false), tool as StrokeEvent["tool"], {
+              shift: e.shiftKey,
+              alt: e.altKey,
+              ctrl: e.ctrlKey,
+            });
           }
         } else {
           const p = docXY(native.clientX, native.clientY);
           lastPaintPointRef.current = p;
           s.setPen(penSampleOf(native));
           s.extend(p.x, p.y, pressureFrom(native, brush.penPressure !== false), native.timeStamp);
+          emitRecord("move", p, pressureFrom(native, brush.penPressure !== false), tool as StrokeEvent["tool"], {
+            shift: e.shiftKey,
+            alt: e.altKey,
+            ctrl: e.ctrlKey,
+          });
         }
         scheduleRender();
         return;
@@ -3176,12 +3811,38 @@ export default function EditorShell({
         scheduleRender();
       }
     },
-    [docPoint, docXY, doc, fg, brush.penPressure, scheduleRender, snapPoint, syncCursor, tool],
+    [docPoint, docXY, doc, emitRecord, fg, brush.penPressure, scheduleRender, snapPoint, snapPerspective, syncCursor, tool],
   );
 
-  const onUp = useCallback(() => {
+  const onUp = useCallback((e?: ReactPointerEvent<HTMLCanvasElement>) => {
     pickingRef.current = false;
     guideDragRef.current = null;
+    // 径向中心拖完才写回选项：拖动时只走 ref，不重渲染整个编辑器
+    if (radialDragRef.current) {
+      radialDragRef.current = false;
+      setBrush((b) => ({ ...b, radialCenter: radialCenterRef.current }));
+      return;
+    }
+    if (vpDragRef.current !== null) {
+      vpDragRef.current = null;
+      const points = perspectiveRef.current.points.map((pt) => ({ ...pt }));
+      setPerspective((prev) => ({ ...prev, points }));
+      return;
+    }
+    // 调整画笔：整笔一次落库到蒙版；新层时提交的是预览工作文档，一步历史
+    const ab = adjustPaintRef.current;
+    if (ab) {
+      adjustPaintRef.current = null;
+      adjustPreviewMaskRef.current = null;
+      const mask = cloneSurface(ab.baseMask);
+      ab.stroke.finish(mask, null);
+      const layers = ab.doc.layers.map((l) =>
+        l.id === ab.layerId ? { ...l, mask, maskActive: true } : l,
+      );
+      onCommit({ ...ab.doc, layers, dirty: true }, zh.tools.adjustmentBrush);
+      resetGesture();
+      return;
+    }
     // 标尺松手：结束这一段（线段留在浮层上，直到再拉一次）
     measureStartRef.current = null;
     if (panRef.current) {
@@ -3347,6 +4008,12 @@ export default function EditorShell({
 
     const s = strokeRef.current;
     if (s) {
+      const end = e ? docPoint(e) : lastPaintPointRef.current ?? { x: 0, y: 0 };
+      emitRecord("up", end, 0, tool as StrokeEvent["tool"], {
+        shift: e?.shiftKey ?? false,
+        alt: e?.altKey ?? false,
+        ctrl: e?.ctrlKey ?? false,
+      });
       // 快速蒙版：这一笔落在临时蒙版画布上（不进文档、不进历史）
       if (quickMask && qmRef.current) {
         s.finish(qmRef.current, null);
@@ -3405,7 +4072,7 @@ export default function EditorShell({
       }
       render();
     }
-  }, [bg, doc, docH, docW, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, quickMask, feather, commitSelection, paintingMask]);
+  }, [bg, doc, docH, docW, docPoint, emitRecord, fg, gradientReverse, gradientStyle, onCommit, render, resetGesture, tool, maskEdit, quickMask, feather, commitSelection, paintingMask]);
 
   /* ------------------------------------------------------------ 标尺拖参考线 */
 
@@ -9484,6 +10151,16 @@ export default function EditorShell({
       return;
     }
     if (e.key === "Escape") {
+      // 回放中止：清掉临时画布与进度；录制中的这一条也一并作废
+      if (playing || recordingActive) {
+        setPlaying(false);
+        stopRecording();
+        playheadRef.current = 0;
+        setProgress(0);
+        const pc = playbackCanvasRef.current;
+        if (pc) mustCtx(pc).clearRect(0, 0, pc.width, pc.height);
+        return;
+      }
       // 钢笔范围画到一半：Esc 放弃（点的点全丢掉）
       if (penDraw) {
         setPenDraw(null);
@@ -9496,7 +10173,8 @@ export default function EditorShell({
       }
       // 变换进行中：Esc 优先放弃变换（PS 的老规矩）
       if (cancelFreeTransform()) return;
-      if (strokeRef.current || smudgeRef.current) {
+      if (strokeRef.current || smudgeRef.current || adjustPaintRef.current) {
+        if (adjustPaintRef.current?.created) previewDocRef.current = null;
         resetGesture();
         render();
       }
@@ -10027,6 +10705,12 @@ export default function EditorShell({
             onRetouch={(patch) => setRetouch((r) => ({ ...r, ...patch }))}
             smudgeStrength={smudgeStrength}
             onSmudgeStrength={setSmudgeStrength}
+            adjustBrush={adjustBrush}
+            onAdjustBrush={(patch) =>
+              setAdjustBrush((a) => ({ ...a, ...patch }))
+            }
+            perspective={perspective}
+            onPerspective={updatePerspective}
             shape={shape}
             onShape={(patch) => setShape((s2) => ({ ...s2, ...patch }))}
             text={textSet}
@@ -10053,6 +10737,7 @@ export default function EditorShell({
             onSampleAllLayers={setSampleAllLayers}
             docSize={docSize}
             onOpenBrushPanel={() => setBrushPanelOpen(true)}
+            onOpenPlayback={() => setPlaybackOpen(true)}
           />
           )}
           <div
@@ -10095,6 +10780,8 @@ export default function EditorShell({
                 }`,
               }}
             >
+              {/* 洋葱皮：当前帧下方的半透明幽灵，纯显示，不接指针事件 */}
+              <canvas ref={ghostRef} className="editor-ghost" aria-hidden="true" />
               <canvas
                 ref={canvasRef}
                 className="editor-canvas"
@@ -10128,6 +10815,8 @@ export default function EditorShell({
                 }}
                 onContextMenu={openCanvasMenu}
               />
+              {/* 回放临时画布：画在合成结果上方，不接事件、不写回文档 */}
+              <canvas ref={playbackCanvasRef} className="editor-playback" aria-hidden="true" />
               {/* 蚂蚁线 / 裁剪遮罩浮层：只负责画，不接事件 */}
               <canvas ref={overlayRef} className="editor-overlay" aria-hidden="true" />
 
@@ -10674,63 +11363,17 @@ export default function EditorShell({
           </div>
         </Modal>
       )}
-      {/* 图像 > 图像旋转 > 任意角度 */}
+      {/* 图像 > 图像旋转 > 任意角度：真预览 + 插值的参数窗口 */}
       {rotateDialog && (
-        <Modal
-          title="任意角度旋转"
+        <RotateCanvasDialog
+          doc={doc}
+          initialAngle={Number.parseFloat(rotateDialog.angle) || 0}
+          onApply={(next, label) => {
+            onCommit(next, label);
+            setRotateDialog(null);
+          }}
           onClose={() => setRotateDialog(null)}
-          width={400}
-          footer={
-            <>
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => setRotateDialog(null)}
-              >
-                {zh.dialog.cancel}
-              </button>
-              <button
-                type="button"
-                className="btn-primary btn-sm"
-                onClick={() => {
-                  const v = Number.parseFloat(rotateDialog.angle);
-                  if (!Number.isFinite(v) || v === 0) {
-                    setToast("请输入有效的旋转角度");
-                    return;
-                  }
-                  onCommit(rotateDocumentArbitrary(doc, v), "任意角度旋转");
-                  setRotateDialog(null);
-                }}
-              >
-                {zh.dialog.confirm}
-              </button>
-            </>
-          }
-        >
-          <p className="isz-hint">
-            输入旋转角度（度，顺时针为正）。画布会按旋转后的外接矩形扩张。
-          </p>
-          <label className="field">
-            <span className="field-label">角度</span>
-            <span className="field-input">
-              <input
-                type="number"
-                step={1}
-                autoFocus
-                value={rotateDialog.angle}
-                onChange={(e) => setRotateDialog({ angle: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  const v = Number.parseFloat(rotateDialog.angle);
-                  if (!Number.isFinite(v) || v === 0) return;
-                  onCommit(rotateDocumentArbitrary(doc, v), "任意角度旋转");
-                  setRotateDialog(null);
-                }}
-              />
-              <span className="field-unit">°</span>
-            </span>
-          </label>
-        </Modal>
+        />
       )}
       {/* 图像菜单：颜色模式 / 应用图像 / 陷印 / 测量等 */}
       {imageOps && (
@@ -11128,6 +11771,27 @@ export default function EditorShell({
           onFg={setFg}
           onApply={(next, label) => onCommit(next, label)}
           onClose={() => setUtilPanel(null)}
+          onion={onion}
+          onOnion={(patch) => setOnion((s) => ({ ...s, ...patch }))}
+        />
+      )}
+      {playbackOpen && (
+        <StrokePlaybackPanel
+          recording={recording}
+          recordingActive={recordingActive}
+          playing={playing}
+          progress={progress}
+          speed={playbackSpeed}
+          onStart={startRecording}
+          onStop={stopRecording}
+          onPlayPause={() => (playing ? setPlaying(false) : beginPlayback())}
+          onSpeed={setPlaybackSpeed}
+          onSeek={seekPlayback}
+          onBake={bakePlayback}
+          onClose={() => {
+            setPlaying(false);
+            setPlaybackOpen(false);
+          }}
         />
       )}
       {/* 文字面板（字符 / 段落 / 字形 / 样式） */}

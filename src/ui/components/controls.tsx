@@ -7,10 +7,16 @@
  * 这里没有只读装饰件：每一个色块都能点开改颜色 —— 点开是浮层，里面有取色器、
  * 十六进制输入与一排常用色，三样任选其一都能立刻改到当前工具。
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { zh } from "../../i18n";
 import type { SelectionMode } from "../../core/selection";
+import {
+  encodeTipMask,
+  imageToTipMask,
+  maskTipCanvas,
+  validateTipFile,
+} from "../../core/brushImport";
 import { DEFAULT_BRUSH, drawBrushTipSample, type BrushSettings } from "../../engine/paint";
 import {
   DEFAULT_PREFS,
@@ -613,9 +619,23 @@ export function BrushPresetGroup({
 
 /* ---------------- 画笔库（自定义画笔） ---------------- */
 
+/** 导入笔尖的小样：和落笔用同一张遮罩贴图，所见即所得。 */
+function TipThumb({ mask, color, hardness }: { mask: string; color: string; hardness: number }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const c = ref.current;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const src = maskTipCanvas(mask, color, hardness, c.width);
+    if (src) ctx.drawImage(src, 0, 0, c.width, c.height);
+  }, [mask, color, hardness]);
+  return <canvas ref={ref} width={48} height={48} className="brl-tip-preview" />;
+}
+
 /**
  * 画笔库：把当前五个参数存成一支自己的画笔，点一下就切回去，右键/长按删除。
- * 参数会写进偏好设置里，重启依然在。
+ * 参数会写进偏好设置里，重启依然在。支持把真实 PNG / 灰度图导入成笔尖。
  */
 export function BrushLibrary({
   brush,
@@ -627,11 +647,57 @@ export function BrushLibrary({
   const { customBrushes } = usePrefs();
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState<{
+    name: string;
+    mask: string;
+    hardness: number;
+    spacing: number;
+    size: number;
+  } | null>(null);
+  const [importError, setImportError] = useState("");
 
   const save = () => {
     addCustomBrush(name || zh.options.presetCustom, toBrushPrefs(brush));
     setNaming(false);
     setName("");
+  };
+
+  const pickTip = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 同一个文件可以重复导入
+    if (!file) return;
+    const bad = validateTipFile(file);
+    if (bad) {
+      setImportError(bad);
+      return;
+    }
+    try {
+      const mask = await imageToTipMask(file);
+      setImporting({
+        name: file.name.replace(/\.[^.]+$/, "").slice(0, 24) || zh.options.presetCustom,
+        mask: encodeTipMask(mask),
+        hardness: brush.hardness,
+        spacing: brush.spacing,
+        size: brush.size,
+      });
+      setImportError("");
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const saveTip = () => {
+    if (!importing) return;
+    const patch = {
+      hardness: importing.hardness,
+      spacing: importing.spacing,
+      size: importing.size,
+      tipMask: importing.mask,
+    };
+    addCustomBrush(importing.name, { ...toBrushPrefs(brush), ...patch });
+    onPatch(patch);
+    setImporting(null);
   };
 
   return (
@@ -697,6 +763,97 @@ export function BrushLibrary({
         >
           ＋ {zh.options.brushLibSave}
         </button>
+      )}
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/bmp"
+        hidden
+        onChange={pickTip}
+      />
+      <button
+        type="button"
+        className="brl-save"
+        title={zh.options.brushImportHint}
+        onClick={() => fileRef.current?.click()}
+      >
+        ＋ {zh.options.brushImport}
+      </button>
+      {importError && (
+        <p className="brl-import-error">
+          {zh.options.brushImportBad}：{importError}
+        </p>
+      )}
+      {importing && (
+        <div className="brl-import">
+          <p className="brl-import-hint">{zh.options.brushImportHint}</p>
+          <div className="brl-import-row">
+            <TipThumb
+              mask={importing.mask}
+              color={brush.color}
+              hardness={importing.hardness}
+            />
+            <input
+              className="brl-name"
+              value={importing.name}
+              maxLength={24}
+              spellCheck={false}
+              aria-label={zh.options.brushLibName}
+              onChange={(e) => setImporting({ ...importing, name: e.target.value })}
+            />
+          </div>
+          <label className="brl-import-row">
+            <span>{zh.options.hardness}</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={importing.hardness}
+              onChange={(e) =>
+                setImporting({ ...importing, hardness: Number(e.target.value) })
+              }
+            />
+            <span>{importing.hardness}%</span>
+          </label>
+          <label className="brl-import-row">
+            <span>{zh.options.spacing}</span>
+            <input
+              type="range"
+              min={1}
+              max={50}
+              value={importing.spacing}
+              onChange={(e) => setImporting({ ...importing, spacing: Number(e.target.value) })}
+            />
+            <span>{importing.spacing}%</span>
+          </label>
+          <label className="brl-import-row">
+            <span>{zh.options.size}</span>
+            <input
+              type="range"
+              min={1}
+              max={500}
+              value={importing.size}
+              onChange={(e) => setImporting({ ...importing, size: Number(e.target.value) })}
+            />
+            <span>{importing.size}px</span>
+          </label>
+          <div className="brl-import-row">
+            <button type="button" className="brl-save is-on" onClick={saveTip}>
+              {zh.options.brushImportSave}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                setImporting(null);
+                setImportError("");
+              }}
+            >
+              {zh.options.brushImportCancel}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

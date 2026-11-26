@@ -70,6 +70,8 @@ export interface BrushPrefs {
   textureInvert: boolean;
   textureBrightness: number;
   textureContrast: number;
+  /** 导入的 64×64 灰度笔尖遮罩（base64）；空 = 用内置笔尖 */
+  tipMask?: string | null;
 }
 
 /** 自定义画笔：参数快照 + 名字，存进偏好设置里长期保留。 */
@@ -419,6 +421,15 @@ export function normalizeBrush(raw: Partial<BrushPrefs> | null | undefined): Bru
   out.texture = oneOf(v.texture, TEXTURES, d.texture);
   for (const k of NUMERIC_KEYS) out[k] = num(v[k], d[k]);
   for (const k of BOOLEAN_KEYS) out[k] = bool(v[k], d[k]);
+  // 导入笔尖是用户数据：只保留长度和字符都合法的遮罩，坏数据不该污染笔刷库
+  if (
+    typeof v.tipMask === "string" &&
+    v.tipMask.length > 0 &&
+    v.tipMask.length <= 7400 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(v.tipMask)
+  ) {
+    out.tipMask = v.tipMask;
+  }
   return out;
 }
 

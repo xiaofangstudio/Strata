@@ -8,8 +8,9 @@
  */
 import { mustCtx } from "./surface";
 import { smoothLeafPoints, type LeafMode, type LeafPoint } from "../core/leafBrush";
+import { DEFAULT_STAR_INNER, DEFAULT_STAR_POINTS, starVertices } from "../core/starShape";
 
-export type ShapeKind = "rect" | "ellipse" | "line" | "leaf";
+export type ShapeKind = "rect" | "ellipse" | "line" | "leaf" | "star";
 
 export interface ShapeSettings {
   /** 用前景色铺满形状内部 */
@@ -24,6 +25,10 @@ export interface ShapeSettings {
   leafSmooth: number;
   /** 柳叶笔模糊半径（文档像素） */
   leafBlur: number;
+  /** 星形点数（整数 3–20，独立于其它形状设置，默认 5） */
+  starPoints: number;
+  /** 星形内半径 / 外半径，越小越尖锐 */
+  starInner: number;
 }
 
 export const DEFAULT_SHAPE: ShapeSettings = {
@@ -33,6 +38,8 @@ export const DEFAULT_SHAPE: ShapeSettings = {
   leafMode: "solid",
   leafSmooth: 0.5,
   leafBlur: 12,
+  starPoints: DEFAULT_STAR_POINTS,
+  starInner: DEFAULT_STAR_INNER,
 };
 
 export interface ShapePaint {
@@ -49,6 +56,9 @@ export interface ShapePaint {
   leafMode?: LeafMode;
   leafSmooth?: number;
   leafBlur?: number;
+  /** 星形：点数与内外半径比 */
+  starPoints?: number;
+  starInner?: number;
 }
 
 export interface ShapeBounds {
@@ -95,6 +105,13 @@ function pathOf(c: CanvasRenderingContext2D, s: ShapePaint): boolean {
   }
   const b = shapeBounds(s);
   if (b.width < 1 || b.height < 1) return false;
+  if (s.kind === "star") {
+    const vs = starVertices(s.a, s.b, s.starPoints ?? DEFAULT_STAR_POINTS, s.starInner ?? DEFAULT_STAR_INNER);
+    c.moveTo(vs[0].x, vs[0].y);
+    for (let i = 1; i < vs.length; i += 1) c.lineTo(vs[i].x, vs[i].y);
+    c.closePath();
+    return true;
+  }
   if (s.kind === "ellipse") {
     c.ellipse(
       b.x + b.width / 2,
