@@ -161,32 +161,30 @@ function shrinkLayer(l: StrataLayer, s: number, cacheable: boolean): StrataLayer
  * @param viewScale 视图缩放 × devicePixelRatio（屏幕上每个文档像素占多少物理像素）
  * @returns 合成结果的分辨率（调用方据此把画面贴到显示画布上）
  */
-export function composeForDisplay(
+export type DisplayOverride = LayerOverride & {
+  prescaled?: boolean;
+  prescaledMask?: boolean;
+};
+
+interface PreparedDisplay {
+  doc: StrataDoc;
+  override: DisplayOverride | null;
+}
+
+function prepareDisplay(
   doc: StrataDoc,
-  target: HTMLCanvasElement,
   viewScale: number,
-  /**
-   * prescaled：override.layer.surface 已经按显示比例缩好（并且偏移也已经烘进去），
-   * 这里只补缩蒙版 / 范围，不再缩表面。拖动图层时用它省掉每帧的整幅重缩。
-   * prescaledMask：蒙版也已经按同一比例缩好，别再缩第二次（重复缩既慢又会把
-   * 尺寸缩错）。移动图层时蒙版本来就不跟着动，缩一份可以整段拖拽复用。
-   */
-  override?: (LayerOverride & { prescaled?: boolean; prescaledMask?: boolean }) | null,
-): { width: number; height: number } {
+  override?: DisplayOverride | null,
+): PreparedDisplay {
   const s = Math.min(1, Math.max(MIN_SCALE, viewScale));
-
-  // 1:1 或放大：不需要降采样，走与导出完全相同的路径
-  if (s >= 0.999) {
-    used = 0;
-    composeDoc(doc, target, override);
-    return { width: target.width, height: target.height };
-  }
-
   used = 0;
+  // 1:1 或放大：不需要降采样，走与导出完全相同的路径
+  if (s >= 0.999) return { doc, override: override ?? null };
+
   // 正在编辑的那一层不缓存：它的像素是就地改的，引用不变但内容在变
   const activeId = doc.activeLayerId;
   const layers = doc.layers.map((l) => shrinkLayer(l, s, l.id !== activeId));
-  const dispOverride = override
+  const dispOverride: DisplayOverride | null = override
     ? {
         index: override.index,
         layer:
@@ -202,13 +200,48 @@ export function composeForDisplay(
             : shrinkLayer(override.layer, s, false),
       }
     : null;
-  const dispDoc: StrataDoc = {
-    ...doc,
-    width: Math.max(1, Math.round(doc.width * s)),
-    height: Math.max(1, Math.round(doc.height * s)),
-    layers,
+  return {
+    doc: {
+      ...doc,
+      width: Math.max(1, Math.round(doc.width * s)),
+      height: Math.max(1, Math.round(doc.height * s)),
+      layers,
+    },
+    override: dispOverride,
   };
-  composeDoc(dispDoc, target, dispOverride);
+}
+
+export function composeForDisplay(
+  doc: StrataDoc,
+  target: HTMLCanvasElement,
+  viewScale: number,
+  /**
+   * prescaled：override.layer.surface 已经按显示比例缩好（并且偏移也已经烘进去），
+   * 这里只补缩蒙版 / 范围，不再缩表面。拖动图层时用它省掉每帧的整幅重缩。
+   * prescaledMask：蒙版也已经按同一比例缩好，别再缩第二次（重复缩既慢又会把
+   * 尺寸缩错）。移动图层时蒙版本来就不跟着动，缩一份可以整段拖拽复用。
+   */
+  override?: DisplayOverride | null,
+): { width: number; height: number } {
+  const prepared = prepareDisplay(doc, viewScale, override);
+  composeDoc(prepared.doc, target, prepared.override);
   used = 0;
   return { width: target.width, height: target.height };
+}
+
+/**
+ * 给 GPU 主路径取一份「与 composeForDisplay 完全同一语义」的显示层数组。
+ *
+ * 只用于纯像素层（资格判定会再查一遍）；override 含未烘焙位移时直接拒绝。
+ * 返回的是池画布引用，调用方必须在同一个同步调用栈里读成独立像素副本。
+ */
+export function captureDisplayForGpu(
+  doc: StrataDoc,
+  viewScale: number,
+  override?: DisplayOverride | null,
+): { layers: StrataLayer[]; width: number; height: number } | null {
+  if (override) return null;
+  const prepared = prepareDisplay(doc, viewScale, null);
+  used = 0;
+  return { layers: prepared.doc.layers, width: prepared.doc.width, height: prepared.doc.height };
 }

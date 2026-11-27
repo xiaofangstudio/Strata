@@ -785,22 +785,68 @@ function pixelLayer(doc: StrataDoc): StrataLayer | null {
   return cur && cur.kind === "pixel" ? cur : null;
 }
 
+/**
+ * 填充 / 描边的不透明度口径（对齐新版 PhotoCraft）：整数 1–100。
+ * 0 不是「什么都不画」，而是钳到 1 并让调用方给出告警；New Layer /
+ * 图层不透明度仍保持 0–100，不受这条规则影响。
+ */
+export function fillStrokeOpacity(raw: number | string): { value: number; clamped: boolean } {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return { value: 100, clamped: true };
+  const rounded = Math.round(n);
+  if (rounded <= 0) return { value: 1, clamped: true };
+  if (rounded >= 100) return { value: 100, clamped: rounded !== 100 };
+  return { value: rounded, clamped: rounded !== n };
+}
+
+/** 把图层已有 alpha 转成白色遮罩；锁定透明像素时填色只能落在这里。 */
+function alphaLockMask(surface: HTMLCanvasElement): HTMLCanvasElement {
+  const mask = createSurface(surface.width, surface.height);
+  const data = readPixels(surface);
+  for (let i = 0; i < data.data.length; i += 4) {
+    data.data[i] = 255;
+    data.data[i + 1] = 255;
+    data.data[i + 2] = 255;
+  }
+  writePixels(mask, data);
+  return mask;
+}
+
+/** 选区 ∩ Alpha Lock；没有选区但有锁时仍返回锁遮罩。 */
+function targetMask(doc: StrataDoc, cur: StrataLayer): HTMLCanvasElement | null {
+  const sel = doc.selection && !isSelectionEmpty(doc.selection) ? doc.selection : null;
+  if (!cur.alphaLock) return sel;
+  const locked = alphaLockMask(cur.surface);
+  if (!sel) return locked;
+  const ctx = mustCtx(locked);
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(sel, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  return locked;
+}
+
 /** 用纯色填充选区。没有选区时铺满整层（等价于 PS 的 Alt+Delete）。 */
-export function fillSelection(doc: StrataDoc, color: string): StrataDoc {
+export function fillSelection(doc: StrataDoc, color: string, rawOpacity: number | string = 100): StrataDoc {
   const cur = pixelLayer(doc);
   if (!cur) return doc;
+  const opacity = fillStrokeOpacity(rawOpacity);
   const surface = cloneSurface(cur.surface);
   const ctx = mustCtx(surface);
-  const sel = doc.selection;
-  if (!sel || isSelectionEmpty(sel)) {
+  const mask = targetMask(doc, cur);
+  if (!mask) {
+    ctx.save();
+    ctx.globalAlpha = opacity.value / 100;
     ctx.fillStyle = color;
     ctx.fillRect(0, 0, surface.width, surface.height);
+    ctx.restore();
   } else {
-    // 先把色块画在暂存上，再按选区抠一刀贴回 —— 选区羽化也能正确透出
+    // 先把色块画在暂存上，再按「选区 ∩ Alpha Lock」抠一刀贴回
     const patch = createSurface(surface.width, surface.height, color);
     const pc = mustCtx(patch);
+    pc.globalAlpha = opacity.value / 100;
     pc.globalCompositeOperation = "destination-in";
-    pc.drawImage(sel, 0, 0);
+    pc.drawImage(mask, 0, 0);
+    pc.globalAlpha = 1;
     pc.globalCompositeOperation = "source-over";
     ctx.drawImage(patch, 0, 0);
   }
@@ -840,6 +886,7 @@ export function strokeSelection(
   const sel = doc.selection;
   if (!cur || !sel || isSelectionEmpty(sel)) return doc;
   const w = Math.max(1, Math.round(opts.width));
+  const opacity = fillStrokeOpacity(opts.opacity ?? 100);
 
   const band = createSurface(sel.width, sel.height);
   const bc = mustCtx(band);
@@ -863,9 +910,14 @@ export function strokeSelection(
   const pc = mustCtx(patch);
   pc.drawImage(band, 0, 0);
   pc.globalCompositeOperation = "source-in";
-  pc.globalAlpha = Math.max(0, Math.min(100, opts.opacity ?? 100)) / 100;
+  pc.globalAlpha = opacity.value / 100;
   pc.fillStyle = opts.color;
   pc.fillRect(0, 0, patch.width, patch.height);
+  if (cur.alphaLock) {
+    pc.globalAlpha = 1;
+    pc.globalCompositeOperation = "destination-in";
+    pc.drawImage(alphaLockMask(cur.surface), 0, 0);
+  }
   pc.globalAlpha = 1;
   pc.globalCompositeOperation = "source-over";
 

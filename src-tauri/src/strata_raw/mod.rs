@@ -79,6 +79,11 @@ mod tone;
 pub mod testgen;
 
 pub use crate::strata_raw::color::{Calibration, ColorInfo, Mat3};
+#[allow(unused_imports)]
+pub(crate) use crate::strata_raw::color::{
+    apply as color_apply, invert as color_invert, mul as color_mul,
+    srgb_to_xyz_d50, xyz_d50_to_prophoto,
+};
 pub use crate::strata_raw::demosaic::Demosaic;
 pub use crate::strata_raw::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor};
 pub use crate::strata_raw::error::RawError;

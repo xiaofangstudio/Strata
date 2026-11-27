@@ -361,3 +361,50 @@
 .pref-tool-group {
   border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent);
 }
+
+/* 增效工具 v0.1：清单卡片 */
+.pref-plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pref-plugin-card {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.pref-plugin-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: 4px;
+}
+
+.pref-plugin-head strong {
+  font-size: 13px;
+}
+
+.pref-plugin-head .btn-ghost {
+  margin-left: auto;
+}
+
+.pref-plugin-meta {
+  color: var(--text-3);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.pref-plugin-line {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: var(--sp-2);
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.pref-plugin-line > span:first-child {
+  color: var(--text-3);
+}

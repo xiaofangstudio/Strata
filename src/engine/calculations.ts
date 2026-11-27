@@ -6,12 +6,17 @@ import type { StrataDoc } from "../core/document";
 import { alphaChannelsOf } from "../core/channelOps";
 import {
   blendCalcChannels,
+  calcUsesIccGray,
+  grayFromIccOutput,
   resultToImage,
   resultToMask,
   sampleCalcChannel,
+  type CalcColorContext,
+  type CalcChannel,
   type CalcParams,
   type CalcSource,
 } from "../core/calculations";
+import { builtinProfile, iccTransform } from "./cms";
 import { composeDoc } from "./compositor";
 import { createSurface, readPixels, writePixels } from "./surface";
 
@@ -34,10 +39,32 @@ export interface CalculationResult {
   image: HTMLCanvasElement;
   mask: HTMLCanvasElement;
   values: Uint8ClampedArray;
+  /** 本次 Gray 是否真的走了 ICC；失败回退 Rec.601 时为 false。 */
+  iccGray: boolean;
 }
 
-/** 运算失败时返回 null（来源图层 / 通道不存在），调用方给出明确提示。 */
-export function computeCalculation(doc: StrataDoc, params: CalcParams): CalculationResult | null {
+/**
+ * 取单通道。RGB / 8bit / sRGB 的 Gray 走真 ICC sRGB → GrayGamma22；
+ * ICC 不可用时明确回退到旧的 Rec.601 公式，不让预览卡住。
+ */
+export async function sampleCalculationChannel(
+  ctx: CalcColorContext,
+  data: Uint8Array | Uint8ClampedArray,
+  channel: CalcChannel,
+): Promise<{ values: Uint8ClampedArray; icc: boolean }> {
+  if (channel !== "gray" || !calcUsesIccGray(ctx)) {
+    return { values: sampleCalcChannel(data, channel), icc: false };
+  }
+  try {
+    const [src, dst] = await Promise.all([builtinProfile("srgb"), builtinProfile("gray")]);
+    const out = await iccTransform(data, src, dst);
+    return { values: grayFromIccOutput(out, Math.floor(data.length / 4)), icc: true };
+  } catch {
+    return { values: sampleCalcChannel(data, channel), icc: false };
+  }
+}
+
+function prepareSources(doc: StrataDoc, params: CalcParams) {
   const needsFlat =
     params.source1.layerId === "merged" ||
     params.source2.layerId === "merged";
@@ -46,20 +73,51 @@ export function computeCalculation(doc: StrataDoc, params: CalcParams): Calculat
     flat = createSurface(doc.width, doc.height);
     composeDoc(doc, flat);
   }
-  const a = sourcePixels(doc, params.source1, flat);
-  const b = sourcePixels(doc, params.source2, flat);
-  if (!a || !b) return null;
-  const values = blendCalcChannels(
-    sampleCalcChannel(a, params.source1.channel),
-    sampleCalcChannel(b, params.source2.channel),
-    params,
-  );
-  // sampleCalcChannel 得到的长度就是像素数；写回画布时还原成 RGBA
+  return {
+    a: sourcePixels(doc, params.source1, flat),
+    b: sourcePixels(doc, params.source2, flat),
+  };
+}
+
+function toResult(doc: StrataDoc, values: Uint8ClampedArray, iccGray: boolean): CalculationResult {
   const image = createSurface(doc.width, doc.height);
   const mask = createSurface(doc.width, doc.height);
   writePixels(image, new ImageData(new Uint8ClampedArray(resultToImage(values)), doc.width, doc.height));
   writePixels(mask, new ImageData(new Uint8ClampedArray(resultToMask(values)), doc.width, doc.height));
-  return { image, mask, values };
+  return { image, mask, values, iccGray };
+}
+
+/** 同步版本（旧调用方兼容）：不触碰 ICC，只在非 UI 场合使用。 */
+export function computeCalculation(doc: StrataDoc, params: CalcParams): CalculationResult | null {
+  const { a, b } = prepareSources(doc, params);
+  if (!a || !b) return null;
+  return toResult(
+    doc,
+    blendCalcChannels(
+      sampleCalcChannel(a, params.source1.channel),
+      sampleCalcChannel(b, params.source2.channel),
+      params,
+    ),
+    false,
+  );
+}
+
+/** UI 真用版本：预览与落库都走同一份 ICC 感知结果。 */
+export async function computeCalculationAsync(
+  doc: StrataDoc,
+  params: CalcParams,
+): Promise<CalculationResult | null> {
+  const { a, b } = prepareSources(doc, params);
+  if (!a || !b) return null;
+  const [ca, cb] = await Promise.all([
+    sampleCalculationChannel(doc, a, params.source1.channel),
+    sampleCalculationChannel(doc, b, params.source2.channel),
+  ]);
+  return toResult(
+    doc,
+    blendCalcChannels(ca.values, cb.values, params),
+    ca.icc || cb.icc,
+  );
 }
 
 /** 让「运算结果」落进文档：存成新 Alpha 通道，或替换当前选区。 */

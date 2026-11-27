@@ -4,6 +4,8 @@
 //! point (`tone.rs`), the profile's tone curve, gamma 1.8 encode to 16 bits,
 //! orientation.
 
+use std::sync::Mutex;
+
 use crate::strata_raw::color::{self, Mat3};
 use crate::strata_raw::demosaic::{Demosaic, PAD, Padded, Pattern, demosaic, demosaic_cfa};
 use crate::strata_raw::error::{RawError, Result};
@@ -40,6 +42,9 @@ pub struct DevelopOptions {
     /// A colour rendering fitted to the camera's own JPEG ([`crate::strata_raw::fit_look`]). When set it
     /// replaces the file's colour calibration (or the neutral fallback) and adds its tone curve.
     pub camera_look: Option<CameraLook>,
+    /// Keep the linear ProPhoto samples produced before gamma encoding.
+    /// Default false so the existing 16-bit path and its memory profile stay unchanged.
+    pub capture_linear: bool,
 }
 
 impl Default for DevelopOptions {
@@ -52,6 +57,7 @@ impl Default for DevelopOptions {
             tone: Tone::default(),
             limits: Limits::default(),
             camera_look: None,
+            capture_linear: false,
         }
     }
 }
@@ -82,6 +88,9 @@ pub struct Developed {
     pub height: u32,
     /// Interleaved RGB, `width * height * 3` samples.
     pub rgb: Vec<u16>,
+    /// Linear ProPhoto samples after exposure / tone mapping but before gamma encoding.
+    /// `None` unless `DevelopOptions::capture_linear` was set.
+    pub linear: Option<Vec<f32>>,
     pub info: RawInfo,
     /// Notes about anything approximated or not applied.
     pub warnings: Vec<String>,
@@ -372,6 +381,9 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         m.black = black_level(w, h, |i| lum(&pro(&rgb[i * 3..i * 3 + 3])), s.black_point);
     }
     let mut out = vec![0u16; w * h * 3];
+    let linear_out = opts
+        .capture_linear
+        .then(|| Mutex::new(vec![0f32; w * h * 3]));
     let lut = match look {
         Some(l) => GammaLut::with_tone(l.tone.as_ref()),
         None => GammaLut::with_curve(&s.tone_curve),
@@ -387,6 +399,12 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
                 // deepest shadows' contrast.
                 v = v.map(|c| m.unblack(c) * g);
             }
+            if let Some(lin) = &linear_out {
+                // 每个 band 只锁一次；各 band 写不相交的区间。
+                let mut guard = lin.lock().expect("linear capture lock poisoned");
+                let at = start + i * 3;
+                guard[at..at + 3].copy_from_slice(&v);
+            }
             for k in 0..3 {
                 o[k] = lut.encode(v[k]);
             }
@@ -396,11 +414,19 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     rgb.shrink_to_fit();
 
     let (out, ow, oh) = if opts.orient { orient(out, w, h, s.orientation) } else { (out, w, h) };
+    let linear_out = match linear_out {
+        Some(m) => {
+            let v = m.into_inner().expect("linear capture lock poisoned");
+            Some(if opts.orient { orient_f32(v, w, h, s.orientation).0 } else { v })
+        }
+        None => None,
+    };
     let nmax = mult.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
     Ok(Developed {
         width: ow as u32,
         height: oh as u32,
         rgb: out,
+        linear: linear_out,
         info: RawInfo {
             format: s.format,
             make: s.make.clone(),
@@ -578,6 +604,28 @@ pub(crate) fn orient(src: Vec<u16>, w: usize, h: usize, o: u16) -> (Vec<u16>, us
                     7 => (w - 1 - y2, h - 1 - x2),
                     _ => (w - 1 - y2, x2),
                 };
+                let i = (y * w + x) * 3;
+                row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
+            }
+        }
+    });
+    (out, ow, oh)
+}
+
+/// Same orientation transform for the linear capture buffer.
+pub(crate) fn orient_f32(src: Vec<f32>, w: usize, h: usize, o: u16) -> (Vec<f32>, usize, usize) {
+    if !(2..=8).contains(&o) {
+        return (src, w, h);
+    }
+    let swap = o >= 5;
+    let (ow, oh) = if swap { (h, w) } else { (w, h) };
+    let mut out = vec![0f32; src.len()];
+    let band = par::band_rows(ow);
+    par::chunks_mut(&mut out, band * ow * 3, |b, chunk| {
+        for (r, row) in chunk.chunks_exact_mut(ow * 3).enumerate() {
+            let y2 = b * band + r;
+            for x2 in 0..ow {
+                let (x, y) = source_xy(o, w, h, x2, y2);
                 let i = (y * w + x) * 3;
                 row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
             }

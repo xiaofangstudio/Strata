@@ -278,6 +278,7 @@ pub fn run() {
             wia::wia_acquire,
             decode::decode_heic,
             decode::decode_raw,
+            decode::develop_raw_display,
             decode::cms_transform,
             decode::cms_read_profile,
             decode::cms_builtin_profile

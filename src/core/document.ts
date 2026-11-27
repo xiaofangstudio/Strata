@@ -8,6 +8,7 @@ import { cloneLayer, createLayer, layerFromBitmap, type StrataLayer } from "./la
 import { cloneSelection, type SelectionMask } from "./selection";
 import { type AlphaChannel } from "./channels";
 import { cloneAlphaChannels } from "./channelOps";
+import type { RawDevelopState } from "./rawDevelopParams";
 
 /** 选区遮罩：与画布同尺寸，alpha 分量即「选中程度」。无选区时为 null。 */
 export type { SelectionMask };
@@ -57,6 +58,11 @@ export interface StrataDoc {
   colorMode?: "rgb" | "bitmap" | "grayscale" | "duotone" | "indexed" | "cmyk" | "lab" | "multichannel";
   /** 通道位深标记（8 / 16 / 32）。管线原生 8 位，16/32 只是精度标记 */
   bitsPerChannel?: 8 | 16 | 32;
+  /**
+   * RAW 源与线性显影状态。存在时 Camera Raw 工作窗直接回炉 Rust 线性显影链，
+   * 而不是把 8bit 合成图再过一遍 cameraraw 调整层。
+   */
+  rawDevelop?: RawDevelopState;
   /** 索引颜色模式下调色板（颜色表编辑用） */
   palette?: readonly [number, number, number][];
   /** 当前文档的色彩配置文件（指定 / 转换配置文件用） */

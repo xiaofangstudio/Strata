@@ -77,6 +77,9 @@ interface Props {
   /** 涂抹力度（推颜色强度 0–100） */
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  /** 涂抹笔尖角度（−180…180 整数，与 roundness < 100% 配合可见） */
+  smudgeAngle: number;
+  onSmudgeAngle: (v: number) => void;
   /** 调整画笔：调整类型 / Add-Subtract / 蒙版叠加显示 */
   adjustBrush: AdjustBrushSettings;
   onAdjustBrush: (patch: Partial<AdjustBrushSettings>) => void;
@@ -131,6 +134,8 @@ export default function OptionsBar({
   onRetouch,
   smudgeStrength,
   onSmudgeStrength,
+  smudgeAngle,
+  onSmudgeAngle,
   adjustBrush,
   onAdjustBrush,
   perspective,
@@ -170,6 +175,8 @@ export default function OptionsBar({
     onRetouch,
     smudgeStrength,
     onSmudgeStrength,
+    smudgeAngle,
+    onSmudgeAngle,
     adjustBrush,
     onAdjustBrush,
     perspective,
@@ -249,6 +256,8 @@ interface Ctx {
   onRetouch: (patch: Partial<RetouchSettings>) => void;
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  smudgeAngle: number;
+  onSmudgeAngle: (v: number) => void;
   adjustBrush: AdjustBrushSettings;
   onAdjustBrush: (patch: Partial<AdjustBrushSettings>) => void;
   perspective: PerspectiveState;
@@ -448,6 +457,16 @@ function buildControls(tool: ToolId, c: Ctx): Built {
           onChange={c.onSmudgeStrength}
           suffix="%"
         />,
+        <Slider
+          key="smudge-angle"
+          label={zh.options.smudgeAngle}
+          min={-180}
+          max={180}
+          value={c.smudgeAngle}
+          onChange={c.onSmudgeAngle}
+          suffix="°"
+          hint={String(zh.options.smudgeAngleHint)}
+        />,
       ],
       extra: (
         <>
@@ -468,6 +487,15 @@ function buildControls(tool: ToolId, c: Ctx): Built {
             max={100}
             value={c.brush.flow}
             onChange={(v) => c.onBrush({ flow: v })}
+            suffix="%"
+          />
+          <Slider
+            key="roundness"
+            label={zh.options.roundness}
+            min={1}
+            max={100}
+            value={c.brush.roundness}
+            onChange={(v) => c.onBrush({ roundness: v })}
             suffix="%"
           />
           <SymmetryControls c={c} />

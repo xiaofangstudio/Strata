@@ -18,8 +18,49 @@ export interface SmudgeSettings {
   flow: number;
   /** 推挤强度 0–100：每次落笔尖混合多少取样色 */
   strength: number;
+  /** 笔尖旋转角 −180…180 度；与 roundness < 100% 配合才可见 */
+  angle?: number;
+  /** 笔尖短轴 / 长轴百分比 1–100；100 为正圆 */
+  roundness?: number;
   /** 径向对称参数；有值时每个笔尖按扇区同时推挤 */
   radial?: RadialConfig | null;
+}
+
+export interface SmudgeTipShape {
+  angleDeg?: number;
+  /** 1–100，100 为正圆 */
+  roundness?: number;
+}
+
+/** 把角度规整到 −180…180 的整数；与画笔预设的整数角度口径一致。 */
+export function normSmudgeAngle(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  const rounded = Math.round(deg);
+  const wrapped = (((rounded + 180) % 360) + 360) % 360;
+  return wrapped - 180;
+}
+
+/**
+ * 旋转椭圆的归一化距离：≤1 在笔尖内。
+ * angle=0 且 roundness=100 时退化为正圆；短轴比例让角度真正改变取样 / 落笔形状。
+ */
+export function rotatedTipNorm(
+  dx: number,
+  dy: number,
+  radius: number,
+  shape?: SmudgeTipShape | null,
+): number {
+  const r = Math.max(0.5, radius);
+  const angle = normSmudgeAngle(shape?.angleDeg ?? 0);
+  const ratio = Math.max(0.01, Math.min(1, (shape?.roundness ?? 100) / 100));
+  if (angle === 0) return Math.hypot(dx, dy / ratio) / r;
+  const rad = (angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // 局部坐标 = R(-angle) · delta
+  const lx = dx * cos + dy * sin;
+  const ly = -dx * sin + dy * cos;
+  return Math.hypot(lx, ly / ratio) / r;
 }
 
 /** 圆形范围内取平均色；范围外、透明像素参与会拉低颜色，故按 alpha 加权。 */
@@ -30,6 +71,7 @@ export function sampleAvg(
   cx: number,
   cy: number,
   radius: number,
+  shape?: SmudgeTipShape | null,
 ): [number, number, number, number] {
   const r = Math.max(0.5, radius);
   const x0 = Math.max(0, Math.floor(cx - r));
@@ -43,7 +85,7 @@ export function sampleAvg(
   let weight = 0;
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
-      if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
+      if (rotatedTipNorm(x - cx, y - cy, r, shape) > 1) continue;
       const i = (y * w + x) * 4;
       const a = data[i + 3] / 255;
       // 透明像素权重极低：空白画布不该把取样色稀释成黑色
@@ -69,6 +111,15 @@ export function dabFalloff(dist: number, radius: number, hardness: number): numb
   return (1 - (t - edge) / (1 - edge)) ** 1.5;
 }
 
+/** 与 dabFalloff 同曲线的归一化版本，供旋转椭圆笔尖直接传 norm。 */
+function dabFalloffNorm(norm: number, hardness: number): number {
+  const edge = Math.max(0, Math.min(1, hardness / 100));
+  if (norm >= 1) return 0;
+  if (norm <= edge) return 1;
+  if (edge >= 1) return 0;
+  return (1 - (norm - edge) / (1 - edge)) ** 1.5;
+}
+
 /** 把颜色按笔尖形状混进像素数组（原地）。 */
 export function smudgeStamp(
   data: Uint8ClampedArray,
@@ -81,6 +132,7 @@ export function smudgeStamp(
   amount: number,
   hardness: number,
   mask?: Uint8ClampedArray | null,
+  shape?: SmudgeTipShape | null,
 ): void {
   const r = Math.max(0.5, radius);
   const x0 = Math.max(0, Math.floor(cx - r));
@@ -89,7 +141,9 @@ export function smudgeStamp(
   const y1 = Math.min(h - 1, Math.ceil(cy + r));
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
-      const fall = dabFalloff(Math.hypot(x - cx, y - cy), r, hardness);
+      const fall = shape
+        ? dabFalloffNorm(rotatedTipNorm(x - cx, y - cy, r, shape), hardness)
+        : dabFalloff(Math.hypot(x - cx, y - cy), r, hardness);
       if (fall <= 0) continue;
       const i = (y * w + x) * 4;
       if (mask && mask[i + 3] < 8) continue;
@@ -117,6 +171,7 @@ export function smudgeDeltaStamp(
   amount: number,
   hardness: number,
   mask?: Uint8ClampedArray | null,
+  shape?: SmudgeTipShape | null,
 ): void {
   const r = Math.max(0.5, radius);
   const x0 = Math.max(0, Math.floor(cx - r));
@@ -126,7 +181,9 @@ export function smudgeDeltaStamp(
   const sa = Math.max(0, Math.min(1, color[3] / 255));
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
-      const fall = dabFalloff(Math.hypot(x - cx, y - cy), r, hardness);
+      const fall = shape
+        ? dabFalloffNorm(rotatedTipNorm(x - cx, y - cy, r, shape), hardness)
+        : dabFalloff(Math.hypot(x - cx, y - cy), r, hardness);
       if (fall <= 0) continue;
       const i = (y * w + x) * 4;
       if (mask && mask[i + 3] < 8) continue;
@@ -185,6 +242,10 @@ export class SmudgeStroke {
       (this.settings.strength / 100) *
       (this.settings.flow / 100) *
       (0.25 + pressure * 0.75);
+    const shape: SmudgeTipShape = {
+      angleDeg: this.settings.angle ?? 0,
+      roundness: this.settings.roundness ?? 100,
+    };
     const cfg = this.settings.radial;
     const points = cfg
       ? radialPoints(x, y, {
@@ -194,7 +255,7 @@ export class SmudgeStroke {
       : [{ x, y }];
     for (const p of points) {
       // 每个扇区各自取样：颜色沿各自方向被推走，不是把同一个颜色贴 N 份
-      const color = sampleAvg(this.data, this.w, this.h, p.x, p.y, Math.max(1, r * 0.7));
+      const color = sampleAvg(this.data, this.w, this.h, p.x, p.y, Math.max(1, r * 0.7), shape);
       smudgeDeltaStamp(
         this.delta,
         this.w,
@@ -206,6 +267,7 @@ export class SmudgeStroke {
         amount,
         this.settings.hardness,
         this.maskData,
+        shape,
       );
       // 取样源同步推进：下一颗笔尖取到的就是刚刚被推过去的颜色
       smudgeStamp(
@@ -219,6 +281,7 @@ export class SmudgeStroke {
         amount,
         this.settings.hardness,
         this.maskData,
+        shape,
       );
     }
   }

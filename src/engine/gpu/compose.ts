@@ -38,10 +38,20 @@ export interface GpuFlattenReport {
   fallbackBlendIds: number[];
 }
 
-let cachedBackend: GpuBackend | null = null;
+let cachedBackend: Promise<GpuBackend> | null = null;
+
+/** 设备丢失时清掉缓存，下一帧重新探测；否则旧 device 会被一直当成可用。 */
+export function resetGpuBackend(): void {
+  cachedBackend = null;
+}
 
 async function getBackend(): Promise<GpuBackend> {
-  if (!cachedBackend) cachedBackend = await GpuBackend.create();
+  if (!cachedBackend) {
+    cachedBackend = GpuBackend.create(resetGpuBackend).catch(() => {
+      cachedBackend = null;
+      return GpuBackend.create();
+    });
+  }
   return cachedBackend;
 }
 
@@ -94,13 +104,32 @@ export async function gpuFlattenDetailed(
   const pipeline = backend.pipeline;
   if (!device || !pipeline) return failed();
 
+  // 真实硬件上限：超限时宁可回退 CPU，不能让 WebGPU 抛异步 validation error 后静默出空图。
+  const limits = backend.limits;
+  const groupsX = Math.ceil(width / 8);
+  const groupsY = Math.ceil(height / 8);
+  if (
+    limits &&
+    ((limits.maxTextureDimension2D !== undefined && Math.max(width, height) > limits.maxTextureDimension2D) ||
+      (limits.maxStorageBufferBindingSize !== undefined && pixelBytes > limits.maxStorageBufferBindingSize) ||
+      (limits.maxComputeWorkgroupsPerDimension !== undefined &&
+        Math.max(groupsX, groupsY) > limits.maxComputeWorkgroupsPerDimension))
+  ) {
+    return failed();
+  }
+
   let accum: GpuBuffer | null = null;
   let layerTex: GpuTexture | null = null;
   let uniform: GpuBuffer | null = null;
   let diag: GpuBuffer | null = null;
   let staging: GpuBuffer | null = null;
 
+  let scopeOpened = false;
   try {
+    if (device.pushErrorScope) {
+      device.pushErrorScope("validation");
+      scopeOpened = true;
+    }
     // WebGPU 保证缓冲零初始化 → 累加缓冲起点是透明黑 (0,0,0,0)。
     accum = device.createBuffer({
       size: pixelBytes,
@@ -172,6 +201,13 @@ export async function gpuFlattenDetailed(
     encoder.copyBufferToBuffer(diag, 0, staging, pixelBytes, 4);
     device.queue.submit([encoder.finish()]);
 
+    // 所有命令都提交完再收 error scope：shader 验证、绑定、越界上传都会在这里暴露。
+    if (scopeOpened && device.popErrorScope) {
+      const scopeError = await device.popErrorScope();
+      scopeOpened = false;
+      if (scopeError) return failed();
+    }
+
     await staging.mapAsync(GPU_MAP_MODE.READ);
     let image: ImageData;
     let fallbackMask = 0;
@@ -180,6 +216,7 @@ export async function gpuFlattenDetailed(
       const packed = new Uint32Array(range, 0, pixelCount);
       fallbackMask = new Uint32Array(range, pixelBytes, 1)[0] >>> 0;
       const out = new Uint8ClampedArray(pixelBytes);
+      let nonEmpty = false;
       for (let i = 0; i < pixelCount; i += 1) {
         const v = packed[i];
         const o = i * 4;
@@ -187,16 +224,27 @@ export async function gpuFlattenDetailed(
         out[o + 1] = (v >>> 8) & 0xff;
         out[o + 2] = (v >>> 16) & 0xff;
         out[o + 3] = (v >>> 24) & 0xff;
+        if (out[o + 3] !== 0) nonEmpty = true;
       }
+      // 有可见且不透明的输入却读回全透明 = 管线没有真正执行，绝不能当成成功结果。
+      const hadContent = layers.some((l) => l.visible && l.opacity > 0 && toBytes(l.pixels).some((v, i) => i % 4 === 3 && v !== 0));
+      if (hadContent && !nonEmpty) return failed();
       image = new ImageData(out, width, height);
     } finally {
       staging.unmap();
     }
 
-    return { image, fallbackMask, fallbackBlendIds: decodeMask(fallbackMask) };
+    // 任一混合模式被 WGSL 退化成 normal，结果就不再可信，整次回退 CPU。
+    if (fallbackMask !== 0) {
+      return { image: null, fallbackMask, fallbackBlendIds: decodeMask(fallbackMask) };
+    }
+    return { image, fallbackMask: 0, fallbackBlendIds: [] };
   } catch {
     return failed();
   } finally {
+    if (scopeOpened && device.popErrorScope) {
+      void device.popErrorScope().catch(() => undefined);
+    }
     // 临时资源无论成败都释放，避免大文档反复 flatten 时泄漏显存。
     try { accum?.destroy(); } catch { /* 已释放 */ }
     try { layerTex?.destroy(); } catch { /* 已释放 */ }

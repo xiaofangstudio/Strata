@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dabFalloff, sampleAvg, smudgeDeltaStamp, smudgeStamp } from "../../src/engine/smudge";
+import {
+  dabFalloff,
+  normSmudgeAngle,
+  rotatedTipNorm,
+  sampleAvg,
+  smudgeDeltaStamp,
+  smudgeStamp,
+} from "../../src/engine/smudge";
 
 function img(w: number, h: number, fill: (x: number, y: number) => [number, number, number, number]) {
   const data = new Uint8ClampedArray(w * h * 4);
@@ -56,5 +63,31 @@ describe("涂抹工具纯函数", () => {
     expect(dabFalloff(4, 4, 100)).toBe(0);
     expect(dabFalloff(3, 4, 0)).toBeGreaterThan(0);
     expect(dabFalloff(3, 4, 0)).toBeLessThan(1);
+  });
+
+  it("涂抹角度规整为整数 −180…180", () => {
+    expect(normSmudgeAngle(45.6)).toBe(46);
+    expect(normSmudgeAngle(181)).toBe(-179);
+    expect(normSmudgeAngle(-181)).toBe(179);
+    expect(normSmudgeAngle(Number.NaN)).toBe(0);
+  });
+
+  it("椭圆笔尖的长短轴方向不同，正圆时角度不改变形状", () => {
+    const shape = { angleDeg: 0, roundness: 50 };
+    expect(rotatedTipNorm(8, 0, 10, shape)).toBeLessThan(1);
+    expect(rotatedTipNorm(0, 8, 10, shape)).toBeGreaterThan(1);
+    expect(rotatedTipNorm(8, 0, 10, { angleDeg: 90, roundness: 50 })).toBeGreaterThan(1);
+    expect(rotatedTipNorm(6, 6, 10, { angleDeg: 37, roundness: 100 })).toBeCloseTo(
+      Math.hypot(6, 6) / 10,
+      6,
+    );
+  });
+
+  it("角度真的改变取样像素，不是挂在选项栏上的假控件", () => {
+    // 横向色带：椭圆长轴沿 X 时会把右侧亮色带进取样，旋转 90° 后不会。
+    const data = img(31, 31, (x) => [(x > 17 ? 255 : 0), 0, 0, 255]);
+    const flat = sampleAvg(data, 31, 31, 15, 15, 10, { angleDeg: 0, roundness: 45 });
+    const turned = sampleAvg(data, 31, 31, 15, 15, 10, { angleDeg: 90, roundness: 45 });
+    expect(flat[0]).toBeGreaterThan(turned[0] + 20);
   });
 });

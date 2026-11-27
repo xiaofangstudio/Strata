@@ -111,6 +111,7 @@ import MiniHistogram from "./MiniHistogram";
 import LevelsEditor, { type CanvasPickRequest } from "./LevelsEditor";
 import BlendIfBar from "./BlendIfBar";
 import Popover from "./Popover";
+import PatternPresetPicker from "./PatternPresetPicker";
 import "./LayersPanel.css";
 
 interface Props {
@@ -1462,6 +1463,17 @@ export function StyleProps({
                 </div>
 
                 {numRow(zh.layers.styleOpacity, "opacity", 0, 100)}
+                {s.id === "patternoverlay" && (
+                  <div className="ly-prop">
+                    <span className="ly-prop-label">{zh.panel.patternOverlayPattern}</span>
+                    <PatternPresetPicker
+                      value={s.patternId}
+                      onChange={(patternId) =>
+                        onChange(updateLayerStyle(doc, s.id, { patternId }), zh.panel.patternSelect)
+                      }
+                    />
+                  </div>
+                )}
                 {def.size && numRow(def.sizeLabel, "size", 0, def.sizeMax)}
                 {def.offset && numRow(zh.layers.styleDistance, "distance", 0, def.sizeMax)}
                 {def.offset && numRow(zh.layers.styleAngle, "angle", -180, 180)}

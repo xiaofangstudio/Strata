@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { RawDevelopParams, RawMeta } from "../core/rawDevelopParams";
 
 /**
  * 可打开 / 可导入的图片扩展名（小写，不含点）。
@@ -57,6 +58,10 @@ export interface DecodedImage {
   source?: "sensor" | "embedded-preview" | "image";
   /** Rust 侧新增：显影降级、色彩转换失败等中文提示，null 表示正常 */
   warning?: string | null;
+  /** RAW 传感器显影元数据；内嵌预览没有 */
+  rawMeta?: RawMeta;
+  /** 16bit 显影时返回的高位像素（RGBA，行优先） */
+  rgba16?: number[];
 }
 
 /**
@@ -67,6 +72,15 @@ export interface DecodedImage {
  * 打开流程在 loadImage 之后调 takeDecodeWarning() 取一次并弹提示。
  */
 let pendingDecodeWarning: string | null = null;
+
+/** 按路径缓存最近一次 RAW 元数据；decodeNativeImage 只返回位图，元数据走这里取。 */
+const pendingRawMeta = new Map<string, RawMeta>();
+
+export function takeRawMeta(path: string): RawMeta | null {
+  const meta = pendingRawMeta.get(path) ?? null;
+  if (meta) pendingRawMeta.delete(path);
+  return meta;
+}
 
 export function takeDecodeWarning(): string | null {
   const w = pendingDecodeWarning;
@@ -98,6 +112,11 @@ export async function decodeNativeImage(path: string, tonemap = 0): Promise<Imag
       img.width <= 0 || img.height <= 0 || !img.rgba?.length) {
     throw new Error("解码器没有返回有效图像，请确认文件完整且格式受支持");
   }
+  if (img.rawMeta && img.source === "sensor") {
+    pendingRawMeta.set(path, img.rawMeta);
+  } else {
+    pendingRawMeta.delete(path);
+  }
   const expected = img.width * img.height * 4;
   if (img.rgba.length < expected) {
     throw new Error("解码器返回的像素数据不完整");
@@ -115,6 +134,47 @@ export async function decodeNativeImage(path: string, tonemap = 0): Promise<Imag
   }
   const data = new Uint8ClampedArray(expected);
   for (let i = 0; i < expected; i += 1) data[i] = img.rgba[i];
+  return createImageBitmap(new ImageData(data, img.width, img.height));
+}
+
+function validateDecoded(img: DecodedImage | null | undefined): DecodedImage {
+  if (!img || !Number.isFinite(img.width) || !Number.isFinite(img.height) ||
+      img.width <= 0 || img.height <= 0 || !img.rgba?.length) {
+    throw new Error("解码器没有返回有效图像，请确认文件完整且格式受支持");
+  }
+  const expected = img.width * img.height * 4;
+  if (img.rgba.length < expected) throw new Error("解码器返回的像素数据不完整");
+  if (img.rgba16 && img.rgba16.length < expected) throw new Error("解码器返回的 16bit 像素数据不完整");
+  return img;
+}
+
+/**
+ * 真 RAW 显影：参数直接进入 Rust 线性显影链，最后一次性映射显示位深。
+ * 内嵌预览会被引擎明确拒绝，绝不会把 JPEG 预览当 RAW 参数画布。
+ */
+export async function developRawImage(
+  path: string,
+  params: RawDevelopParams,
+  bits: 8 | 16 = 8,
+): Promise<DecodedImage> {
+  try {
+    const img = await invoke<DecodedImage>("develop_raw_display", { path, params, bits });
+    return validateDecoded(img);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    throw new Error(why || "RAW 线性显影失败");
+  }
+}
+
+/** 真 RAW 显影结果 → 浏览器位图（8bit 显示缓冲）。 */
+export async function developRawBitmap(
+  path: string,
+  params: RawDevelopParams,
+  bits: 8 | 16 = 8,
+): Promise<ImageBitmap> {
+  const img = validateDecoded(await developRawImage(path, params, bits));
+  const data = new Uint8ClampedArray(img.width * img.height * 4);
+  for (let i = 0; i < data.length; i += 1) data[i] = img.rgba[i];
   return createImageBitmap(new ImageData(data, img.width, img.height));
 }
 

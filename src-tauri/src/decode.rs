@@ -5,9 +5,14 @@
 //! `source` 明确标注像素来自哪里，`warning` 承载任何降级 / 回退的原因，
 //! 不再让「内嵌预览」或「显影失败」静默发生。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::strata_cms::{Builtin, Intent, Profile, Transform};
+use crate::strata_raw::{
+    self, DevelopOptions, Tone, WhiteBalance, color_apply as color_apply,
+    color_invert as color_invert, color_mul as color_mul,
+    srgb_to_xyz_d50, xyz_d50_to_prophoto,
+};
 
 /// 返回给前端的统一图像结构。
 ///
@@ -29,6 +34,63 @@ pub struct DecodedImage {
     /// 可展示给用户的告警 / 降级原因；正常路径为 `None`（JSON `null`）。
     /// 带上 `[CODE]` 前缀的短句（如 `CR3_UNSUPPORTED` / `JXL_*`），前端可分流。
     pub warning: Option<String>,
+    /// RAW 显影元数据。只有 `source = "sensor"` 时才有；Camera Raw 工作窗据此
+    /// 把参数送回同一条线性显影链，而不是对压好的 8bit 图二次调色。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_meta: Option<RawMeta>,
+    /// 16bit 显影结果（线性域参数算完后**唯一一次**映射到显示位深）。
+    /// 普通 8bit 打开路径不带这个字段；UI 仍使用 rgba。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgba16: Option<Vec<u16>>,
+}
+
+/// 交给前端保存 / 回传的 RAW 元信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawMeta {
+    pub source: &'static str,
+    pub wb_multipliers: [f64; 3],
+    pub baseline_exposure: f64,
+    pub orientation: u16,
+    pub cfa: Option<String>,
+}
+
+/// Camera Raw 工作窗回传给 Rust 的显影参数。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawDevelopParams {
+    /// `"asShot"` / `"auto"` / `"custom"`。
+    #[serde(default = "default_wb_mode")]
+    pub white_balance: String,
+    /// 相机通道增益（R, G, B）；`white_balance = "custom"` 时必填。
+    #[serde(default)]
+    pub wb_multipliers: Option<[f64; 3]>,
+    #[serde(default)]
+    pub exposure: f64,
+    #[serde(default)]
+    pub tone: RawToneParams,
+    /// 线性域曲线节点，首尾必须是 (0,0) / (1,1)。
+    #[serde(default)]
+    pub curve_knots: Vec<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawToneParams {
+    #[serde(default)]
+    pub shadows: f64,
+    #[serde(default)]
+    pub highlights: f64,
+    #[serde(default)]
+    pub clarity: f64,
+    #[serde(default)]
+    pub texture: f64,
+    #[serde(default)]
+    pub dehaze: f64,
+}
+
+fn default_wb_mode() -> String {
+    "asShot".to_string()
 }
 
 /// 解码 HEIC / HEIF 静态图。
@@ -43,6 +105,8 @@ pub fn decode_heic(path: String) -> Result<DecodedImage, String> {
         rgba: img.rgba,
         source: "image",
         warning: None,
+        raw_meta: None,
+        rgba16: None,
     })
 }
 
@@ -186,7 +250,169 @@ fn develop_raw(
         rgba,
         source: "sensor",
         warning: (!notes.is_empty()).then(|| notes.join(" ")),
+        raw_meta: Some(RawMeta {
+            source: "sensor",
+            wb_multipliers: d.info.wb_multipliers,
+            baseline_exposure: d.info.baseline_exposure,
+            orientation: d.info.orientation,
+            cfa: d.info.cfa,
+        }),
+        rgba16: None,
     })
+}
+
+/// 真 RAW 显影链：白平衡 / 曝光 / 影调 / 色调曲线全部在线性光里完成，
+/// 最后才做一次 ProPhoto → sRGB 矩阵、OETF 与量化。
+///
+/// 与旧 `decode_raw` 的区别：旧路径把 16bit gamma 编码值先 `>>8`，Camera Raw
+/// 再在 8bit 图上二次调色；这里从传感器重新显影，参数直接进线性域。
+#[tauri::command]
+pub fn develop_raw_display(
+    path: String,
+    params: RawDevelopParams,
+    bits: Option<u8>,
+) -> Result<DecodedImage, String> {
+    let bytes = std::fs::read(&path)
+        .map_err(|_| "读取 RAW 文件失败，请确认路径有效".to_string())?;
+    let fmt = strata_raw::identify(&bytes)
+        .ok_or_else(|| "不是可识别的相机 RAW 文件".to_string())?;
+    if let Some(reason) = fmt.preview_only_reason() {
+        return Err(format!("这个 RAW 只能取内嵌预览，不能做真显影：{reason}"));
+    }
+    let sensor = strata_raw::decode(&bytes, &strata_raw::Limits::default())
+        .map_err(|e| format!("RAW 传感器数据无法解码（{e}）"))?;
+    let wb = match params.white_balance.as_str() {
+        "auto" => WhiteBalance::Auto,
+        "custom" => {
+            let m = params.wb_multipliers.ok_or_else(|| "自定义白平衡缺少 RGB 乘数".to_string())?;
+            if m.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                return Err("白平衡乘数必须是正数".to_string());
+            }
+            WhiteBalance::Multipliers(m)
+        }
+        _ => WhiteBalance::AsShot,
+    };
+    let mut opts = DevelopOptions {
+        white_balance: wb,
+        exposure: params.exposure.clamp(-5.0, 5.0),
+        tone: Tone {
+            shadows: params.tone.shadows.clamp(-100.0, 100.0) as f32,
+            highlights: params.tone.highlights.clamp(-100.0, 100.0) as f32,
+            clarity: params.tone.clarity.clamp(-100.0, 100.0) as f32,
+            texture: params.tone.texture.clamp(-100.0, 100.0) as f32,
+            dehaze: params.tone.dehaze.clamp(-100.0, 100.0) as f32,
+        },
+        capture_linear: true,
+        ..DevelopOptions::default()
+    };
+    let d = strata_raw::develop_sensor(&sensor, &opts)
+        .map_err(|e| format!("RAW 线性显影失败（{e}）"))?;
+    opts.capture_linear = false;
+    let linear = d.linear.ok_or_else(|| "RAW 显影没有返回线性数据".to_string())?;
+    validate_curve(&params.curve_knots)?;
+    let curve = if params.curve_knots.len() > 2 || curve_changes(&params.curve_knots) {
+        Some(params.curve_knots.as_slice())
+    } else {
+        None
+    };
+
+    let pro_to_xyz = color_invert(&xyz_d50_to_prophoto())
+        .ok_or_else(|| "ProPhoto 色彩矩阵不可逆".to_string())?;
+    let xyz_to_srgb = color_invert(&srgb_to_xyz_d50())
+        .ok_or_else(|| "sRGB 色彩矩阵不可逆".to_string())?;
+    let to_srgb = color_mul(&xyz_to_srgb, &pro_to_xyz);
+
+    let pixels = (d.width as usize)
+        .checked_mul(d.height as usize)
+        .ok_or_else(|| "RAW 图片尺寸过大".to_string())?;
+    let n3 = pixels.checked_mul(3).ok_or_else(|| "RAW 图片尺寸过大".to_string())?;
+    if pixels == 0 || linear.len() < n3 {
+        return Err("RAW 线性显影输出不完整".to_string());
+    }
+    let want16 = bits.unwrap_or(8) == 16;
+    let mut rgba = Vec::with_capacity(pixels * 4);
+    let mut rgba16 = want16.then(|| Vec::with_capacity(pixels * 4));
+    for i in 0..pixels {
+        let mut lin = [0f64; 3];
+        for k in 0..3 {
+            let v = f64::from(linear[i * 3 + k]);
+            lin[k] = match curve {
+                Some(knots) => eval_curve(knots, v),
+                None => v.clamp(0.0, 1.0),
+            };
+        }
+        let srgb = color_apply(&to_srgb, lin);
+        for k in 0..3 {
+            let v = srgb_oetf(srgb[k]);
+            // 同一份线性值直接量化到目标位深，没有先压 8bit 的中间步骤。
+            let q8 = (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            rgba.push(q8);
+            if let Some(out16) = &mut rgba16 {
+                out16.push((v * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16);
+            }
+        }
+        rgba.push(255);
+        if let Some(out16) = &mut rgba16 {
+            out16.push(65535);
+        }
+    }
+    let mut notes = d.warnings;
+    notes.push("白平衡 / 曝光 / 影调 / 曲线在线性光域完成，最后一次性映射到显示位深。".to_string());
+    Ok(DecodedImage {
+        width: d.width,
+        height: d.height,
+        rgba,
+        source: "sensor",
+        warning: (!notes.is_empty()).then(|| notes.join("；")),
+        raw_meta: Some(RawMeta {
+            source: "sensor",
+            wb_multipliers: d.info.wb_multipliers,
+            baseline_exposure: d.info.baseline_exposure,
+            orientation: d.info.orientation,
+            cfa: d.info.cfa,
+        }),
+        rgba16,
+    })
+}
+
+fn srgb_oetf(v: f64) -> f64 {
+    let x = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    if x <= 0.0031308 { 12.92 * x } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 }
+}
+
+fn validate_curve(knots: &[[f64; 2]]) -> Result<(), String> {
+    if knots.is_empty() {
+        return Ok(());
+    }
+    if knots.len() < 2 || knots.len() > 256 {
+        return Err("色调曲线节点数量必须在 2 到 256 之间".to_string());
+    }
+    if !knots.iter().all(|k| k.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))) {
+        return Err("色调曲线节点超出 0 到 1 范围".to_string());
+    }
+    if knots.first() != Some(&[0.0, 0.0]) || knots.last() != Some(&[1.0, 1.0]) {
+        return Err("色调曲线必须从 (0,0) 到 (1,1)".to_string());
+    }
+    if !knots.windows(2).all(|w| w[1][0] > w[0][0] && w[1][1] >= w[0][1]) {
+        return Err("色调曲线 x 必须递增且 y 不得下降".to_string());
+    }
+    Ok(())
+}
+
+fn curve_changes(knots: &[[f64; 2]]) -> bool {
+    knots.iter().any(|k| (k[0] - k[1]).abs() > 1e-6)
+}
+
+/// 与 `ToneCurve::eval` 同一套 sqrt 域分段线性求值，但不需要构造 ToneCurve。
+fn eval_curve(knots: &[[f64; 2]], v: f64) -> f64 {
+    let t = if v.is_finite() { v.clamp(0.0, 1.0).sqrt() } else { 0.0 };
+    let i = knots.partition_point(|k| k[0] < t).clamp(1, knots.len() - 1);
+    let a = knots[i - 1];
+    let b = knots[i];
+    let dx = b[0] - a[0];
+    let s = if dx <= 0.0 { 0.0 } else { ((t - a[0]) / dx).clamp(0.0, 1.0) };
+    let y = a[1] + (b[1] - a[1]) * s;
+    (y * y).clamp(0.0, 1.0)
 }
 
 /// 返回是否成功完成转换；失败时 `rgb8` 保持原始编码值。
@@ -270,6 +496,8 @@ fn decode_preview_jpeg(jpeg: &[u8]) -> Result<DecodedImage, String> {
         rgba,
         source: "image",
         warning: None,
+        raw_meta: None,
+        rgba16: None,
     })
 }
 
@@ -456,4 +684,57 @@ pub fn cms_builtin_profile(name: String) -> Result<Vec<u8>, String> {
         Ok::<Vec<u8>, String>((*b.profile().to_bytes()).clone())
     }))
     .unwrap_or_else(|_| Err("生成内建色彩配置时发生异常".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strata_raw::testgen::DngSpec;
+
+    fn synthetic_sensor() -> strata_raw::Sensor {
+        let data = (0..16).map(|i| 18_000 + i * 120).collect();
+        let bytes = DngSpec::cfa(4, 4, data).build();
+        strata_raw::decode(&bytes, &strata_raw::Limits::default()).unwrap()
+    }
+
+    fn avg_linear(exposure: f64) -> f64 {
+        let sensor = synthetic_sensor();
+        let opts = DevelopOptions {
+            exposure,
+            capture_linear: true,
+            ..DevelopOptions::default()
+        };
+        let d = strata_raw::develop_sensor(&sensor, &opts).unwrap();
+        let lin = d.linear.expect("capture_linear must keep the linear buffer");
+        lin.iter().copied().sum::<f32>() as f64 / lin.len() as f64
+    }
+
+    #[test]
+    fn linear_capture_is_exposure_linear_and_unclipped() {
+        let base = avg_linear(0.0);
+        let up = avg_linear(1.0);
+        assert!(base > 0.0);
+        assert!((up / base - 2.0).abs() < 0.15, "base={base} up={up}");
+    }
+
+    #[test]
+    fn oetf_is_bounded_and_monotone() {
+        let mut prev = -1.0;
+        for i in 0..=1000 {
+            let v = srgb_oetf(i as f64 / 1000.0);
+            assert!((0.0..=1.0).contains(&v));
+            assert!(v >= prev);
+            prev = v;
+        }
+        assert!((srgb_oetf(0.0) - 0.0).abs() < 1e-9);
+        assert!((srgb_oetf(1.0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn curve_knots_are_validated() {
+        assert!(validate_curve(&[[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]]).is_ok());
+        assert!(validate_curve(&[[0.0, 0.0], [0.6, 0.6], [0.4, 0.8], [1.0, 1.0]]).is_err());
+        assert!(validate_curve(&[[0.0, 0.0], [1.0, 0.9]]).is_err());
+        assert!(curve_changes(&[[0.0, 0.0], [1.0, 1.0]]) == false);
+    }
 }

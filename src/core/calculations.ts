@@ -60,6 +60,33 @@ export const DEFAULT_CALC_PARAMS: CalcParams = {
   invertResult: false,
 };
 
+/** 文档的色彩上下文；用结构类型避免 core 反向依赖 engine / DOM。 */
+export interface CalcColorContext {
+  colorMode?: "rgb" | "bitmap" | "grayscale" | "duotone" | "indexed" | "cmyk" | "lab" | "multichannel";
+  bitsPerChannel?: 8 | 16 | 32;
+  profile?: "srgb" | "display-p3" | "adobe-rgb" | "gray";
+}
+
+/**
+ * 新版 PhotoCraft 口径：RGB / 8bit / sRGB 的 Gray 通道走真 ICC
+ * sRGB → GrayGamma22，而不是固定 Rec.601 加权。其它位深 / 色彩模式 /
+ * profile 保持旧公式，避免把尚未有真 ICC 转换的深水区路径改坏。
+ */
+export function calcUsesIccGray(ctx: CalcColorContext): boolean {
+  return (
+    (ctx.colorMode ?? "rgb") === "rgb" &&
+    (ctx.bitsPerChannel ?? 8) === 8 &&
+    (ctx.profile ?? "srgb") === "srgb"
+  );
+}
+
+/** cms_transform 到单通道 Gray 后回传的是 [g,g,g,a]，取首通道即真灰度。 */
+export function grayFromIccOutput(data: Uint8Array | Uint8ClampedArray, pixels: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(pixels);
+  for (let p = 0; p < pixels; p += 1) out[p] = data[p * 4];
+  return out;
+}
+
 /** 从一张 RGBA 位图里取单通道，输出每像素一个灰度字节（长度 = 像素数）。 */
 export function sampleCalcChannel(data: Uint8Array | Uint8ClampedArray, channel: CalcChannel): Uint8ClampedArray {
   const n = Math.floor(data.length / 4);

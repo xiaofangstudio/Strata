@@ -42,6 +42,7 @@ const TOP_GROUPS = [
   "hint",
   "launch",
   "error",
+  "plugin",
 ] as const;
 
 /** 需求里点名要覆盖的「关键分组」。 */
@@ -175,7 +176,7 @@ describe("zh 关键分组内容", () => {
 describe("zh 源码结构扫描（运行时看不到的重复键）", () => {
   const bodies = groupBodies(source);
 
-  it("源码里确实能解析出全部 23 个顶层分组", () => {
+  it("源码里确实能解析出全部 27 个顶层分组", () => {
     expect([...bodies.keys()]).toEqual([...TOP_GROUPS]);
   });
 

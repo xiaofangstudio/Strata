@@ -24,7 +24,9 @@ import {
 import { setAdjust } from "../../core/layerOps";
 import type { StrataDoc } from "../../core/document";
 import { composeDoc } from "../../engine/compositor";
-import { createSurface } from "../../engine/surface";
+import { createSurface, surfaceFromBitmap } from "../../engine/surface";
+import { developRawBitmap } from "../../engine/image";
+import { defaultRawUiParams, uiToRawDevelop, type RawDevelopState } from "../../core/rawDevelopParams";
 import {
   BUILTIN_PRESETS,
   deleteUserPreset,
@@ -86,8 +88,13 @@ const PARAM_INFO = new Map(CAMERA_DEF.params.map((p) => [p.id, p]));
  * 在活动层上方插临时调整层 —— 与 layerOps.spliceAbove 位置规则一致，
  * 但保留 base.activeLayerId（同 AdjustDialog.withTempLayer，不重复解释）。
  */
-function withTempLayer(base: StrataDoc): { doc: StrataDoc; layerId: string } {
-  const layer = createAdjustLayer("Camera Raw", newAdjustState("cameraraw"));
+function withTempLayer(
+  base: StrataDoc,
+  params?: Record<string, number>,
+): { doc: StrataDoc; layerId: string } {
+  const state = newAdjustState("cameraraw");
+  if (params) state.params = { ...state.params, ...params };
+  const layer = createAdjustLayer("Camera Raw", state);
   const at = base.layers.findIndex((l) => l.id === base.activeLayerId);
   const cur = at >= 0 ? base.layers[at] : null;
   const parent = cur ? (cur.kind === "group" ? cur.id : (cur.parent ?? null)) : null;
@@ -100,11 +107,18 @@ function withTempLayer(base: StrataDoc): { doc: StrataDoc; layerId: string } {
 
 export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Props) {
   const base = useRef(doc).current;
-  const temp = useMemo(() => withTempLayer(base), [base]);
+  const rawState = useRef<RawDevelopState | null>(base.rawDevelop ?? null).current;
+  const temp = useMemo(
+    () => withTempLayer(base, rawState?.ui ?? defaultRawUiParams()),
+    [base, rawState],
+  );
   const [work, setWork] = useState<StrataDoc>(temp.doc);
   const layer = work.layers.find((l) => l.id === temp.layerId) ?? null;
   const st = layer?.adjust ?? null;
+  const paramsKey = st ? JSON.stringify(st.params) : "";
   const [tab, setTab] = useState<TabId>("light");
+  const [rawError, setRawError] = useState("");
+  const [developing, setDeveloping] = useState(false);
 
   // 预设状态
   const [userPresets, setUserPresets] = useState<RawPreset[]>(() => loadUserPresets());
@@ -115,6 +129,27 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
   previewRef.current = onPreview;
   const closedRef = useRef(false);
 
+  /** RAW 图走「参数回炉 Rust 线性显影」，不做 cameraraw 8bit 调整层。 */
+  const rawTargetId = useRef(
+    base.layers.find((l) => l.id === base.activeLayerId && l.kind === "pixel")?.id ??
+      base.layers.find((l) => l.kind === "pixel")?.id ??
+      base.activeLayerId,
+  ).current;
+
+  const buildRawDoc = useCallback(async (params: Record<string, number>): Promise<StrataDoc> => {
+    if (!rawState) throw new Error("这份文档没有 RAW 源，无法线性显影");
+    const linear = uiToRawDevelop(params, rawState.meta);
+    const bitmap = await developRawBitmap(rawState.path, linear, 8);
+    const surface = surfaceFromBitmap(bitmap);
+    bitmap.close();
+    return {
+      ...base,
+      layers: base.layers.map((l) => (l.id === rawTargetId ? { ...l, surface } : l)),
+      rawDevelop: { ...rawState, params: linear, ui: { ...params } },
+      dirty: true,
+    };
+  }, [base, rawState, rawTargetId]);
+
   // 主画布预览推送：work 状态本身即时更新（滑块本地值跟手）。
   // 全文档合成 + 18 参数像素管线在大图上每帧跑会堵主线程 —— 用尾随节流
   // （每 60ms 强制推一帧最新值），拖动中画面持续刷新，停手后最后一帧保证推。
@@ -122,6 +157,8 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
   const lastPush = useRef(0);
   const pushPending = useRef<(() => void) | null>(null);
   useEffect(() => {
+    // RAW 的主画布预览走下面的线性显影链，不能把临时 cameraraw 层推出去。
+    if (rawState) return;
     pushPending.current = () => {
       if (closedRef.current) return;
       previewRef.current(work);
@@ -138,7 +175,7 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
       lastPush.current = Date.now();
       pushPending.current?.();
     }, 60 - elapsed);
-  }, [work]);
+  }, [work, rawState]);
   useEffect(() => () => {
     if (pushTimer.current !== null) window.clearTimeout(pushTimer.current);
   }, []);
@@ -148,6 +185,7 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
   const [previewVersion, setPreviewVersion] = useState(0);
   const previewElRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
+    if (rawState) return; // RAW 预览由线性显影 effect 负责
     // 左侧预览是「参考视图」，主画布预览仍每帧跟手；这里 24ms 防抖，
     // 避免大图拖参数时全文档合成两次造成掉帧。
     const t = window.setTimeout(() => {
@@ -157,7 +195,7 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
       setPreviewVersion((v) => v + 1);
     }, 24);
     return () => window.clearTimeout(t);
-  }, [work]);
+  }, [work, rawState]);
 
   /** 预览画布或窗口尺寸变化时，把工作文档缩略图画进左栏 canvas。 */
   useEffect(() => {
@@ -189,6 +227,34 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
     if (ro && el.parentElement) ro.observe(el.parentElement);
     return () => ro?.disconnect();
   }, [previewCanvas, previewVersion]);
+
+  /**
+   * RAW 预览：尾随节流 60ms，参数直接回炉 Rust 线性显影。
+   * 每次请求带序号，旧结果回来时直接丢弃，避免拖动滑杆时画面倒退。
+   */
+  const rawReqRef = useRef(0);
+  useEffect(() => {
+    if (!rawState || !st) return;
+    const seq = ++rawReqRef.current;
+    const params = { ...st.params };
+    const t = window.setTimeout(() => {
+      void buildRawDoc(params)
+        .then((next) => {
+          if (closedRef.current || seq !== rawReqRef.current) return;
+          const surface = next.layers.find((l) => l.id === rawTargetId)?.surface;
+          if (surface) setPreviewCanvas(surface);
+          setPreviewVersion((v) => v + 1);
+          setRawError("");
+          previewRef.current(next);
+        })
+        .catch((e) => {
+          if (closedRef.current || seq !== rawReqRef.current) return;
+          setRawError(e instanceof Error ? e.message : String(e));
+        });
+    }, 60);
+    return () => window.clearTimeout(t);
+    // paramsKey 是滑杆的稳定签名；st 对象每次 setWork 都会变，不能用引用做依赖。
+  }, [paramsKey, rawState, st, buildRawDoc, rawTargetId]);
 
   const setParam = useCallback((id: string, value: number) => {
     if (!st || !layer) return;
@@ -237,11 +303,25 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
     onClose();
   }, [base, onClose]);
 
-  const apply = useCallback(() => {
-    if (closedRef.current || neutral) return;
+  const apply = useCallback(async () => {
+    if (closedRef.current || neutral || developing) return;
+    if (rawState && st) {
+      setDeveloping(true);
+      try {
+        const next = await buildRawDoc({ ...st.params });
+        if (closedRef.current) return;
+        closedRef.current = true;
+        onApply(next);
+      } catch (e) {
+        setRawError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDeveloping(false);
+      }
+      return;
+    }
     closedRef.current = true;
     onApply(work);
-  }, [work, neutral, onApply]);
+  }, [work, neutral, onApply, rawState, st, buildRawDoc, developing]);
 
   const curTab = TABS.find((t) => t.id === tab) ?? TABS[0];
   const allPresets = [...BUILTIN_PRESETS, ...userPresets];
@@ -259,11 +339,13 @@ export default function CameraRawDialog({ doc, onPreview, onApply, onClose }: Pr
       footer={
         <>
           <span className="cr-note">
-            {neutral ? zh.dialog.crNeutralHint : zh.dialog.crTunedHint}
+            {rawError ? `${zh.dialog.crRawFailed}${rawError}` : neutral ? zh.dialog.crNeutralHint : zh.dialog.crTunedHint}
           </span>
           <span className="cr-spacer" />
           <button className="btn-ghost" onClick={cancel}>{zh.dialog.cancel}</button>
-          <button className="btn-primary" onClick={apply} disabled={neutral}>{zh.dialog.confirm}</button>
+          <button className="btn-primary" onClick={() => void apply()} disabled={neutral || developing}>
+            {developing ? zh.dialog.crDeveloping : zh.dialog.confirm}
+          </button>
         </>
       }
     >

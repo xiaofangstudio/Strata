@@ -22,7 +22,14 @@ export interface GpuTexture {
   createView(): GpuTextureView;
   destroy(): void;
 }
-export interface GpuShaderModule {}
+export interface GpuCompilationMessage {
+  type: string;
+  message: string;
+  lineNum?: number;
+}
+export interface GpuShaderModule {
+  getCompilationInfo?(): Promise<{ messages: GpuCompilationMessage[] }>;
+}
 export interface GpuBindGroupLayout {}
 export interface GpuPipelineLayout {}
 export interface GpuBindGroup {}
@@ -67,7 +74,15 @@ export interface GpuQueue {
   ): void;
   submit(commandBuffers: GpuCommandBuffer[]): void;
 }
+export interface GpuLimits {
+  maxTextureDimension2D?: number;
+  maxStorageBufferBindingSize?: number;
+  maxComputeWorkgroupsPerDimension?: number;
+}
 export interface GpuDevice {
+  readonly limits?: GpuLimits;
+  pushErrorScope?(filter: string): void;
+  popErrorScope?(): Promise<unknown>;
   createShaderModule(descriptor: { code: string; label?: string }): GpuShaderModule;
   createComputePipeline(descriptor: {
     layout: "auto" | GpuPipelineLayout;
@@ -157,8 +172,10 @@ export class GpuBackend {
   private _device: GpuDevice | null = null;
   private _pipeline: GpuComputePipeline | null = null;
   private _destroyed = false;
+  private _reason: string | null = null;
+  private _onLost: (() => void) | null = null;
 
-  /** device 与 pipeline 都就绪且未 destroy 时为 true。 */
+  /** device 与 pipeline 都就绪、校验通过且未 destroy 时为 true。 */
   get available(): boolean {
     return !this._destroyed && this._device !== null && this._pipeline !== null;
   }
@@ -171,9 +188,19 @@ export class GpuBackend {
     return this.available ? this._pipeline : null;
   }
 
+  get limits(): GpuLimits | null {
+    return this.available ? (this._device?.limits ?? null) : null;
+  }
+
+  /** 失败原因；成功时为 null。UI 诊断用，不影响静默回退。 */
+  get reason(): string | null {
+    return this._reason;
+  }
+
   /** 异步工厂：探测设备并编译 compose 管线；失败也返回 available=false 的实例。 */
-  static async create(): Promise<GpuBackend> {
+  static async create(onLost?: () => void): Promise<GpuBackend> {
     const backend = new GpuBackend();
+    backend._onLost = onLost ?? null;
     await backend.init();
     return backend;
   }
@@ -182,16 +209,47 @@ export class GpuBackend {
     if (this._destroyed) return false;
     try {
       const device = await detectWebGpu();
-      if (!device) return false;
+      if (!device) {
+        this._reason = "当前环境没有可用的 WebGPU 设备";
+        return false;
+      }
+      // WebGPU 的 shader / pipeline 错误是异步上报的。不检查就 available=true 的话，
+      // dispatch 会静默 no-op，读回的全零缓冲会被误当成一张合法透明图 —— 这是假 GPU。
+      device.pushErrorScope?.("validation");
       const module = device.createShaderModule({ code: COMPOSE_WGSL });
+      let messages: GpuCompilationMessage[] = [];
+      if (module.getCompilationInfo) {
+        const info = await module.getCompilationInfo();
+        messages = info.messages ?? [];
+      }
+      const errors = messages.filter((m) => m.type === "error");
+      if (errors.length) {
+        this._reason = `WebGPU 着色器编译失败：${errors[0].message}`;
+        await device.popErrorScope?.().catch(() => undefined);
+        return false;
+      }
       const pipeline = device.createComputePipeline({
         layout: "auto",
         compute: { module, entryPoint: "cs_main" },
       });
+      const scopeError = await device.popErrorScope?.().catch(() => undefined);
+      if (scopeError) {
+        this._reason = "WebGPU 合成管线校验失败";
+        return false;
+      }
       this._device = device;
       this._pipeline = pipeline;
+      void device.lost.then(() => {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this._device = null;
+        this._pipeline = null;
+        this._reason = "WebGPU 设备已丢失";
+        this._onLost?.();
+      }).catch(() => undefined);
       return true;
-    } catch {
+    } catch (e) {
+      this._reason = e instanceof Error ? e.message : "WebGPU 初始化失败";
       return false;
     }
   }

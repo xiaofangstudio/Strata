@@ -68,9 +68,11 @@ describe("estimateFeatureTransform", () => {
     expect(estimateFeatureTransform(makeBuffer(100, 100), makeBuffer(80, 100))).toBeNull();
   });
 
+  // 200×200 纯色图仍要走完整的 Harris / BRIEF 扫描；全量并行跑时给足超时，
+  // 之前 5s 默认超时在满载机器上偶发误报，单跑其实只要 2–3s。
   it("纯色图（无角点）返回 null", () => {
     expect(estimateFeatureTransform(makeBuffer(200, 200), makeBuffer(200, 200))).toBeNull();
-  });
+  }, 20000);
 
   it("平移图能估计出正确平移（原图像素尺度）", () => {
     const w = 320, h = 260;

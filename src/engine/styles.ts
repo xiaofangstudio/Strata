@@ -13,9 +13,10 @@
  */
 import { blendOp, isSoftBlend, type LayerStyle, type StrataLayer } from "../core/layer";
 import { blendIfActive, blendIfWeight, luma01 } from "./blendIf";
-import { mustCtx } from "./surface";
+import { createSurface, mustCtx } from "./surface";
 import { svgFilter } from "./filters";
 import { blendInto } from "./blend";
+import { patternTileFor } from "./patternTiles";
 
 /* ---------------------------------------------------------------- 暂存画布 */
 
@@ -270,19 +271,27 @@ function drawStyle(
       break;
     }
     case "patternoverlay": {
-      // 棋盘图案铺满轮廓（单元格 = 大小）
+      // 真图案预设 / 用户定义图案铺满轮廓；size 是图案显示大小（12px 为原尺寸）
       const buf = slot(1, w, h);
       const bc = mustCtx(buf);
-      const cell = Math.max(2, Math.round(s.size || 8));
-      bc.fillStyle = s.color;
+      const tile = patternTileFor(s.patternId, 48);
+      const scale = Math.max(0.25, Math.min(6, (s.size || 12) / 12));
+      const scaled = createSurface(
+        Math.max(1, Math.round(tile.width * scale)),
+        Math.max(1, Math.round(tile.height * scale)),
+      );
+      mustCtx(scaled).drawImage(tile, 0, 0, scaled.width, scaled.height);
+      const pattern = bc.createPattern(scaled, "repeat");
+      bc.fillStyle = pattern ?? s.color;
       bc.fillRect(0, 0, w, h);
-      bc.fillStyle = "rgba(255,255,255,0.55)";
-      for (let y = 0; y < h; y += cell) {
-        for (let x = 0; x < w; x += cell) {
-          if ((Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0) {
-            bc.fillRect(x, y, Math.min(cell, w - x), Math.min(cell, h - y));
-          }
-        }
+      if (pattern) {
+        // 颜色只做轻微染色，不再用纯色盖掉图案本身
+        bc.save();
+        bc.globalCompositeOperation = "source-atop";
+        bc.globalAlpha = 0.22;
+        bc.fillStyle = s.color;
+        bc.fillRect(0, 0, w, h);
+        bc.restore();
       }
       bc.globalCompositeOperation = "destination-in";
       bc.drawImage(eff, 0, 0);

@@ -18,7 +18,7 @@ import {
   type CalcChannel,
   type CalcParams,
 } from "../../core/calculations";
-import { computeCalculation, applyCalculation, type CalculationResult } from "../../engine/calculations";
+import { computeCalculationAsync, applyCalculation, type CalculationResult } from "../../engine/calculations";
 import { zh } from "../../i18n";
 import { useBaseComposite } from "../hooks/useComposedPreview";
 import { useDialogUndo } from "../hooks/useDialogUndo";
@@ -51,19 +51,33 @@ interface DialogState {
   name: string;
 }
 
-/** 参数 → 结果画布，尾随节流；停手最后一帧保证画出来。 */
+/** 参数 → 结果画布，尾随节流；ICC 异步转换也按 token 丢弃旧结果。 */
 function useCalculation(base: StrataDoc, params: CalcParams, gapMs = 120) {
-  const [value, setValue] = useState<CalculationResult | null>(() => computeCalculation(base, params));
+  const [value, setValue] = useState<CalculationResult | null>(null);
   const [version, setVersion] = useState(0);
   const last = useRef(0);
   const timer = useRef<number | null>(null);
   const pending = useRef(params);
+  const token = useRef(0);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
+  }, []);
 
   useEffect(() => {
     pending.current = params;
     const run = () => {
-      setValue(computeCalculation(base, pending.current));
-      setVersion((v) => v + 1);
+      const current = ++token.current;
+      void computeCalculationAsync(base, pending.current).then((result) => {
+        if (!alive.current || current !== token.current) return;
+        setValue(result);
+        setVersion((v) => v + 1);
+      });
     };
     const elapsed = Date.now() - last.current;
     if (elapsed >= gapMs) {
@@ -78,13 +92,6 @@ function useCalculation(base: StrataDoc, params: CalcParams, gapMs = 120) {
       run();
     }, gapMs - elapsed);
   }, [base, params, gapMs]);
-
-  useEffect(
-    () => () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    },
-    [],
-  );
   return { value, version };
 }
 
@@ -297,6 +304,7 @@ export default function CalculationsDialog({ doc, onApply, onClose }: Props) {
               </label>
             )}
             <p className="calc-note">{zh.dialog.calcHint}</p>
+            {value?.iccGray && <p className="calc-note">{zh.dialog.calcIccGray}</p>}
             {!value && <p className="calc-error">{zh.dialog.calcInvalid}</p>}
           </div>
         </div>

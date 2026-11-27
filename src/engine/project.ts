@@ -86,6 +86,8 @@ interface ProjectFile {
   dpi?: number;
   /** 通道位深标记（v6 起）：16/32bit 标记如实携带（32 目前仍为标记，无原生管线）；旧工程无此字段按 8 */
   bitsPerChannel?: 8 | 16 | 32;
+  /** RAW 源与线性显影参数（v6 起）；旧工程没有时按普通图处理 */
+  rawDevelop?: import("../core/rawDevelopParams").RawDevelopState;
   /** 选中图层下标 */
   active: number;
   layers: FileLayer[];
@@ -257,6 +259,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     height: doc.height,
     dpi: doc.dpi,
     bitsPerChannel: doc.bitsPerChannel === 16 ? 16 : doc.bitsPerChannel === 32 ? 32 : undefined,
+    rawDevelop: doc.rawDevelop,
     active,
     layers,
   };
@@ -362,6 +365,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
     alphaChannels,
     dpi: file.dpi,
     bitsPerChannel: file.bitsPerChannel ?? 8,
+    rawDevelop: file.rawDevelop,
     dirty: false,
   };
 }

@@ -40,6 +40,7 @@ import {
   type RenderingIntent,
 } from "../engine/cms";
 import { flattenImageBestEffort } from "../engine/gpuBridge";
+import { scheduleGpuDisplay } from "../engine/gpuDisplay";
 import {
   zoomSteps,
   startZoom,
@@ -94,6 +95,7 @@ import {
   deleteSelection,
   duplicateLayer,
   fillSelection,
+  fillStrokeOpacity,
   flattenImage,
   grayscaleDocument,
   groupLayers,
@@ -452,6 +454,15 @@ import RightDock, {
 import OptionsBar from "./components/OptionsBar";
 import BrushSettingsPanel from "./components/BrushSettingsPanel";
 import Preferences, { type PrefPage } from "./components/Preferences";
+import { parseManifest, type ParsedPlugin } from "../core/pluginHost";
+import {
+  pluginPermissionLabel,
+  registerPlugin,
+  unregisterPlugin,
+  type LoadedPlugin,
+} from "../core/pluginRegistry";
+import { runPluginAction } from "../core/pluginRunner";
+import { buildPluginMenuGroup } from "./pluginMenu";
 import StatusBar from "./components/StatusBar";
 import ToolFlyout from "./components/ToolFlyout";
 import ToolRail from "./components/ToolRail";
@@ -683,8 +694,9 @@ export default function EditorShell({
   }));
   /** 修饰工具参数（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵共用一套） */
   const [retouch, setRetouch] = useState<RetouchSettings>(DEFAULT_RETOUCH);
-  /** 涂抹力度：和画笔参数分开记，画笔预设换了也不改用户的推挤手感。 */
+  /** 涂抹力度 / 角度：和画笔参数分开记，画笔预设换了也不改用户的推挤手感。 */
   const [smudgeStrength, setSmudgeStrength] = useState(60);
+  const [smudgeAngle, setSmudgeAngle] = useState(0);
   /** 调整画笔：调整类型 / Add-Subtract / 蒙版叠加染色 */
   const [adjustBrush, setAdjustBrush] = useState<AdjustBrushSettings>(DEFAULT_ADJUST_BRUSH);
   /** 形状工具参数（填充 / 描边 / 线宽），矩形 / 椭圆 / 直线共用一套 */
@@ -844,6 +856,8 @@ export default function EditorShell({
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   /** 新建参考线对话框；pos 以字符串保存，方便输入中间态 */
   const [guideDialog, setGuideDialog] = useState<{ axis: "x" | "y"; pos: string } | null>(null);
+  /** 填充对话框：颜色 / 不透明度，数字字段用字符串保存输入中间态 */
+  const [fillDialog, setFillDialog] = useState<{ color: string; opacity: string } | null>(null);
   /** 描边对话框：宽度 / 颜色 / 位置 / 不透明度，数字字段用字符串保存输入中间态 */
   const [strokeDialog, setStrokeDialog] = useState<{
     width: string;
@@ -871,6 +885,12 @@ export default function EditorShell({
   /** 直方图 / 导航器的帧号：合成每前进一次（节流 250ms）就 +1 */
   const [panelTick, setPanelTick] = useState(0);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  /** 增效工具只在会话内存在；权限确认后才注册，关掉软件即失效。 */
+  const [plugins, setPlugins] = useState<LoadedPlugin[]>([]);
+  const [pendingPlugin, setPendingPlugin] = useState<{
+    path: string;
+    parsed: ParsedPlugin;
+  } | null>(null);
   /** 偏好设置当前停在哪一页（Edit > Preferences 的各条目直接指过来） */
   const [prefsPage, setPrefsPage] = useState<PrefPage>("general");
   /** 编辑 > 渐隐：输入保留百分比 */
@@ -1525,6 +1545,13 @@ export default function EditorShell({
 
   /** 这一帧开始的时刻：状态栏的慢帧读数要用。 */
   const frameStartRef = useRef(0);
+  /** GPU 显示复算的代次；过期结果一律丢弃，不能覆盖更新的画面。 */
+  const gpuGenerationRef = useRef(0);
+  /** GPU 任务结束后补排一帧：让被 busy 跳过的最后一次修改也能吃到 GPU 结果。 */
+  const gpuSettleRef = useRef<(() => void) | null>(null);
+  /** 异步命令提交时锁定文档对象引用，避免 await 期间编辑被旧快照整体覆盖。 */
+  const latestDocRef = useRef(doc);
+  latestDocRef.current = doc;
 
   const render = useCallback(() => {
     frameStartRef.current = performance.now();
@@ -1727,10 +1754,26 @@ export default function EditorShell({
       }
     }
 
-    // 没有进行中的编辑：直接走与导出完全相同的合成路径（含蒙版与调整图层）。
+    // 没有进行中的编辑：CPU 先走与导出完全相同的合成路径（含蒙版与调整图层），
+    // 保证画面立刻可见；随后才在后台尝试 GPU 复算，更快才替换这一帧。
     if (!act || (!stroke && !rt && !smudge && !offset)) {
+      const cpuStart = performance.now();
       composeForDisplay(docNow, comp, dispScale);
+      const cpuMs = performance.now() - cpuStart;
       present();
+      const generation = ++gpuGenerationRef.current;
+      scheduleGpuDisplay({
+        doc: docNow,
+        viewScale: dispScale,
+        target: comp,
+        generation,
+        cpuMs,
+        onApplied: () => present(),
+        onSettled: () => {
+          // 只有「任务在飞时又来了新帧」才补排；静止画面不能自己无限排队。
+          if (gpuGenerationRef.current !== generation) gpuSettleRef.current?.();
+        },
+      });
       return;
     }
 
@@ -1948,6 +1991,7 @@ export default function EditorShell({
     // 依赖留空：内部一律走 renderRef，否则 doc 一变这里就重建，
     // 连带 previewDoc / 各面板的 onPreview 一起换引用，白白多一轮重渲染
   }, []);
+  gpuSettleRef.current = scheduleRender;
 
   /**
    * 拖动预览：只排一次重绘，**不碰 React 状态**。
@@ -3403,6 +3447,8 @@ export default function EditorShell({
           hardness: brush.hardness,
           flow: brush.flow,
           strength: smudgeStrength,
+          angle: smudgeAngle,
+          roundness: brush.roundness,
           radial: radialConfigFrom(brush, { x: docW / 2, y: docH / 2 }),
         }, paintingMask(doc, act));
         s.begin(p.x, p.y, pressureFrom(e, brush.penPressure !== false));
@@ -3524,6 +3570,7 @@ export default function EditorShell({
       scheduleRender,
       sampleAllLayers,
       smudgeStrength,
+      smudgeAngle,
       paintingMask,
       snapPerspective,
       emitRecord,
@@ -4480,6 +4527,65 @@ export default function EditorShell({
       }
     },
     [doc, docW, docH],
+  );
+
+  /** 选择清单文件 → 解析校验 → 弹权限确认；确认前绝不注册菜单。 */
+  const loadPluginManifest = useCallback(async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: String(zh.plugin.fileFilter), extensions: ["json"] }],
+      });
+      if (typeof picked !== "string") return;
+      const bytes = await invoke<number[]>("read_file_bytes", { path: picked });
+      const text = new TextDecoder().decode(new Uint8Array(bytes));
+      const parsed = parseManifest(JSON.parse(text) as unknown);
+      setPendingPlugin({ path: picked, parsed });
+    } catch (e) {
+      setError(`${String(zh.plugin.loadFailed)}：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
+  const confirmPendingPlugin = useCallback(() => {
+    if (!pendingPlugin) return;
+    try {
+      setPlugins((prev) => registerPlugin(prev, pendingPlugin));
+      setToast(String(zh.plugin.loaded).replace("{name}", pendingPlugin.parsed.manifest.name));
+    } catch (e) {
+      setError(`${String(zh.plugin.loadFailed)}：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPendingPlugin(null);
+    }
+  }, [pendingPlugin]);
+
+  const unloadPluginById = useCallback(
+    (id: string) => {
+      const found = plugins.find((p) => p.parsed.manifest.id === id);
+      setPlugins((prev) => unregisterPlugin(prev, id));
+      if (found) {
+        setToast(String(zh.plugin.unloaded).replace("{name}", found.parsed.manifest.name));
+      }
+    },
+    [plugins],
+  );
+
+  /** 插件菜单点击：每次执行都重新查权限，动作本身走白名单分派器。 */
+  const runPluginMenuAction = useCallback(
+    async (plugin: LoadedPlugin, action: Parameters<typeof runPluginAction>[1], label: string) => {
+      try {
+        const result = await runPluginAction(doc, action, plugin.parsed.manifest.permissions, {
+          onExportPng: () => doExport("png", 100),
+        });
+        if (result.doc) {
+          onCommit(result.doc, `${label} · ${result.message}`);
+        } else {
+          setToast(`${label} · ${result.message}`);
+        }
+      } catch (e) {
+        setError(`${String(zh.plugin.failed)}：${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [doc, doExport, onCommit],
   );
 
   /** 把当前处理好的画布交给 Groma：全分辨率干净合成 → PNG → 启动对方导入。 */
@@ -6066,13 +6172,14 @@ export default function EditorShell({
       setError(zh.dialog.strokeInvalid);
       return;
     }
-    const opacity = Math.max(0, Math.min(100, Number(strokeDialog.opacity) || 0));
+    const parsed = fillStrokeOpacity(strokeDialog.opacity);
     const next = strokeSelection(doc, {
       color: strokeDialog.color,
       width,
       position: strokeDialog.position,
-      opacity,
+      opacity: parsed.value,
     });
+    if (parsed.clamped) setError(zh.dialog.fillOpacityClamped.replace("{n}", String(parsed.value)));
     if (next === doc) {
       setError(zh.selection.noPixelLayer);
       return;
@@ -6091,8 +6198,10 @@ export default function EditorShell({
 
   /** 在选区内填色；没有像素图层时只提示、不改文档。 */
   const doFill = useCallback(
-    (color: string) => {
-      const next = fillSelection(doc, color);
+    (color: string, rawOpacity: number | string = 100) => {
+      const parsed = fillStrokeOpacity(rawOpacity);
+      if (parsed.clamped) setError(zh.dialog.fillOpacityClamped.replace("{n}", String(parsed.value)));
+      const next = fillSelection(doc, color, parsed.value);
       if (next === doc) {
         setError(zh.selection.noPixelLayer);
         return;
@@ -6101,6 +6210,13 @@ export default function EditorShell({
     },
     [doc, onCommit],
   );
+
+  /** 编辑 > 填充：确认对话框后落库；快捷键仍按 PS 习惯直接用前景 / 背景色满不透明填充。 */
+  const submitFill = useCallback(() => {
+    if (!fillDialog) return;
+    doFill(fillDialog.color, fillDialog.opacity);
+    setFillDialog(null);
+  }, [doFill, fillDialog]);
 
   /**
    * 删除像素：有选区删选区，没选区清整层（对齐 PS —— 空选区时 Ctrl+X / Delete
@@ -8803,7 +8919,9 @@ export default function EditorShell({
             hint: hasSelection ? "Delete" : "Delete · 无选区时清整层",
           };
         case "edit.fill":
-          return { run: () => doFill(fg) };
+          return {
+            run: () => setFillDialog({ color: fg, opacity: "100" }),
+          };
         case "edit.stroke":
           // 描边宽度默认给 3px；选项条上的羽化值若已设，顺手沿用
           if (!hasSelection) return { hint: "需要先建立选区" };
@@ -9216,6 +9334,8 @@ export default function EditorShell({
             run: () => {
               // 纯像素层文档优先走 WebGPU 拼合，其余情况静默回退 Canvas2D
               void flattenImageBestEffort(doc).then(({ doc: next, gpu }) => {
+                // 用户可能在 GPU 计算期间继续编辑；旧快照绝对不能整体覆盖新文档。
+                if (latestDocRef.current !== doc) return;
                 onCommit(next, zh.menu.flatten);
                 if (gpu) setToast(zh.editor.gpuFlattenDone);
               });
@@ -10005,6 +10125,18 @@ export default function EditorShell({
       { kind: "item", label: zh.menu.about, onSelect: () => setModal("about") },
     ]);
 
+    /* 增效工具：菜单完全来自会话内清单，绝不改 656 条生成目录。 */
+    groups.push(
+      buildPluginMenuGroup(plugins, {
+        onLoad: () => void loadPluginManifest(),
+        onManage: () => {
+          setPrefsPage("plugIns");
+          setPrefsOpen(true);
+        },
+        onRun: (plugin, action, label) => void runPluginMenuAction(plugin, action, label),
+      }),
+    );
+
     return groups;
   }, [
 
@@ -10057,6 +10189,9 @@ export default function EditorShell({
     openFileAt,
     openImage,
     pickWorkspace,
+    loadPluginManifest,
+    plugins,
+    runPluginMenuAction,
     recentItems,
     reelixState,
     saveProject,
@@ -10679,6 +10814,8 @@ export default function EditorShell({
             onRetouch={(patch) => setRetouch((r) => ({ ...r, ...patch }))}
             smudgeStrength={smudgeStrength}
             onSmudgeStrength={setSmudgeStrength}
+            smudgeAngle={smudgeAngle}
+            onSmudgeAngle={setSmudgeAngle}
             adjustBrush={adjustBrush}
             onAdjustBrush={(patch) =>
               setAdjustBrush((a) => ({ ...a, ...patch }))
@@ -12687,6 +12824,59 @@ export default function EditorShell({
           ))}
         </Modal>
       )}
+      {/* 编辑 > 填充：颜色 / 不透明度（1–100，0 由内核钳到 1 并告警） */}
+      {fillDialog && (
+        <Modal
+          title={zh.dialog.fillTitle}
+          onClose={() => setFillDialog(null)}
+          width={380}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setFillDialog(null)}
+              >
+                {zh.dialog.cancel}
+              </button>
+              <button type="button" className="btn-primary btn-sm" onClick={submitFill}>
+                {zh.dialog.confirm}
+              </button>
+            </>
+          }
+        >
+          <p className="isz-hint">{zh.dialog.fillHint}</p>
+          <div className="field-row">
+            <div className="field">
+              <span className="field-label">{zh.dialog.fillColor}</span>
+              <span className="field-input">
+                <ColorChip
+                  hex={fillDialog.color}
+                  label={zh.dialog.fillColor}
+                  onChange={(color) => setFillDialog((v) => (v ? { ...v, color } : v))}
+                />
+              </span>
+            </div>
+            <label className="field">
+              <span className="field-label">{zh.dialog.fillOpacity}</span>
+              <span className="field-input">
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={fillDialog.opacity}
+                  onChange={(e) => {
+                    const opacity = e.target.value;
+                    setFillDialog((v) => (v ? { ...v, opacity } : v));
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && submitFill()}
+                />
+                <span className="field-unit">%</span>
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
       {/* 编辑 > 描边：宽度 / 颜色 / 位置 / 不透明度 */}
       {strokeDialog && (
         <Modal
@@ -12733,7 +12923,7 @@ export default function EditorShell({
               <span className="field-input">
                 <input
                   type="number"
-                  min={0}
+                  min={1}
                   max={100}
                   value={strokeDialog.opacity}
                   onChange={(e) => {
@@ -13161,7 +13351,45 @@ export default function EditorShell({
             clearStoredRecent();
             setToast("已清空最近文件");
           }}
+          plugins={plugins}
+          onLoadPlugin={() => void loadPluginManifest()}
+          onUnloadPlugin={unloadPluginById}
         />
+      )}
+      {pendingPlugin && (
+        <Modal
+          title={String(zh.plugin.confirmTitle)}
+          width={520}
+          onClose={() => setPendingPlugin(null)}
+          footer={
+            <>
+              <button className="btn-ghost btn-sm" onClick={() => setPendingPlugin(null)}>
+                {zh.plugin.cancel}
+              </button>
+              <button className="btn-primary btn-sm" onClick={confirmPendingPlugin}>
+                {zh.plugin.allow}
+              </button>
+            </>
+          }
+        >
+          <p>
+            {String(zh.plugin.confirmHint)
+              .replace("{name}", pendingPlugin.parsed.manifest.name)
+              .replace("{id}", pendingPlugin.parsed.manifest.id)}
+          </p>
+          <h4>{zh.plugin.permissions}</h4>
+          <ul>
+            {pendingPlugin.parsed.manifest.permissions.map((perm) => (
+              <li key={perm}>{pluginPermissionLabel(perm)}</li>
+            ))}
+          </ul>
+          <h4>{zh.plugin.menus}</h4>
+          <ul>
+            {pendingPlugin.parsed.actions.map((entry) => (
+              <li key={entry.key}>{entry.label}</li>
+            ))}
+          </ul>
+        </Modal>
       )}
       {error && <div className="editor-errorbar">{error}</div>}
       {toast && <div className="toast">{toast}</div>}

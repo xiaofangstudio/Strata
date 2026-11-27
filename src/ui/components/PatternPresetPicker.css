@@ -1,0 +1,138 @@
+/* 图案叠加预设选择器：独占 .pp- 前缀，别碰通用 .ly-* 按钮 */
+
+.pp-root {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pp-trigger:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.pp-trigger-thumb {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  image-rendering: pixelated;
+}
+
+.pp-trigger-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.pp-caret {
+  flex: 0 0 auto;
+  color: var(--text-3);
+}
+
+.pp-menu {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.pp-menu-head {
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.pp-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pp-group + .pp-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pp-group-title {
+  margin-bottom: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.pp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pp-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 4px 2px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.pp-swatch:hover {
+  background: var(--hover);
+}
+
+.pp-swatch.is-on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.pp-swatch canvas {
+  width: var(--pp-swatch-size, 30px);
+  height: var(--pp-swatch-size, 30px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  image-rendering: pixelated;
+}
+
+.pp-swatch-label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-empty {
+  padding: 8px 4px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}

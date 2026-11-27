@@ -13,6 +13,8 @@ import {
   applyAdjustToLayer,
   canShiftLayer,
   duplicateLayer,
+  fillSelection,
+  fillStrokeOpacity,
   groupChildren,
   groupLayers,
   mergeDown,
@@ -499,5 +501,31 @@ describe("图层组（M3）", () => {
     const doc = addLayer(groupLayers(threeLayers(), "组 A"), "X"); // [背景, L2, L3, X, 组 A]
     const next = removeLayer(selectLayer(doc, doc.layers[4].id));
     expect(names(next)).toEqual(["背景", "L2"]);
+  });
+});
+
+describe("填充 / 描边不透明度与透明锁定", () => {
+  it("数值字段钳到 1–100，0 与非法值都给出告警标记", () => {
+    expect(fillStrokeOpacity(0)).toEqual({ value: 1, clamped: true });
+    expect(fillStrokeOpacity(-40)).toEqual({ value: 1, clamped: true });
+    expect(fillStrokeOpacity("0")).toEqual({ value: 1, clamped: true });
+    expect(fillStrokeOpacity(120)).toEqual({ value: 100, clamped: true });
+    expect(fillStrokeOpacity("nope")).toEqual({ value: 100, clamped: true });
+    expect(fillStrokeOpacity(63)).toEqual({ value: 63, clamped: false });
+    expect(fillStrokeOpacity("63")).toEqual({ value: 63, clamped: false });
+  });
+
+  it("普通填充走整层矩形；Alpha Lock 开启时改走遮罩贴回", () => {
+    const doc = blank();
+    const plain = fillSelection(doc, "#ff0000", 50);
+    expect(plain).not.toBe(doc);
+    // cloneSurface 自己会 drawImage 一次；普通填充不再额外贴遮罩
+    expect(drawCalls(surfaceOf(plain, 0))).toHaveLength(1);
+    expect(surfaceOf(plain, 0).__ctx?.calls).toContain("fillRect");
+
+    const lockedDoc = updateLayer(doc, doc.layers[0].id, { alphaLock: true });
+    const locked = fillSelection(lockedDoc, "#00ff00", 50);
+    expect(locked).not.toBe(lockedDoc);
+    expect(drawCalls(surfaceOf(locked, 0)).length).toBeGreaterThan(1);
   });
 });

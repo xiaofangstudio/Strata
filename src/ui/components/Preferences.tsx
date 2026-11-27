@@ -22,6 +22,7 @@ import ToolIcon from "./ToolIcon";
 import "./Preferences.css";
 import RangeInput from "./RangeInput";
 import { open } from "@tauri-apps/plugin-dialog";
+import { pluginPermissionLabel, type LoadedPlugin } from "../../core/pluginRegistry";
 
 export type PrefPage =
   | "general"
@@ -58,6 +59,10 @@ interface Props {
   onResetLayout?: () => void;
   /** 文件处理页：清掉最近文件列表 */
   onClearRecent?: () => void;
+  /** 增效工具页：只展示会话内已确认权限的插件 */
+  plugins: readonly LoadedPlugin[];
+  onLoadPlugin: () => void;
+  onUnloadPlugin: (id: string) => void;
 }
 
 /**
@@ -178,6 +183,9 @@ export default function Preferences({
   onBrush,
   onResetLayout,
   onClearRecent,
+  plugins,
+  onLoadPlugin,
+  onUnloadPlugin,
 }: Props) {
   const prefs = usePrefs();
   const lang = useLang();
@@ -732,12 +740,49 @@ export default function Preferences({
 
           {tab === "plugIns" && (
             <section className="pref-sec">
-              <h3 className="pref-h">增效工具</h3>
-              <p className="pref-note">
-                当前构建不加载第三方 Photoshop 插件（8BF / 插件目录）。滤镜与自动化能力都内建在
-                Strata 里：滤镜走「滤镜」菜单，批量与外部调用走仓库里的 MCP 服务器。
-              </p>
-              <p className="pref-note">这里如实显示状态，不做假的「启用插件」开关。</p>
+              <h3 className="pref-h">{zh.plugin.title}</h3>
+              <p className="pref-note">{zh.plugin.note}</p>
+              <div className="pref-row">
+                <button type="button" className="btn-ghost btn-sm" onClick={onLoadPlugin}>
+                  {zh.plugin.load}
+                </button>
+              </div>
+
+              {plugins.length === 0 ? (
+                <p className="pref-note">{zh.plugin.empty}</p>
+              ) : (
+                <div className="pref-plugin-list">
+                  {plugins.map((item) => {
+                    const m = item.parsed.manifest;
+                    return (
+                      <div className="pref-plugin-card" key={m.id}>
+                        <div className="pref-plugin-head">
+                          <strong>{m.name}</strong>
+                          <span className="pref-plugin-meta">
+                            {m.pluginVersion} · {m.author}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm"
+                            onClick={() => onUnloadPlugin(m.id)}
+                          >
+                            {zh.plugin.unload}
+                          </button>
+                        </div>
+                        <div className="pref-plugin-meta">{m.id}</div>
+                        <div className="pref-plugin-line">
+                          <span>{zh.plugin.permissions}</span>
+                          <span>{m.permissions.map(pluginPermissionLabel).join(" · ")}</span>
+                        </div>
+                        <div className="pref-plugin-line">
+                          <span>{zh.plugin.menus}</span>
+                          <span>{item.parsed.actions.map((a) => a.label).join(" · ")}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           )}
 

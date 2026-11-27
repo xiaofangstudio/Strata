@@ -8,7 +8,7 @@
  * 图片走位图解码，.strata 工程走工程解码；顺带把缩略图造好，
  * 交给调用方写进最近文件记录；打开位图时还会读嵌入 ICC 标到 doc.profile。
  */
-import { fileStat, loadImage, makeThumbnail, readFileBytes } from "./image";
+import { fileStat, loadImage, makeThumbnail, readFileBytes, takeRawMeta } from "./image";
 import { composeDoc } from "./compositor";
 import { createSurface } from "./surface";
 import { decodeProject, isStrataPath } from "./project";
@@ -16,6 +16,7 @@ import { readEmbeddedProfileId } from "./cms";
 import { baseName, docFromBitmap, type StrataDoc } from "../core/document";
 import { sourceBitDepth } from "../core/bitDepth";
 import { extOf } from "./image";
+import { defaultRawUiParams, uiToRawDevelop } from "../core/rawDevelopParams";
 
 export interface OpenedFile {
   doc: StrataDoc;
@@ -57,6 +58,18 @@ export async function openFileToDoc(path: string): Promise<OpenedFile> {
   const bitmap = await loadImage(path);
   const thumb = await makeThumbnail(bitmap);
   const doc = docFromBitmap(bitmap, baseName(path), path);
+  // RAW 的可重复显影状态跟着文档走：真正从传感器显影过的图保留源路径、
+  // 元数据与中性参数，Camera Raw 工作窗以后直接回炉线性链，不再二次压 8bit。
+  const rawMeta = takeRawMeta(path);
+  if (rawMeta?.source === "sensor") {
+    doc.rawDevelop = {
+      path,
+      meta: rawMeta,
+      params: uiToRawDevelop(defaultRawUiParams(), rawMeta),
+      ui: defaultRawUiParams(),
+    };
+    doc.bitsPerChannel = 16;
+  }
   // 位深探测：16bit TIFF / PNG 的源要如实标到文档上（bitsPerChannel = 16），
   // 显示像素是舍入后的 8bit，但来源位深不再静默丢失 —— 导出对话框据此默认
   // 走 TIFF 16bit，用户想保住精度有路可走。探测失败按 8，不猜。

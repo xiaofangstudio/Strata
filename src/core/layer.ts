@@ -1405,6 +1405,8 @@ export interface LayerStyle {
   blend: BlendId;
   /** 描边位置下标，见 STROKE_POSITIONS */
   position: number;
+  /** 图案叠加使用的预设 id（builtin:xxx）或用户图案 id */
+  patternId?: string;
 }
 
 export function styleDef(id: StyleId): StyleDef {
@@ -1425,6 +1427,7 @@ export function newLayerStyle(id: StyleId): LayerStyle {
     spread: 0,
     blend: d.blend0,
     position: 0,
+    ...(id === "patternoverlay" ? { patternId: "builtin:checker" } : {}),
   };
 }
 
