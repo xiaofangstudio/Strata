@@ -1,13 +1,17 @@
 /**
- * 导出编码：PNG / JPEG / WebP。
+ * 导出编码：PNG / JPEG / WebP / TIFF 16bit。
  *
  * 之前只写了 PNG（无损、体积大）。这里补上两种有损格式 —— 但有个坑必须处理：
  * **JPEG 没有 alpha 通道**，直接把带透明的画布交给它，透明区会变成黑色。
  * 所以 JPEG 一律先铺一层白底再编码（与 PS 的「拼合后存 JPG」一致）。
+ *
+ * tiff16 是「写 16bit 真通路」：16bit 源打开的文档（doc.depth = 16）
+ * 默认选它，位深不在导出环节悄悄掉回 8。编码与解码同在 engine/tiff.ts，可互验。
  */
 import { encodePng } from "./image";
+import { encodeTiff16 } from "./tiff";
 
-export type ExportFormat = "png" | "jpeg" | "webp";
+export type ExportFormat = "png" | "jpeg" | "webp" | "tiff16";
 
 export interface ExportFormatSpec {
   id: ExportFormat;
@@ -24,6 +28,7 @@ export const EXPORT_FORMATS: readonly ExportFormatSpec[] = [
   { id: "png", label: "PNG", ext: "png", mime: "image/png", lossy: false, note: "无损 · 保留透明" },
   { id: "jpeg", label: "JPEG", ext: "jpg", mime: "image/jpeg", lossy: true, note: "有损 · 体积小 · 白底" },
   { id: "webp", label: "WebP", ext: "webp", mime: "image/webp", lossy: true, note: "有损 · 体积更小 · 保留透明" },
+  { id: "tiff16", label: "TIFF 16bit", ext: "tif", mime: "image/tiff", lossy: false, note: "无损 · 16bit/通道 · 保留透明" },
 ];
 
 export function formatSpec(id: ExportFormat): ExportFormatSpec {
@@ -54,6 +59,7 @@ export async function encodeCanvas(
   quality = 92,
 ): Promise<Uint8Array> {
   if (format === "png") return encodePng(canvas);
+  if (format === "tiff16") return encodeTiff16(canvas);
 
   const src = format === "jpeg" ? flattenOnWhite(canvas) : canvas;
   const q = Math.min(100, Math.max(1, quality)) / 100;

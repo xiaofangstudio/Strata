@@ -24,6 +24,8 @@ import {
   readPsd,
   writePsd,
   type Layer as PsdLayer,
+  type LinkedFile,
+  type PlacedLayer,
   type Psd,
   type LayerTextData,
   type TextStyle,
@@ -715,6 +717,7 @@ export function readNode(
   height: number,
   parent: string | null,
   out: StrataLayer[],
+  linked?: Map<string, LinkedFile>,
 ): void {
   const common = (l: StrataLayer): void => {
     l.parent = parent;
@@ -764,6 +767,14 @@ export function readNode(
   drawCanvas(layer);
   common(layer);
   if (node.text) layer.text = textFromPsd(node.text);
+  if (node.placedLayer) {
+    // 智能对象（SoLd/PlLd）：smart 给 UI 全兼容的像素快照；smartRaw 保留
+    // lnk2 原始嵌入字节，写回 PSD 时按 id 关联回写，往返不丢智能对象性。
+    layer.smart = layer.surface.toDataURL("image/png");
+    const file = linked?.get(node.placedLayer.id);
+    const raw = file ? linkedToSmart(file) : null;
+    if (raw) layer.smartRaw = raw.smartRaw;
+  }
   out.push(layer);
 }
 
@@ -784,8 +795,12 @@ export function decodePsdToDoc(
   const width = psd.width;
   const height = psd.height;
   const layers: StrataLayer[] = [];
+  // lnk2/lnkD 的原始嵌入字节按 id 建索引，readNode 里与 placedLayer 关联。
+  const linked = new Map(
+    (psd.linkedFiles ?? []).filter((f) => !!f.id).map((f) => [f.id as string, f]),
+  );
   for (const node of [...(psd.children ?? [])].reverse()) {
-    readNode(node, width, height, null, layers);
+    readNode(node, width, height, null, layers, linked);
   }
   // 一个图层都没有（整张平铺的 PSD）：退回合成图像
   if (layers.length === 0 && psd.canvas) {
@@ -804,6 +819,115 @@ export function decodePsdToDoc(
     sourcePath,
     dirty: false,
   };
+}
+
+/* ------------------------------------------------------ 智能对象（SoLd/lnk2） */
+
+/**
+ * 智能对象的 PSD 真往返。
+ *
+ * 以前 Strata 打开含智能对象的 PSD：层退化成普通像素层，SoLd / PlLd 信息与
+ * lnk2 原始嵌入字节全部丢弃，复杂商业稿「开 → 存 → 再开」就丢了智能对象性。
+ * ag-psd 把 SoLd 解析到 `layer.placedLayer`、lnk2/lnkD 解析到 `psd.linkedFiles`
+ * （data 字段就是嵌入文件的原始字节），读侧按 id 关联，写侧如实回写两个块。
+ *
+ * Strata 层的字段分工：
+ *  · `smart` —— 原始像素快照（PNG data URL），供既有 UI（栅格化判定、编辑原始内容）使用；
+ *  · `smartRaw` —— 嵌入文件原始字节（data URL，mime 标明格式），PSD 往返保真靠它。
+ */
+
+/** mime → lnk2 的类型码；未知 mime 按 imgx（Photoshop 嵌入子文档）。 */
+function linkedTypeOfMime(mime: string): string {
+  if (mime === "image/png") return "png";
+  if (mime === "image/jpeg") return "jpeg";
+  if (mime === "image/webp") return "webp";
+  if (mime === "image/tiff") return "tif";
+  return "imgx";
+}
+
+function mimeOfLinkedType(type: string | undefined): string {
+  switch (type) {
+    case "png":
+      return "image/png";
+    case "jpeg":
+    case "jpg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    case "tif":
+    case "tiff":
+      return "image/tiff";
+    default:
+      return "application/x-photoshop";
+  }
+}
+
+function u8ToBase64(data: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < data.length; i += CHUNK) {
+    bin += String.fromCharCode(...data.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function base64ToU8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** ag-psd 写 SoLd 时强制 GUID 格式的 id；.randomUUID 不可用时拼一个合法形状。 */
+function newGuid(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    const hex = (n: number) =>
+      Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+    return `${hex(8)}-${hex(4)}-4${hex(3)}-8${hex(3)}-${hex(12)}`;
+  }
+}
+
+/**
+ * 层的智能对象数据 → PSD 写出件（placedLayer + linkedFile）。
+ * smartRaw 优先（真原始字节）；只有 smart 时把 PNG 快照作为嵌入文件写出，
+ * 这样 Strata 自己「转为智能对象」的层存 PSD 后 Photoshop 也认。
+ */
+export function smartToLinked(
+  l: { name?: string; smart?: string; smartRaw?: string },
+  w: number,
+  h: number,
+  guid: string,
+): { placedLayer: PlacedLayer; linkedFile: LinkedFile } | null {
+  const source = l.smartRaw
+    ? { b64: l.smartRaw.split(",")[1] ?? "", mime: l.smartRaw.match(/^data:([^;,]+);/)?.[1] ?? "" }
+    : l.smart
+      ? { b64: l.smart.split(",")[1] ?? "", mime: "image/png" }
+      : null;
+  if (!source || !source.b64) return null;
+  const type = linkedTypeOfMime(source.mime);
+  return {
+    placedLayer: {
+      id: guid,
+      type: "raster",
+      transform: [1, 0, 0, 1, 0, 0],
+      width: w,
+      height: h,
+    },
+    linkedFile: {
+      id: guid,
+      name: `${l.name || "智能对象"}.${type === "imgx" ? "psd" : type}`,
+      type,
+      data: base64ToU8(source.b64),
+    },
+  };
+}
+
+/** PSD 的 linkedFile → 层的 smartRaw（原始字节 data URL）。空数据返回 null。 */
+export function linkedToSmart(file: Pick<LinkedFile, "data" | "type">): { smartRaw: string } | null {
+  if (!file.data || file.data.length === 0) return null;
+  return { smartRaw: `data:${mimeOfLinkedType(file.type)};base64,${u8ToBase64(file.data)}` };
 }
 
 /* ---------------------------------------------------------------- 写 */
@@ -836,6 +960,7 @@ export function nodeToPsd(
   w: number,
   h: number,
   warnings: string[],
+  linkedOut: LinkedFile[] = [],
 ): PsdLayer {
   const l = node.layer;
   const base = commonPsdFields(l, w, h);
@@ -843,7 +968,7 @@ export function nodeToPsd(
     return {
       ...base,
       opened: openedOf(l),
-      children: [...node.children].reverse().map((c) => nodeToPsd(c, w, h, warnings)),
+      children: [...node.children].reverse().map((c) => nodeToPsd(c, w, h, warnings, linkedOut)),
     };
   }
   if (l.kind === "adjust") {
@@ -863,6 +988,12 @@ export function nodeToPsd(
   }
   const pixel: PsdLayer = { ...base, canvas: l.surface };
   if (l.text) pixel.text = textToPsd(l.text);
+  // 智能对象（smart/smartRaw）：写回 SoLd + lnk2，Photoshop 与 Strata 都能再认出它。
+  const linked = smartToLinked(l, w, h, newGuid());
+  if (linked) {
+    pixel.placedLayer = linked.placedLayer;
+    linkedOut.push(linked.linkedFile);
+  }
   return pixel;
 }
 
@@ -874,7 +1005,8 @@ export async function encodeDocToPsd(doc: StrataDoc): Promise<PsdEncodeResult> {
   const warnings: string[] = [];
   const forest = buildPsdForest(doc.layers);
   // 森林自下而上 → PSD children 自上而下
-  const children = [...forest].reverse().map((n) => nodeToPsd(n, doc.width, doc.height, warnings));
+  const linkedOut: LinkedFile[] = [];
+  const children = [...forest].reverse().map((n) => nodeToPsd(n, doc.width, doc.height, warnings, linkedOut));
   if (children.length === 0) {
     // 空像素栈：把合成结果烤成单层再写（compositor 延迟引入，避免循环依赖）
     const { composeDoc } = await import("./compositor");
@@ -900,6 +1032,8 @@ export async function encodeDocToPsd(doc: StrataDoc): Promise<PsdEncodeResult> {
     colorMode: 3, // RGB
     children,
   };
+  // 智能对象的嵌入字节（lnk2）：与 placedLayer 的 id 一一对应。
+  if (linkedOut.length > 0) psd.linkedFiles = linkedOut;
   let buffer: ReturnType<typeof writePsd>;
   try {
     buffer = writePsd(psd);
@@ -921,10 +1055,22 @@ export async function encodeDocToPsd(doc: StrataDoc): Promise<PsdEncodeResult> {
           n.canvas = createSurface(doc.width, doc.height);
           delete n.adjustment;
         }
+        // 智能对象写回失败时降级为像素层：警告 + 摘掉 placedLayer，
+        // linkedFiles 里孤儿条目在重试前一并清掉。
+        if (n.placedLayer) {
+          const label = n.name || "智能对象";
+          warnings.push(
+            warnLine(label, "智能对象资源被 ag-psd 拒绝，已降级为普通像素层（原始数据仍在 .strata 工程里）"),
+          );
+          delete n.placedLayer;
+        }
         if (n.children) strip(n.children);
       }
     };
     strip(children);
+    if (linkedOut.length > 0 && !children.some((c) => c.placedLayer)) {
+      delete psd.linkedFiles;
+    }
     buffer = writePsd(psd);
   }
   return { bytes: new Uint8Array(buffer), warnings };

@@ -1661,14 +1661,14 @@ export function convertToSmartObject(doc: StrataDoc): StrataDoc {
   });
 }
 
-/** 栅格化智能对象：丢弃原始数据，保留当前像素。 */
+/** 栅格化智能对象：丢弃原始数据（含 PSD 嵌入字节），保留当前像素。 */
 export function rasterizeSmartObject(doc: StrataDoc): StrataDoc {
   const cur = activeLayer(doc);
-  if (!cur || !cur.smart) return doc;
+  if (!cur || (!cur.smart && !cur.smartRaw)) return doc;
   return {
     ...doc,
     layers: doc.layers.map((l) =>
-      l.id === cur.id ? { ...l, smart: undefined } : l,
+      l.id === cur.id ? { ...l, smart: undefined, smartRaw: undefined } : l,
     ),
     dirty: true,
   };

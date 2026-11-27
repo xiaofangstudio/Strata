@@ -17,6 +17,10 @@ interface Props {
   /** 文档尺寸，显示在摘要里 */
   width: number;
   height: number;
+  /** 默认选中的格式：16bit 源文档默认走 TIFF 16bit，位深不在导出环节悄悄掉回 8 */
+  defaultFormat?: ExportFormat;
+  /** 文档标记的源位深（bitsPerChannel），用于提示 */
+  docDepth?: 8 | 16 | 32;
   onCancel: () => void;
   onExport: (format: ExportFormat, quality: number) => void;
 }
@@ -25,12 +29,16 @@ export default function ExportDialog({
   docName,
   width,
   height,
+  defaultFormat,
+  docDepth,
   onCancel,
   onExport,
 }: Props) {
-  const [format, setFormat] = useState<ExportFormat>("png");
+  const [format, setFormat] = useState<ExportFormat>(defaultFormat ?? "png");
   const [quality, setQuality] = useState(92);
   const spec = formatSpec(format);
+  /** 16bit 源但没选 16bit 导出：明确提醒，不做静默降级 */
+  const depthLost = docDepth === 16 && format !== "tiff16";
 
   return (
     <Modal
@@ -112,6 +120,16 @@ export default function ExportDialog({
         {format === "jpeg" && (
           <p className="ex-warn">
             JPEG 不支持透明，透明区域会自动铺白底。要保留透明请选 PNG 或 WebP。
+          </p>
+        )}
+        {depthLost && (
+          <p className="ex-warn">
+            这份文档来自 16bit 源：当前格式会按 8bit/通道 写出。要保留位深请选 TIFF 16bit。
+          </p>
+        )}
+        {format === "tiff16" && (
+          <p className="ex-warn">
+            16bit/通道 无压缩 TIFF：每样本从 8bit 升到 16bit（×257 精确映射），文件体积约为 PNG 的数倍。
           </p>
         )}
       </div>

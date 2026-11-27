@@ -66,6 +66,8 @@ interface FileLayer {
   mask?: string;
   /** 智能对象原始像素的 data URL；普通图层省略 */
   smart?: string;
+  /** 智能对象原始嵌入文件（PSD lnk2 字节的 data URL，v6 起）；普通图层省略 */
+  smartRaw?: string;
   /**
    * 调色范围几何（v6 起）：椭圆/矩形/多边形的参数 + 羽化半径。
    * 蒙版本身也存了，几何只是为了让"手柄还能拖"这件事跨存档保留；
@@ -82,6 +84,8 @@ interface ProjectFile {
   width: number;
   height: number;
   dpi?: number;
+  /** 通道位深标记（v6 起）：16/32bit 标记如实携带（32 目前仍为标记，无原生管线）；旧工程无此字段按 8 */
+  bitsPerChannel?: 8 | 16 | 32;
   /** 选中图层下标 */
   active: number;
   layers: FileLayer[];
@@ -238,6 +242,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     if (l.mask) fl.mask = canvasToB64(l.mask);
     if (l.window) fl.window = l.window;
     if (l.smart) fl.smart = l.smart;
+    if (l.smartRaw) fl.smartRaw = l.smartRaw;
     layers.push(fl);
   });
   const active = Math.max(
@@ -251,6 +256,7 @@ export async function encodeProject(doc: StrataDoc): Promise<Uint8Array> {
     width: doc.width,
     height: doc.height,
     dpi: doc.dpi,
+    bitsPerChannel: doc.bitsPerChannel === 16 ? 16 : doc.bitsPerChannel === 32 ? 32 : undefined,
     active,
     layers,
   };
@@ -304,6 +310,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
       styles: fl.styles ? fl.styles.map(cloneStyle) : [],
       blendIf: sanitizeBlendIf(fl.blendIf),
       smart: fl.smart,
+      smartRaw: fl.smartRaw,
       window: sanitizeWindow(fl.window),
     };
     if (fl.kind === "adjust" && fl.adjust) {
@@ -354,6 +361,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<StrataDoc> {
     selection,
     alphaChannels,
     dpi: file.dpi,
+    bitsPerChannel: file.bitsPerChannel ?? 8,
     dirty: false,
   };
 }

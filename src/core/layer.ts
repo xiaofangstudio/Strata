@@ -1524,6 +1524,12 @@ export interface StrataLayer {
    */
   smart?: string;
   /**
+   * 智能对象原始嵌入文件的 data URL（来自 PSD lnk2 的字节，mime 标明格式）。
+   * 来自 PSD 的真智能对象才有；写回 PSD 时按它回写 SoLd + lnk2，
+   * 保证「开 → 存 → 再开」不丢智能对象性。栅格化时清除。
+   */
+  smartRaw?: string;
+  /**
    * 链接型智能对象指向的磁盘路径（Layer > Smart Objects > Convert to Linked）。
    * 有值 = 链接（内容随文件更新），无值 = 内嵌。
    */

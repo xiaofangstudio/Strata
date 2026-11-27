@@ -16,8 +16,14 @@ describe("导出格式表", () => {
     }
   });
 
-  it("只有 PNG 是无损的", () => {
-    expect(EXPORT_FORMATS.filter((f) => !f.lossy).map((f) => f.id)).toEqual(["png"]);
+  it("无损格式是 PNG 与 TIFF16，有损的是 JPEG/WebP", () => {
+    expect(EXPORT_FORMATS.filter((f) => !f.lossy).map((f) => f.id)).toEqual(["png", "tiff16"]);
+    expect(EXPORT_FORMATS.filter((f) => f.lossy).map((f) => f.id)).toEqual(["jpeg", "webp"]);
+  });
+
+  it("TIFF16 的扩展名是 tif，mime 是 image/tiff", () => {
+    expect(formatSpec("tiff16").ext).toBe("tif");
+    expect(formatSpec("tiff16").mime).toBe("image/tiff");
   });
 
   it("JPEG 的扩展名是 jpg，不是 jpeg", () => {

@@ -18,12 +18,14 @@
  * 约定：本文件不引入任何第三方库，也不依赖 WASM。
  */
 
-/** 解码结果：交织好的 RGBA 像素。 */
+/** 解码结果：交织好的 RGBA 像素与源位深。 */
 export interface TiffImage {
   width: number;
   height: number;
   /** 长度 = width * height * 4，可直接喂给 ImageData */
   rgba: Uint8ClampedArray;
+  /** 源文件的位深：BitsPerSample = 16 时为 16（显示像素已正确舍入到 8）。 */
+  depth: 8 | 16;
 }
 
 /** TIFF 6.0 的字段类型编号，只列会遇到的。 */
@@ -522,7 +524,7 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage> {
     written += take;
   }
 
-  return { width, height, rgba: toRgba(layout, raw, rowBytes) };
+  return { width, height, rgba: toRgba(layout, raw, rowBytes), depth: bits === 16 ? 16 : 8 };
 }
 
 /** 把原始像素按光度/位深摊平成 RGBA。 */
@@ -578,17 +580,20 @@ function toRgba(
         }
       } else if (bits === 16) {
         const base = row + x * samples * 2;
-        // 取每个样本的高字节映射到 8 位；字节序决定高字节在前还是在后
-        const hi = (i: number) =>
-          little ? raw[base + i * 2 + 1] : raw[base + i * 2];
+        // 16 → 8 用「除以 257」的精确舍入（65535/255 = 257），
+        // 旧的取高字节等于除以 256，暗部会整体偏亮近 1/255。
+        const sample = (i: number) => readU16(raw, base + i * 2, little);
+        const to8 = (v: number) => Math.round((v * 255) / 65535);
         if (samples >= 3) {
-          r = hi(0);
-          g = hi(1);
-          b = hi(2);
-          if (samples >= 4) a = hi(3);
+          r = to8(sample(0));
+          g = to8(sample(1));
+          b = to8(sample(2));
+          if (samples >= 4) a = to8(sample(3));
         } else {
-          const v = hi(0);
-          r = g = b = invertGray ? 255 - v : v;
+          const v = sample(0);
+          const gv = to8(invertGray ? 65535 - v : v);
+          r = g = b = gv;
+          if (samples === 2) a = to8(sample(1));
         }
       } else {
         // 1 / 2 / 4 位：按位取，位序 MSB 在前
@@ -615,5 +620,71 @@ function toRgba(
     }
   }
 
+  return out;
+}
+
+/* -------------------------------------------------------------- 编码（16bit） */
+
+/**
+ * 把画布编成 16bit RGBA 的无压缩 TIFF（小端 II）。
+ *
+ * 这是「写 16bit 真通路」的第一条：文档 depth 标 16（16bit 源打开）时，
+ * 导出对话框默认走这里，位深不再在导出环节悄悄掉回 8。
+ * 无压缩是刻意的：自研解码器已支持它，往返可以用同一份代码互验。
+ */
+export function encodeTiff16(canvas: HTMLCanvasElement): Uint8Array {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("TIFF16 画布不可用");
+  const { width, height, data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  const pixelBytes = width * height * 8;
+  const ifdOffset = 8;
+  const entries = 10;
+  const ifdSize = 2 + entries * 12 + 4;
+  const bpsOffset = ifdOffset + ifdSize;
+  const dataOffset = bpsOffset + 8;
+  const total = dataOffset + pixelBytes;
+
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+
+  // 头：II + 42 + IFD 偏移
+  out[0] = 0x49;
+  out[1] = 0x49;
+  view.setUint16(2, 42, true);
+  view.setUint32(4, ifdOffset, true);
+
+  // IFD 条目按 tag 升序
+  const put = (i: number, tag: number, type: number, count: number, value: number) => {
+    const p = ifdOffset + 2 + i * 12;
+    view.setUint16(p, tag, true);
+    view.setUint16(p + 2, type, true);
+    view.setUint32(p + 4, count, true);
+    // SHORT 内联走低 16 位，LONG 直接 32 位
+    view.setUint32(p + 8, value, true);
+  };
+  view.setUint16(ifdOffset, entries, true);
+  put(0, 256, 4, 1, width); // ImageWidth
+  put(1, 257, 4, 1, height); // ImageLength
+  put(2, 258, 3, 4, bpsOffset); // BitsPerSample → 外部数组
+  put(3, 259, 3, 1, 1); // Compression = 无压缩
+  put(4, 262, 3, 1, 2); // Photometric = RGB
+  put(5, 273, 4, 1, dataOffset); // StripOffsets
+  put(6, 277, 3, 1, 4); // SamplesPerPixel = RGBA
+  put(7, 278, 4, 1, height); // RowsPerStrip = 整图一条带
+  put(8, 279, 4, 1, pixelBytes); // StripByteCounts
+  put(9, 284, 3, 1, 1); // PlanarConfiguration = 交织
+  view.setUint32(ifdOffset + 2 + entries * 12, 0, true); // 无下一 IFD
+
+  // BitsPerSample：R/G/B/A 各 16
+  for (let i = 0; i < 4; i += 1) view.setUint16(bpsOffset + i * 2, 16, true);
+
+  // 像素：8bit RGBA 逐样本升到 16bit（v * 257 = round(v/255 * 65535)）
+  let o = dataOffset;
+  for (let i = 0; i < data.length; i += 1) {
+    const v = data[i] * 257;
+    view.setUint16(o, v, true);
+    o += 2;
+  }
   return out;
 }

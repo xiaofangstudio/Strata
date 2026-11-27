@@ -43,6 +43,12 @@ interface Props {
   doc: StrataDoc;
   /** 从菜单进来时点名的调整类型 */
   adjustId: AdjustId;
+  /**
+   * 目标层：图层右键「直接调整此层」时点名。临时调整层插到目标层正上方并
+   * 剪贴（clip）到它 —— 调整只作用于这一层，且 activeLayerId 保持不动；
+   * 省略时沿用默认语义（插到活动层上方，不剪贴）。
+   */
+  targetLayerId?: string;
   /** 合成画布：色阶 / 亮度对比度拿它算直方图 */
   compSource?: HTMLCanvasElement | null;
   compVersion?: number;
@@ -58,9 +64,19 @@ interface Props {
 /**
  * 在活动层上方插一层临时调整层 —— 位置规则与 layerOps.spliceAbove 完全一致
  * （选中组时插到组内最上层），**唯一区别是保留 base.activeLayerId**。
+ * 右键点名 targetLayerId 时改为插到目标层正上方并剪贴到它。
  */
-function withTempLayer(base: StrataDoc, id: AdjustId): { doc: StrataDoc; layerId: string } {
+function withTempLayer(base: StrataDoc, id: AdjustId, targetLayerId?: string): { doc: StrataDoc; layerId: string } {
   const layer = createAdjustLayer(adjustDef(id).label, newAdjustState(id));
+  const targetAt = targetLayerId ? base.layers.findIndex((l) => l.id === targetLayerId) : -1;
+  if (targetAt >= 0 && base.layers[targetAt].kind === "pixel") {
+    const target = base.layers[targetAt];
+    const placed: StrataLayer = { ...layer, parent: target.parent ?? null, clip: true };
+    const layers = [...base.layers];
+    layers.splice(targetAt + 1, 0, placed);
+    // ⚠️ 不写 activeLayerId：调色台变脸的根因就在 spliceAbove 那一行
+    return { doc: { ...base, layers, dirty: true }, layerId: placed.id };
+  }
   const at = base.layers.findIndex((l) => l.id === base.activeLayerId);
   const cur = at >= 0 ? base.layers[at] : null;
   const parent = cur ? (cur.kind === "group" ? cur.id : (cur.parent ?? null)) : null;
@@ -75,6 +91,7 @@ function withTempLayer(base: StrataDoc, id: AdjustId): { doc: StrataDoc; layerId
 export default function AdjustDialog({
   doc,
   adjustId,
+  targetLayerId,
   compSource,
   compVersion,
   onRequestPick,
@@ -83,7 +100,7 @@ export default function AdjustDialog({
   onClose,
 }: Props) {
   const base = useRef(doc).current;
-  const temp = useMemo(() => withTempLayer(base, adjustId), [base, adjustId]);
+  const temp = useMemo(() => withTempLayer(base, adjustId, targetLayerId), [base, adjustId, targetLayerId]);
   const {
     state: work,
     setState: setWorkBase,

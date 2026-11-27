@@ -14,6 +14,8 @@ import { createSurface } from "./surface";
 import { decodeProject, isStrataPath } from "./project";
 import { readEmbeddedProfileId } from "./cms";
 import { baseName, docFromBitmap, type StrataDoc } from "../core/document";
+import { sourceBitDepth } from "../core/bitDepth";
+import { extOf } from "./image";
 
 export interface OpenedFile {
   doc: StrataDoc;
@@ -55,6 +57,18 @@ export async function openFileToDoc(path: string): Promise<OpenedFile> {
   const bitmap = await loadImage(path);
   const thumb = await makeThumbnail(bitmap);
   const doc = docFromBitmap(bitmap, baseName(path), path);
+  // 位深探测：16bit TIFF / PNG 的源要如实标到文档上（bitsPerChannel = 16），
+  // 显示像素是舍入后的 8bit，但来源位深不再静默丢失 —— 导出对话框据此默认
+  // 走 TIFF 16bit，用户想保住精度有路可走。探测失败按 8，不猜。
+  try {
+    const ext = extOf(path);
+    if (ext === "png" || ext === "tif" || ext === "tiff") {
+      const bytes = await readFileBytes(path);
+      doc.bitsPerChannel = sourceBitDepth(ext, bytes);
+    }
+  } catch {
+    /* 读不到字节就保持 8，不打断打开流程 */
+  }
   // 读嵌入 ICC 并标到文档上：开始页 / 双击启动 / BrowseDialog / DropletRunner
   // 共用这条路径，以前完全不读 ICC。统一走 cms.ts 的共用入口
   // readEmbeddedProfileId（真解析优先 + 猜标签兜底），与 EditorShell.openPath、

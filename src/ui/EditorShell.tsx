@@ -721,6 +721,8 @@ export default function EditorShell({
   );
   /** 调整参数弹窗：值为 AdjustId（levels / curves / cameraraw …），null 关闭 */
   const [adjustFx, setAdjustFx] = useState<AdjustId | null>(null);
+  /** 图层右键「直接调整此层」点名的目标层；null = 常规菜单入口（作用于活动层语义）。 */
+  const [adjustFxTarget, setAdjustFxTarget] = useState<string | null>(null);
   /** 色彩范围对话框：吸管取样 + 容差预览，确定才落选区 */
   const [colorRangeOpen, setColorRangeOpen] = useState(false);
   const [cameraRawOpen, setCameraRawOpen] = useState(false);
@@ -6495,15 +6497,31 @@ export default function EditorShell({
    * 图层行右键：条目与顺序照抄 PhotoCraft 的 layer_menu_ui.rs（PS 2026 顺序）。
    * 智能对象 / 画板 / 链接 / 栅格化等暂无内核能力的行保留占位并置灰。
    */
+  /** 右键菜单当前点名的层 id：resolve 的 layer.adjust.* 条目从这里取目标层。 */
+  const ctxLayerIdRef = useRef<string | null>(null);
+
   const openLayerMenu = useCallback(
     (e: React.MouseEvent, layerId: string) => {
       e.preventDefault();
       e.stopPropagation();
       const layer = doc.layers.find((l) => l.id === layerId);
       if (!layer) return;
+      ctxLayerIdRef.current = layerId;
       const isPixel = layer.kind === "pixel";
       const rows: readonly (readonly [string, string] | null)[] = [
         ["混合选项…", "layer.layerStyle.blendingOptions"],
+        // 直接调整此层：剪贴调整层只作用于这一层，活动层保持不动（仅像素层）。
+        ...(isPixel
+          ? ([
+              null,
+              ["色阶…", "layer.adjust.levels"],
+              ["曲线…", "layer.adjust.curves"],
+              ["色相/饱和度…", "layer.adjust.huesat"],
+              ["自然饱和度…", "layer.adjust.vibrance"],
+              ["亮度/对比度…", "layer.adjust.bc"],
+              ["黑白…", "layer.adjust.blackwhite"],
+            ] as const)
+          : []),
         null,
         ["复制图层…", "layer.duplicate"],
         ["删除图层", "layer.delete"],
@@ -9068,6 +9086,23 @@ export default function EditorShell({
             run: () => onCommit(duplicateLayer(doc), zh.menu.duplicateLayer),
             hint: "Ctrl+J",
           };
+        /* 图层右键「直接调整此层」：剪贴调整层只作用于该层，活动层不动。
+           右键时 openLayerMenu 已把层 id 存进 ctxLayerIdRef。 */
+        case "layer.adjust.levels":
+        case "layer.adjust.curves":
+        case "layer.adjust.huesat":
+        case "layer.adjust.vibrance":
+        case "layer.adjust.bc":
+        case "layer.adjust.blackwhite": {
+          const kind = id.slice("layer.adjust.".length) as AdjustId;
+          const targetId = ctxLayerIdRef.current;
+          return {
+            run: () => {
+              setAdjustFxTarget(targetId);
+              setAdjustFx(kind);
+            },
+          };
+        }
         case "layer.delete":
           return {
             run: () => {
@@ -12905,6 +12940,8 @@ export default function EditorShell({
           docName={doc.name}
           width={doc.width}
           height={doc.height}
+          defaultFormat={doc.bitsPerChannel === 16 ? "tiff16" : "png"}
+          docDepth={doc.bitsPerChannel}
           onCancel={() => setExportOpen(false)}
           onExport={(format, quality) => void doExport(format, quality)}
         />
@@ -13008,15 +13045,20 @@ export default function EditorShell({
         <AdjustDialog
           doc={doc}
           adjustId={adjustFx}
+          targetLayerId={adjustFxTarget ?? undefined}
           compSource={compRef.current}
           compVersion={panelTick}
           onRequestPick={requestLevelPick}
           onPreview={previewDoc}
           onApply={(next) => {
             setAdjustFx(null);
+            setAdjustFxTarget(null);
             onCommit(next, adjustDef(adjustFx).label);
           }}
-          onClose={() => setAdjustFx(null)}
+          onClose={() => {
+            setAdjustFx(null);
+            setAdjustFxTarget(null);
+          }}
         />
       )}
       {colorRangeOpen && (
