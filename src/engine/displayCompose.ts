@@ -181,9 +181,11 @@ function prepareDisplay(
   // 1:1 或放大：不需要降采样，走与导出完全相同的路径
   if (s >= 0.999) return { doc, override: override ?? null };
 
-  // 正在编辑的那一层不缓存：它的像素是就地改的，引用不变但内容在变
-  const activeId = doc.activeLayerId;
-  const layers = doc.layers.map((l) => shrinkLayer(l, s, l.id !== activeId));
+  // 只把「这一帧正被临时替换」的层排除出缓存：画笔 / 涂抹 / 修饰都会通过
+  // override 换上一层临时表面。没有 override 时，active 层的源画布没有变化，
+  // 继续缓存它 —— 否则选中一个图层后每次静止重绘都要重缩一遍大图。
+  const skippedId = override?.layer.id ?? null;
+  const layers = doc.layers.map((l) => shrinkLayer(l, s, l.id !== skippedId));
   const dispOverride: DisplayOverride | null = override
     ? {
         index: override.index,

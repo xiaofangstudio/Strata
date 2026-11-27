@@ -45,12 +45,28 @@ export function gpuCanComposeLayers(layers: readonly StrataLayer[], w: number, h
 
 /** 把已经缩放好的显示层读成独立的 GPU 输入副本（必须在同步栈里调用）。 */
 export function gpuInputsFromLayers(layers: readonly StrataLayer[]): GpuLayerInput[] {
-  return layers.map((l) => ({
-    pixels: readPixels(l.surface).data,
-    opacity: Math.max(0, Math.min(1, l.opacity / 100)),
-    blend: l.blend,
-    visible: l.visible,
-  }));
+  return layers.map((l) => {
+    const pixels = readPixels(l.surface).data;
+    const active = l.visible && l.opacity > 0;
+    // 有内容标记提前算好：GPU 读回后不再扫全图，大文档少一段 UI 线程停顿。
+    let hasAlpha: boolean | undefined;
+    if (active) {
+      for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] !== 0) {
+          hasAlpha = true;
+          break;
+        }
+      }
+      if (hasAlpha !== true) hasAlpha = false;
+    }
+    return {
+      pixels,
+      opacity: Math.max(0, Math.min(1, l.opacity / 100)),
+      blend: l.blend,
+      visible: l.visible,
+      hasAlpha,
+    };
+  });
 }
 
 function usable(report: GpuFlattenReport): boolean {

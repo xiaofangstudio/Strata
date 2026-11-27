@@ -26,6 +26,11 @@ export interface GpuLayerInput {
   blend: string;
   /** 不可见的层会被跳过。 */
   visible: boolean;
+  /**
+   * 调用方若已做过 alpha 预检就带上；true=该层至少有一个 alpha>0 像素。
+   * 没带时内核会自己做早退扫描。这个字段避免 GPU 读回后在 UI 线程再扫一遍大图。
+   */
+  hasAlpha?: boolean;
 }
 
 /** gpuFlattenDetailed 的结果，附带 WGSL 写回的「回退」标注。 */
@@ -78,6 +83,25 @@ function decodeMask(mask: number): number[] {
   return ids;
 }
 
+/** 早退扫描一层像素有没有 alpha>0；透明层不参与「读回全透明」保护。 */
+function hasAlphaPixels(pixels: Uint8Array | Uint8ClampedArray): boolean {
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] !== 0) return true;
+  }
+  return false;
+}
+
+/** 提交 GPU 前算一次「输入是否真的有可见内容」，别把这道扫描放到读回之后。 */
+function inputHasVisibleAlpha(layers: readonly GpuLayerInput[]): boolean {
+  for (const layer of layers) {
+    if (!layer.visible || layer.opacity <= 0) continue;
+    if (layer.hasAlpha === true) return true;
+    if (layer.hasAlpha === false) continue;
+    if (hasAlphaPixels(toBytes(layer.pixels))) return true;
+  }
+  return false;
+}
+
 /**
  * 与 gpuFlatten 相同，但额外返回 WGSL 写回的回退标注（哪些混合模式被降级为 normal）。
  * 主代理接线时若需要知道结果是否因不支持的模式而降级，可用这个变体。
@@ -93,6 +117,8 @@ export async function gpuFlattenDetailed(
   const pixelCount = width * height;
   const pixelBytes = pixelCount * 4;
   if (!Number.isSafeInteger(pixelBytes) || pixelBytes <= 0) return failed();
+  // 这道扫描放在资源创建 / dispatch 之前：大文档时别等 GPU 读回回来才占 UI 线程。
+  const hadContent = inputHasVisibleAlpha(layers);
 
   let backend: GpuBackend;
   try {
@@ -227,7 +253,6 @@ export async function gpuFlattenDetailed(
         if (out[o + 3] !== 0) nonEmpty = true;
       }
       // 有可见且不透明的输入却读回全透明 = 管线没有真正执行，绝不能当成成功结果。
-      const hadContent = layers.some((l) => l.visible && l.opacity > 0 && toBytes(l.pixels).some((v, i) => i % 4 === 3 && v !== 0));
       if (hadContent && !nonEmpty) return failed();
       image = new ImageData(out, width, height);
     } finally {

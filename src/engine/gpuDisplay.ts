@@ -25,6 +25,11 @@ export interface GpuDisplayJob {
   generation: number;
   /** 同一帧 CPU 即时合成的耗时，用于配对 A/B。 */
   cpuMs: number;
+  /**
+   * 调用方判断「这一帧现在还是不是最新」。GPU 是异步的，若期间已经出了
+   * 更新的 CPU 帧，旧结果必须丢弃，绝不能回头覆盖新画面。
+   */
+  isCurrent?: () => boolean;
   /** GPU 成功替换画面后调用，让 UI 重新呈递这一帧。 */
   onApplied: () => void;
   /** GPU 任务结束（成功/失败/过期）后调用，通常用来补排一帧。 */
@@ -46,7 +51,8 @@ export function scheduleGpuDisplay(job: GpuDisplayJob): boolean {
   void gpuComposeToTarget(inputs, snap.width, snap.height, target)
     .then(({ used, ms }) => {
       recordDisplayTiming(job.cpuMs, ms);
-      if (used && generation === job.generation && doc.id === job.doc.id) {
+      const current = !job.isCurrent || job.isCurrent();
+      if (used && current && generation === job.generation && doc.id === job.doc.id) {
         job.onApplied();
       }
     })

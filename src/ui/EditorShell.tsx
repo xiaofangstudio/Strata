@@ -1768,6 +1768,7 @@ export default function EditorShell({
         target: comp,
         generation,
         cpuMs,
+        isCurrent: () => gpuGenerationRef.current === generation,
         onApplied: () => present(),
         onSettled: () => {
           // 只有「任务在飞时又来了新帧」才补排；静止画面不能自己无限排队。
