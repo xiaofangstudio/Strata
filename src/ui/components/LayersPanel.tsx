@@ -112,6 +112,7 @@ import LevelsEditor, { type CanvasPickRequest } from "./LevelsEditor";
 import BlendIfBar from "./BlendIfBar";
 import Popover from "./Popover";
 import PatternPresetPicker from "./PatternPresetPicker";
+import { useFrameVersion } from "../panelTick";
 import "./LayersPanel.css";
 
 interface Props {
@@ -1057,7 +1058,7 @@ export function AdjustProps({
   onChange,
   onPreview,
   compSource,
-  compVersion = 0,
+  compVersion,
   pickSource,
   docW,
   docH,
@@ -1069,6 +1070,7 @@ export function AdjustProps({
   onPreview: (next: StrataDoc) => void;
   /** 合成画布：色阶类调整拿它算直方图 */
   compSource?: HTMLCanvasElement | null;
+  /** 省略时订阅外壳全局面板帧号 */
   compVersion?: number;
   /** 色阶吸管取样用的未调整基础合成图 */
   pickSource?: HTMLCanvasElement | null;
@@ -1076,6 +1078,7 @@ export function AdjustProps({
   docH?: number;
   onRequestPick?: CanvasPickRequest;
 }) {
+  const activeCompVersion = useFrameVersion(compVersion);
   const st = layer.adjust;
   if (!st) return null;
   const def = adjustDef(st.id);
@@ -1129,7 +1132,7 @@ export function AdjustProps({
       {st.id === "bc" && (
         <MiniHistogram
           source={compSource ?? null}
-          version={compVersion}
+          version={activeCompVersion}
           height={62}
         />
       )}
@@ -1146,7 +1149,7 @@ export function AdjustProps({
           docH={docH ?? 0}
           onRequestPick={onRequestPick}
           canPick={Boolean(pickSource && docW && docH && onRequestPick !== NOOP_PICK)}
-          version={compVersion}
+          version={activeCompVersion}
           setParam={setParam}
           setParams={setParams}
           commit={commit}

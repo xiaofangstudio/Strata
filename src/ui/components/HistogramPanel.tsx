@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { zh } from "../../i18n";
+import { useFrameVersion } from "../panelTick";
 import "./HistogramPanel.css";
 
 type Channel = "colors" | "luminosity" | "r" | "g" | "b";
@@ -14,8 +15,8 @@ type Channel = "colors" | "luminosity" | "r" | "g" | "b";
 interface Props {
   /** 最近一次合成的整档画布（compRef 的内容），由外壳负责更新 */
   source: HTMLCanvasElement | null;
-  /** 帧号：合成每前进一次就 +1，驱动重算 */
-  version: number;
+  /** 帧号：省略时订阅外壳的全局面板帧号 */
+  version?: number;
 }
 
 const BINS = 256;
@@ -112,7 +113,8 @@ export function computeHistogram(src: HTMLCanvasElement): HistStats | null {
 export default function HistogramPanel({ source, version }: Props) {
   const [channel, setChannel] = useState<Channel>("colors");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stats = useMemo(() => (source ? computeHistogram(source) : null), [source, version]);
+  const frameVersion = useFrameVersion(version);
+  const stats = useMemo(() => (source ? computeHistogram(source) : null), [source, frameVersion]);
 
   useEffect(() => {
     const c = canvasRef.current;

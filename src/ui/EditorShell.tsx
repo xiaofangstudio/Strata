@@ -256,6 +256,7 @@ import { findPhotoRegions } from "../core/photoCrop";
 import { CUBE_SIZE, identityLut, lutToCube } from "../core/lut";
 import { applyFixes, checkText, ISSUE_LABEL, type Issue } from "../core/proofread";
 import { computeHistogram } from "./components/HistogramPanel";
+import { schedulePanelTick } from "./panelTick";
 import {
   DEFAULT_PROOF,
   applyProof,
@@ -882,8 +883,7 @@ export default function EditorShell({
   const [hidePanels, setHidePanels] = useState(false);
   /** 视口尺寸（导航器面板要拿它画视口框），由 ResizeObserver 跟踪 */
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
-  /** 直方图 / 导航器的帧号：合成每前进一次（节流 250ms）就 +1 */
-  const [panelTick, setPanelTick] = useState(0);
+  /** 面板帧号走模块级广播：只唤醒真正需要的面板，不重渲染整棵编辑壳。 */
   const [prefsOpen, setPrefsOpen] = useState(false);
   /** 增效工具只在会话内存在；权限确认后才注册，关掉软件即失效。 */
   const [plugins, setPlugins] = useState<LoadedPlugin[]>([]);
@@ -1712,7 +1712,7 @@ export default function EditorShell({
        */
       if (!interactingRef.current && now - lastPanelRef.current > 500) {
         lastPanelRef.current = now;
-        setPanelTick((t) => t + 1);
+        schedulePanelTick();
       }
     };
 
@@ -11275,8 +11275,8 @@ export default function EditorShell({
               onZoom={zoom}
             />
           }
-          histogram={<HistogramPanel source={compRef.current} version={panelTick} />}
-          scopes={<ScopesPanel source={compRef.current} version={panelTick} />}
+          histogram={<HistogramPanel source={compRef.current} />}
+          scopes={<ScopesPanel source={compRef.current} />}
           grade={
             gradeLayer ? (
               <GradePanel
@@ -11344,7 +11344,6 @@ export default function EditorShell({
               onChange={onCommit}
               onPreview={previewDoc}
               compSource={compRef.current}
-              compVersion={panelTick}
             />
           }
           layers={
@@ -13238,7 +13237,6 @@ export default function EditorShell({
           adjustId={adjustFx}
           targetLayerId={adjustFxTarget ?? undefined}
           compSource={compRef.current}
-          compVersion={panelTick}
           onRequestPick={requestLevelPick}
           onPreview={previewDoc}
           onApply={(next) => {

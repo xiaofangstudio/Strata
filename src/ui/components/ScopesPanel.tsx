@@ -10,13 +10,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { zh } from "../../i18n";
+import { useFrameVersion } from "../panelTick";
 import {
   binIntensity,
   computeParade,
   computeVectorscope,
   type ScopeBins,
 } from "../../engine/scopes";
-import { readPixels } from "../../engine/surface";
 import "./ScopesPanel.css";
 
 type ScopeMode = "waveform" | "parade" | "vector";
@@ -24,8 +24,8 @@ type ScopeMode = "waveform" | "parade" | "vector";
 interface Props {
   /** 最近一次合成的画布（外壳负责更新） */
   source: HTMLCanvasElement | null;
-  /** 帧号：合成前进一次 +1，驱动重算 */
-  version: number;
+  /** 帧号：省略时订阅外壳的全局面板帧号 */
+  version?: number;
 }
 
 const MODES: { id: ScopeMode; label: string }[] = [
@@ -34,22 +34,53 @@ const MODES: { id: ScopeMode; label: string }[] = [
   { id: "vector", label: zh.panel.scopeVector },
 ];
 
+/** 示波器采样上限：分布形状不需要原始 24MP，读像素量必须封顶。 */
+const MAX_SCOPE_SIDE = 512;
+let scopeSampleCanvas: HTMLCanvasElement | null = null;
+
+/** 把合成画布降采样到最长边 512 后读像素；旧实现会整幅 getImageData。 */
+function readScopePixels(src: HTMLCanvasElement): {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+} | null {
+  const w = src.width;
+  const h = src.height;
+  if (w < 1 || h < 1) return null;
+  const fit = Math.min(1, MAX_SCOPE_SIDE / Math.max(w, h));
+  const sw = Math.max(1, Math.round(w * fit));
+  const sh = Math.max(1, Math.round(h * fit));
+  if (!scopeSampleCanvas) scopeSampleCanvas = document.createElement("canvas");
+  scopeSampleCanvas.width = sw;
+  scopeSampleCanvas.height = sh;
+  const ctx = scopeSampleCanvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, sw, sh);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "medium";
+  ctx.drawImage(src, 0, 0, sw, sh);
+  try {
+    return ctx.getImageData(0, 0, sw, sh);
+  } catch {
+    return null;
+  }
+}
+
 export default function ScopesPanel({ source, version }: Props) {
   const [mode, setMode] = useState<ScopeMode>("waveform");
   const wrapRef = useRef<HTMLCanvasElement>(null);
+  const frameVersion = useFrameVersion(version);
 
   const data = useMemo(() => {
     if (!source || source.width < 1 || source.height < 1) return null;
-    // 大图降采样：示波器看的是分布形状，没必要按原分辨率全扫一遍
-    let img: { data: Uint8ClampedArray; width: number; height: number } | null = null;
+    // 真降采样：示波器看的是分布形状，读取像素量按 512² 封顶
     try {
-      img = readPixels(source);
+      return readScopePixels(source);
     } catch {
       return null;
     }
-    return img;
     // version 变了才重算：source 是 mutable 的画布，只能靠帧号驱动
-  }, [source, version]);
+  }, [source, frameVersion]);
 
   useEffect(() => {
     const cv = wrapRef.current;
