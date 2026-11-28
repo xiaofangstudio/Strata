@@ -86,16 +86,30 @@
 .ly-quick {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
 }
 
+/* 混合模式独占一行；「不透明度 / 填充」并排第二行，两个入口一眼都能看见。 */
+.ly-quick > .ly-select {
+  flex: 1 1 100%;
+}
+
 .ly-op {
-  flex: 1 1 auto;
+  flex: 1 1 calc(50% - var(--sp-2));
   min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+}
+
+.ly-op-label {
+  flex: none;
+  width: 34px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: nowrap;
 }
 
 .ly-prop {

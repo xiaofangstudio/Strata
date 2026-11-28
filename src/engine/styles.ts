@@ -361,6 +361,15 @@ export function paintStyledLayer(
   if (layer.kind === "adjust") return;
   if (!layer.visible || layer.opacity <= 0) return;
 
+  /**
+   * PS 的「填充」只作用于本层像素，图层样式仍按原不透明度画。
+   * 与 opacity 相乘：两者都是 0–100 百分比。
+   */
+  const fillAlpha =
+    Math.max(0, Math.min(1, layer.opacity / 100)) *
+    Math.max(0, Math.min(1, (layer.fillOpacity ?? 100) / 100));
+  if (fillAlpha <= 0 && activeStyles(layer).length === 0) return;
+
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
   const styles = activeStyles(layer);
@@ -369,11 +378,11 @@ export function paintStyledLayer(
   /* 最常用的情形：没有样式、没有剪贴、没有 Blend If，直接一次 drawImage。 */
   if (styles.length === 0 && !clipShape && !useBlendIf) {
     if (isSoftBlend(layer.blend)) {
-      blendInto(ctx, layerShape(layer), layer.opacity / 100, layer.blend);
+      blendInto(ctx, layerShape(layer), fillAlpha, layer.blend);
       return;
     }
     ctx.save();
-    ctx.globalAlpha = layer.opacity / 100;
+    ctx.globalAlpha = fillAlpha;
     ctx.globalCompositeOperation = blendOp(layer.blend);
     ctx.drawImage(layerShape(layer), 0, 0);
     ctx.restore();
@@ -437,9 +446,9 @@ export function paintStyledLayer(
     // Canvas2D 没有这些混色公式，只能把整幅画面读回来逐像素算。
     // 会破坏 ctx 的 save / restore 栈 —— 因此先 restore 再单独合成。
     ctx.restore();
-    blendInto(ctx, src, layer.opacity / 100, layer.blend);
+    blendInto(ctx, src, fillAlpha, layer.blend);
   } else {
-    ctx.globalAlpha = layer.opacity / 100;
+    ctx.globalAlpha = fillAlpha;
     ctx.globalCompositeOperation = blendOp(layer.blend);
     ctx.drawImage(src, 0, 0);
     ctx.restore();

@@ -61,6 +61,7 @@ export type LayerPatch = Partial<
     | "name"
     | "visible"
     | "opacity"
+    | "fillOpacity"
     | "blend"
     | "locked"
     | "alphaLock"
@@ -624,6 +625,20 @@ export function selectLayer(doc: StrataDoc, id: string): StrataDoc {
 /** 把某层的不透明度 / 混合模式改了（面板滑杆与下拉用）。 */
 export function setOpacity(doc: StrataDoc, id: string, opacity: number): StrataDoc {
   return updateLayer(doc, id, { opacity: Math.max(0, Math.min(100, Math.round(opacity))) });
+}
+
+/**
+ * PS 图层样式顶部的「填充」：只淡出本层像素，不动图层样式。
+ * 与 `opacity` 一样夹到 0–100 并取整。
+ */
+export function setFillOpacity(
+  doc: StrataDoc,
+  id: string,
+  fillOpacity: number,
+): StrataDoc {
+  return updateLayer(doc, id, {
+    fillOpacity: Math.max(0, Math.min(100, Math.round(fillOpacity))),
+  });
 }
 
 export function setBlend(doc: StrataDoc, id: string, blend: BlendId): StrataDoc {
@@ -1383,6 +1398,32 @@ export function maskToSelection(doc: StrataDoc, id: string): StrataDoc {
   return { ...doc, selection: cloneSurface(layer.mask), dirty: true };
 }
 
+/**
+ * 图层透明度载入为选区（PS 的 Ctrl+点击图层缩略图）。
+ *
+ * 约定与选区/Alpha 通道一致：选区画布的 alpha 分量即选中程度，RGB 刷白。
+ * 调整层与图层组没有自己的像素，返回 null，调用方不要给出假选区。
+ */
+export function layerToSelection(
+  doc: StrataDoc,
+  id: string,
+): HTMLCanvasElement | null {
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer || layer.kind === "adjust" || layer.kind === "group") return null;
+  const src = readPixels(layer.surface);
+  const data = src.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    data[i] = 255;
+    data[i + 1] = 255;
+    data[i + 2] = 255;
+    data[i + 3] = a;
+  }
+  const out = createSurface(doc.width, doc.height);
+  writePixels(out, src);
+  return out;
+}
+
 /** 合并可见图层：所有可见层烙成一层置顶，隐藏层原样保留（PS 的 Merge Visible）。 */
 export function mergeVisible(doc: StrataDoc): StrataDoc {
   const merged = createLayer(doc.width, doc.height, "合并的图层");
@@ -1736,5 +1777,38 @@ export function newSmartObjectViaCopy(doc: StrataDoc): StrataDoc {
 /** 转换为图层：等同栅格化（丢弃智能对象原始数据）。 */
 export function convertSmartObjectToLayers(doc: StrataDoc): StrataDoc {
   return rasterizeSmartObject(doc);
+}
+
+/**
+ * 换掉一层的像素画布并返回新文档。
+ *
+ * 画笔画布是就地改像素的；显示合成又按 canvas 引用缓存缩小图，
+ * 所以每次落库都必须换引用，否则主画布会继续显示旧缩略图。
+ */
+export function replaceLayerSurface(
+  doc: StrataDoc,
+  layerId: string,
+  surface: HTMLCanvasElement,
+): StrataDoc {
+  return {
+    ...doc,
+    layers: doc.layers.map((l) =>
+      l.id === layerId ? { ...l, surface } : l,
+    ),
+  };
+}
+
+/** 同上，换蒙版画布；蒙版也走按引用缓存。 */
+export function replaceLayerMask(
+  doc: StrataDoc,
+  layerId: string,
+  mask: HTMLCanvasElement,
+): StrataDoc {
+  return {
+    ...doc,
+    layers: doc.layers.map((l) =>
+      l.id === layerId ? { ...l, mask } : l,
+    ),
+  };
 }
 

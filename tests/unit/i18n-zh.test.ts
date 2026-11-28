@@ -43,6 +43,7 @@ const TOP_GROUPS = [
   "launch",
   "error",
   "plugin",
+  "recovery",
 ] as const;
 
 /** 需求里点名要覆盖的「关键分组」。 */

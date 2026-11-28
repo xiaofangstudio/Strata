@@ -14,6 +14,13 @@ import { useRecentFiles } from "./stores/recent";
 import { openFileToDoc } from "./engine/openFile";
 import { readFileBytes } from "./engine/image";
 import {
+  clearRecoverySessions,
+  listRecoverySessions,
+  readRecoverySession,
+  writeRecoverySession,
+  type SessionSummary,
+} from "./engine/sessionRecovery";
+import {
   parseRecipe,
   RECIPE_EXTENSION,
   runRecipeDocOps,
@@ -64,6 +71,9 @@ export default function App() {
   const [droplet, setDroplet] = useState<Recipe | null>(null);
   /** 原生解码提示：CR3 只取到内嵌预览、显影失败降级等，必须让用户看见。 */
   const [decodeNotice, setDecodeNotice] = useState<string | null>(null);
+  /** 崩溃恢复稿：只在启动时探测一次，用户明确忽略或恢复后才消失。 */
+  const [recovery, setRecovery] = useState<SessionSummary[]>([]);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
 
   const { push } = useRecentFiles();
   const stacks = useRef(new Map<string, History>());
@@ -309,6 +319,58 @@ export default function App() {
     setRevision((n) => n + 1);
   }, []);
 
+  // 启动探测：恢复稿只在应用私有目录，不读用户工程目录。
+  useEffect(() => {
+    let alive = true;
+    void listRecoverySessions().then((items) => {
+      if (alive) setRecovery(items);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 自动恢复稿：每 20 秒最多写一份当前文档。编码 + IPC 都是异步，不挡绘画；
+  // 失败静默（磁盘满 / 权限问题不该弹窗打断创作），下一轮再试。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const id = activeRef.current;
+      const d = id ? docsRef.current.find((x) => x.id === id) : null;
+      if (!d || !d.dirty) return;
+      // 绘画 / 拖动 / 调滑块时不做编码，免得后台序列化抢主线程造成顿挫。
+      if (document.body.classList.contains("is-interacting")) return;
+      if (document.body.classList.contains("is-tuning")) return;
+      void writeRecoverySession(d);
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const restoreLatest = useCallback(async () => {
+    const latest = recovery[0];
+    if (!latest || recoveryBusy) return;
+    setRecoveryBusy(true);
+    try {
+      const doc = await readRecoverySession(latest.key);
+      if (doc) {
+        openDoc(doc);
+        setRecovery([]);
+      }
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }, [recovery, recoveryBusy, openDoc]);
+
+  const ignoreRecovery = useCallback(async () => {
+    if (recoveryBusy) return;
+    setRecoveryBusy(true);
+    try {
+      await clearRecoverySessions();
+      setRecovery([]);
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }, [recoveryBusy]);
+
   /** 打开一个本地文件并进编辑器。开始页面与启动流程共用这一条通路。 */
   const handleOpenPath = useCallback(
     async (path: string) => {
@@ -460,7 +522,11 @@ export default function App() {
       const t = e.target as HTMLElement | null;
       if (t && t.closest('input[type="range"]')) mark(true);
     };
-    const up = () => mark(false);
+    const up = () => {
+      mark(false);
+      // 选项栏滑杆拖动期间画笔参数只存在 ref 上，松手统一提交一次。
+      window.dispatchEvent(new Event("strata:tuning-commit"));
+    };
     window.addEventListener("pointerdown", down, true);
     window.addEventListener("pointerup", up, true);
     window.addEventListener("pointercancel", up, true);
@@ -517,6 +583,31 @@ export default function App() {
 
   const doc = activeId === null ? null : docs.find((d) => d.id === activeId) ?? null;
 
+  const recoveryBanner = recovery.length > 0 && (
+    <div className="recovery-banner" role="status">
+      <div className="recovery-banner__text">
+        <b>{zh.recovery.title}</b>
+        <span>{zh.recovery.hint}</span>
+      </div>
+      <button
+        type="button"
+        className="btn-primary btn-sm"
+        disabled={recoveryBusy}
+        onClick={() => void restoreLatest()}
+      >
+        {zh.recovery.restore}
+      </button>
+      <button
+        type="button"
+        className="btn-ghost btn-sm"
+        disabled={recoveryBusy}
+        onClick={() => void ignoreRecovery()}
+      >
+        {zh.recovery.ignore}
+      </button>
+    </div>
+  );
+
   // 固定背景层：基色 + 背景图 + 磨砂，始终铺底；上方内容透明处即可透出。
   // 顺带承载全局解码提示（独立于任何页面，所有启动分支都能看到）。
   const bgLayer = (
@@ -546,6 +637,7 @@ export default function App() {
     return (
       <>
         {bgLayer}
+        {recoveryBanner}
         <EditorShell
           docs={docs}
           doc={doc}
@@ -617,6 +709,7 @@ export default function App() {
   return (
     <>
       {bgLayer}
+      {recoveryBanner}
       <StartPage
         info={info}
         themeMode={mode}

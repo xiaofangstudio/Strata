@@ -636,6 +636,8 @@ export const TOOLS = [
   { id: "shapeStar", label: "星形", shortcut: "U", group: "shape", ready: true },
   // 柳叶笔：拖出弧线自动闭合成色块（catalog.ts leafPen）
   { id: "leafPen", label: "柳叶笔", shortcut: "U", group: "shape", ready: true },
+  // 钢笔：逐点落锚，双击 / 右键描边路径（catalog.ts pen）
+  { id: "pen", label: "钢笔", shortcut: "P", group: "shape", ready: true },
   { id: "text", label: "文字", shortcut: "T", group: "text", ready: true },
   { id: "brush", label: "画笔", shortcut: "B", group: "paint", ready: true },
   { id: "pencil", label: "铅笔", shortcut: "B", group: "paint", ready: true },
@@ -707,6 +709,8 @@ export const MCP_TOOLS = [
   { id: "strata_doc_export", title: "导出图层文档" },
   { id: "strata_doc_save", title: "保存图层文档为 .strata 工程" },
   { id: "strata_doc_add_path", title: "加矢量路径层（手绘挂钩 / 链子 / 任意图形）" },
+  { id: "strata_doc_patch_layer", title: "修改文档图层属性" },
+  { id: "strata_doc_smudge_layer", title: "图层涂抹（沿路径推颜色）" },
   { id: "strata_doc_transform_layer", title: "变换图层（放大缩小 / 旋转 / 关节枢轴）" },
   { id: "strata_doc_add_contour", title: "加贴边虚线轮廓（描着图层剪影走）" },
   { id: "strata_doc_layer_effect", title: "图层质感效果（胶封 / 高光）" },
@@ -927,6 +931,8 @@ export function buildCapabilities() {
       "strata_doc_preview",
       "strata_doc_export",
       "strata_doc_add_path",
+      "strata_doc_patch_layer",
+      "strata_doc_smudge_layer",
       "strata_doc_transform_layer",
       "strata_doc_add_contour",
       "strata_doc_layer_effect",

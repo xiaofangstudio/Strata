@@ -43,7 +43,7 @@ describe("MCP capabilities 单一事实来源对账", () => {
   it("MCP_TOOLS 与 strata-mcp.mjs 实际注册的工具逐一相等", () => {
     const declared = idsOf(exportBlock(capabilities, "MCP_TOOLS"), /id: "(strata_[a-z_0-9]+)"/g);
     const registered = idsOf(mcpServer, /"(strata_[a-z_0-9]+)"/g);
-    expect(registered.size, "strata-mcp.mjs 里应恰好是 60 个 strata_* 字面量").toBe(60);
+    expect(registered.size, "strata-mcp.mjs 里应恰好是 62 个 strata_* 字面量").toBe(62);
     const missing = [...registered].filter((id) => !declared.has(id));
     const extra = [...declared].filter((id) => !registered.has(id));
     expect(missing, "capabilities 声明漏掉的工具").toEqual([]);

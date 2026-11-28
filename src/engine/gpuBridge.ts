@@ -61,7 +61,10 @@ export function gpuInputsFromLayers(layers: readonly StrataLayer[]): GpuLayerInp
     }
     return {
       pixels,
-      opacity: Math.max(0, Math.min(1, l.opacity / 100)),
+      // PS「填充」只淡出本层像素；与整体不透明度相乘后再交给 GPU。
+      opacity:
+        Math.max(0, Math.min(1, l.opacity / 100)) *
+        Math.max(0, Math.min(1, (l.fillOpacity ?? 100) / 100)),
       blend: l.blend,
       visible: l.visible,
       hasAlpha,

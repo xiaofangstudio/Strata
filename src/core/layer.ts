@@ -1456,6 +1456,12 @@ export interface StrataLayer {
   visible: boolean;
   /** 不透明度 0–100（界面按 PS 习惯给整数百分比） */
   opacity: number;
+  /**
+   * 填充不透明度 0–100（PS 图层样式顶部的「填充」）。
+   * 与 `opacity` 分开：调它只淡出本层像素，图层样式（投影 / 描边等）不受影响。
+   * 旧文档没有这个字段，读取时按 100 处理。
+   */
+  fillOpacity?: number;
   /** 混合模式 */
   blend: BlendId;
   /** 锁定后禁止绘制与变换 */

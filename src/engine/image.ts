@@ -209,12 +209,17 @@ export async function readFileBytes(path: string): Promise<Uint8Array> {
   return Uint8Array.from(data);
 }
 
-/** 写入本地文件字节。 */
+/**
+ * 写入本地文件字节。
+ *
+ * 所有正式保存 / 导出都走 Rust 的原子写：同目录临时文件写完整再 rename，
+ * 崩溃最多留下一个可丢弃的 tmp，不会把用户已有工程写成半截。
+ */
 export async function writeFileBytes(
   path: string,
   data: Uint8Array,
 ): Promise<void> {
-  await invoke("write_file_bytes", { path, data: Array.from(data) });
+  await invoke("write_file_bytes_atomic", { path, data: Array.from(data) });
 }
 
 /** 把图片字节解码成位图，供 canvas 直接绘制。 */

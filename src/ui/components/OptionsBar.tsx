@@ -77,6 +77,9 @@ interface Props {
   /** 涂抹力度（推颜色强度 0–100） */
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  /** 钢笔描边路径：勾选后两端收尖，模拟手绘笔压 */
+  penSimulatePressure: boolean;
+  onPenSimulatePressure: (v: boolean) => void;
   /** 涂抹笔尖角度（−180…180 整数，与 roundness < 100% 配合可见） */
   smudgeAngle: number;
   onSmudgeAngle: (v: number) => void;
@@ -134,6 +137,8 @@ export default function OptionsBar({
   onRetouch,
   smudgeStrength,
   onSmudgeStrength,
+  penSimulatePressure,
+  onPenSimulatePressure,
   smudgeAngle,
   onSmudgeAngle,
   adjustBrush,
@@ -175,6 +180,8 @@ export default function OptionsBar({
     onRetouch,
     smudgeStrength,
     onSmudgeStrength,
+    penSimulatePressure,
+    onPenSimulatePressure,
     smudgeAngle,
     onSmudgeAngle,
     adjustBrush,
@@ -256,6 +263,8 @@ interface Ctx {
   onRetouch: (patch: Partial<RetouchSettings>) => void;
   smudgeStrength: number;
   onSmudgeStrength: (v: number) => void;
+  penSimulatePressure: boolean;
+  onPenSimulatePressure: (v: boolean) => void;
   smudgeAngle: number;
   onSmudgeAngle: (v: number) => void;
   adjustBrush: AdjustBrushSettings;
@@ -953,6 +962,44 @@ function buildControls(tool: ToolId, c: Ctx): Built {
     );
 
     return { main, extra: <>{extra}</> };
+  }
+
+  // 钢笔：先落锚点、再描边路径；画笔大小与模拟压力是这条路径的核心参数
+  if (tool === "pen") {
+    const st = c.brush;
+    return {
+      main: [
+        <Slider
+          key="pen-size"
+          label={zh.options.size}
+          min={1}
+          max={200}
+          value={st.size}
+          onChange={(v) => c.onBrush({ size: v })}
+          suffix="px"
+        />,
+        <Check
+          key="pen-simulate"
+          label={zh.options.strokeSimulatePressure}
+          on={c.penSimulatePressure}
+          onChange={c.onPenSimulatePressure}
+        />,
+      ],
+      extra: (
+        <>
+          <p className="opt-note">{zh.options.penPathHint}</p>
+          <Slider
+            key="pen-flow"
+            label={zh.options.flow}
+            min={1}
+            max={100}
+            value={st.flow}
+            onChange={(v) => c.onBrush({ flow: v })}
+            suffix="%"
+          />
+        </>
+      ),
+    };
   }
 
   // 柳叶笔：实心 / 空心是它的核心语义，不套用普通形状的填充 / 描边三件

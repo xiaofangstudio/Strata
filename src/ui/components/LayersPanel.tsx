@@ -59,15 +59,16 @@ import {
   duplicateLayer,
   groupLayers,
   invertMask,
+  layerToSelection,
   mergeDown,
   moveLayer,
   removeLayer,
   removeMask,
   removeLayerStyle,
-  selectLayer,
   setAdjust,
   setBlend,
   setBlendIf,
+  setFillOpacity,
   setOpacity,
   setSelection,
   toggleClip,
@@ -78,7 +79,7 @@ import {
   updateLayerStyle,
 } from "../../core/layerOps";
 import { composeDoc } from "../../engine/compositor";
-import { createSurface } from "../../engine/surface";
+import { cloneSurface, createSurface } from "../../engine/surface";
 import {
   CHANNEL_ORDER,
   DEFAULT_CHANNEL_VIS,
@@ -119,8 +120,13 @@ interface Props {
   doc: StrataDoc;
   /** 会写进历史栈的改动 */
   onChange: (next: StrataDoc, label: string) => void;
-  /** 不写历史的即时预览（拖动滑杆、切换选中） */
+  /** 不写历史的即时预览（拖动滑杆） */
   onPreview: (next: StrataDoc) => void;
+  /**
+   * 切换活动层：必须真正写回文档状态，不能走画布预览 ref。
+   * 否则新建文字层之后点背景层只会改预览，activeLayerId 永远切不回来。
+   */
+  onSelectLayer: (layerId: string) => void;
   /** 当前是否在编辑蒙版（画笔落在蒙版上） */
   maskEdit: boolean;
   onMaskEdit: (on: boolean) => void;
@@ -148,10 +154,24 @@ interface Props {
 
 type TabId = "layers" | "channels" | "paths";
 
+/**
+ * 图层 / 蒙版缩略图的选区组合语义（PS 同款）：
+ * 必须先按住 Ctrl / Cmd 才是「载入选区」；再叠 Shift 加选、Alt 减选、
+ * Shift+Alt 交叠。普通点击仍然只是选中图层，不偷偷改选区。
+ */
+function thumbnailSelectionMode(e: React.MouseEvent): SelectionMode | null {
+  if (!(e.ctrlKey || e.metaKey)) return null;
+  if (e.shiftKey && e.altKey) return "intersect";
+  if (e.shiftKey) return "add";
+  if (e.altKey) return "subtract";
+  return "new";
+}
+
 export default function LayersPanel({
   doc,
   onChange,
   onPreview,
+  onSelectLayer,
   maskEdit,
   onMaskEdit,
   channelVis,
@@ -195,6 +215,7 @@ export default function LayersPanel({
           cur={cur}
           onChange={onChange}
           onPreview={onPreview}
+          onSelectLayer={onSelectLayer}
           maskEdit={maskEdit}
           onMaskEdit={onMaskEdit}
           onLayerContextMenu={onLayerContextMenu}
@@ -652,6 +673,7 @@ interface LayerTabProps {
   cur: StrataLayer;
   onChange: (next: StrataDoc, label: string) => void;
   onPreview: (next: StrataDoc) => void;
+  onSelectLayer: (layerId: string) => void;
   maskEdit: boolean;
   onMaskEdit: (on: boolean) => void;
   onLayerContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
@@ -718,17 +740,21 @@ function LayerTab({
   cur,
   onChange,
   onPreview,
+  onSelectLayer,
   maskEdit,
   onMaskEdit,
   onLayerContextMenu,
   onMaskContextMenu,
 }: LayerTabProps) {
   const [dragOpacity, setDragOpacity] = useState<number | null>(null);
+  /** PS 图层样式的「填充」：拖动期间只走预览，松手才写历史 */
+  const [dragFill, setDragFill] = useState<number | null>(null);
   /** 被折叠起来的组 id（只影响面板显示，不动文档） */
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(initiallyCollapsedGroupIds(doc.layers)),
   );
   const shown = dragOpacity ?? cur.opacity;
+  const shownFill = dragFill ?? (cur.fillOpacity ?? 100);
   const rows = buildRows(doc, collapsed);
 
   const toggleCollapse = (id: string) => {
@@ -744,6 +770,12 @@ function LayerTab({
     if (dragOpacity === null) return;
     onChange(setOpacity(doc, cur.id, dragOpacity), zh.layers.opacity);
     setDragOpacity(null);
+  };
+
+  const commitFill = () => {
+    if (dragFill === null) return;
+    onChange(setFillOpacity(doc, cur.id, dragFill), zh.layers.fillOpacity);
+    setDragFill(null);
   };
 
   return (
@@ -763,6 +795,7 @@ function LayerTab({
             ))}
           </select>
           <div className="ly-op" title={zh.layers.opacity}>
+            <span className="ly-op-label">{zh.layers.opacity}</span>
             <RangeInput
               className="ly-range"
               min={0}
@@ -777,6 +810,23 @@ function LayerTab({
               onDragEnd={commitOpacity}
             />
             <span className="ly-opacity">{shown}</span>
+          </div>
+          <div className="ly-op" title={zh.layers.fillOpacity}>
+            <span className="ly-op-label">{zh.layers.fillOpacity}</span>
+            <RangeInput
+              className="ly-range"
+              min={0}
+              max={100}
+              step={1}
+              value={shownFill}
+              aria-label={zh.layers.fillOpacity}
+              onChange={(v) => {
+                setDragFill(v);
+                onPreview(setFillOpacity(doc, cur.id, v));
+              }}
+              onDragEnd={commitFill}
+            />
+            <span className="ly-opacity">{shownFill}</span>
           </div>
         </div>
 
@@ -834,7 +884,7 @@ function LayerTab({
             collapsed={collapsed.has(layer.id)}
             onToggleCollapse={() => toggleCollapse(layer.id)}
             onChange={onChange}
-            onPreview={onPreview}
+            onSelectLayer={onSelectLayer}
             onContextMenu={onLayerContextMenu}
             onMaskContextMenu={onMaskContextMenu}
           />
@@ -2061,7 +2111,7 @@ interface RowProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onChange: (next: StrataDoc, label: string) => void;
-  onPreview: (next: StrataDoc) => void;
+  onSelectLayer: (layerId: string) => void;
   /** 行右键 / 蒙版缩略图右键（菜单浮层统一在 EditorShell） */
   onContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
   onMaskContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
@@ -2075,13 +2125,44 @@ function LayerRow({
   collapsed,
   onToggleCollapse,
   onChange,
-  onPreview,
+  onSelectLayer,
   onContextMenu,
   onMaskContextMenu,
 }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(layer.name);
   const isGroup = layer.kind === "group";
+
+  /** Ctrl+点击图层缩略图 = 把这一层的透明度载入为选区（PS 常用动作）。 */
+  const loadThumbSelection = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const mode = thumbnailSelectionMode(e);
+    if (!mode || !onChange) return;
+    e.stopPropagation();
+    const shape = layerToSelection(doc, layer.id);
+    if (!shape) return;
+    onChange(
+      setSelection(
+        doc,
+        mode === "new" ? shape : combineSelection(doc.selection, shape, mode),
+      ),
+      zh.panel.channelLoad,
+    );
+  };
+
+  /** Ctrl+点击蒙版缩略图 = 把蒙版灰度载入为选区。 */
+  const loadMaskSelection = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const mode = thumbnailSelectionMode(e);
+    if (!mode || !onChange || !layer.mask) return;
+    e.stopPropagation();
+    const shape = cloneSurface(layer.mask);
+    onChange(
+      setSelection(
+        doc,
+        mode === "new" ? shape : combineSelection(doc.selection, shape, mode),
+      ),
+      zh.panel.channelLoad,
+    );
+  };
 
   const commitName = () => {
     setEditing(false);
@@ -2099,7 +2180,7 @@ function LayerRow({
       role="option"
       aria-selected={on}
       aria-level={depth + 1}
-      onClick={() => onPreview(selectLayer(doc, layer.id))}
+      onClick={() => onSelectLayer(layer.id)}
       onContextMenu={(e) => onContextMenu?.(e, layer.id)}
     >
       {/* 缩进靠一段可伸缩的空白，子层往右让一格，一眼看出归属 */}
@@ -2138,12 +2219,18 @@ function LayerRow({
         <EyeIcon open={layer.visible} />
       </button>
 
-      <LayerThumb layer={layer} doc={doc} onChange={onChange} />
+      <LayerThumb
+        layer={layer}
+        doc={doc}
+        onChange={onChange}
+        onLoadSelection={loadThumbSelection}
+      />
 
       {layer.mask && (
         <MaskThumb
           layer={layer}
           doc={doc}
+          onLoadSelection={loadMaskSelection}
           onContextMenu={onMaskContextMenu}
         />
       )}
@@ -2245,10 +2332,12 @@ function LayerThumb({
   layer,
   doc,
   onChange,
+  onLoadSelection,
 }: {
   layer: StrataLayer;
   doc: StrataDoc;
   onChange?: (next: StrataDoc, label: string) => void;
+  onLoadSelection?: (e: React.MouseEvent<HTMLCanvasElement>) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const kind = layer.kind;
@@ -2284,7 +2373,16 @@ function LayerThumb({
   if (isVideoLayer(layer) && layer.video.frames.length > 1 && onChange) {
     return <FrameThumbStrip layer={layer} doc={doc} onChange={onChange} />;
   }
-  return <canvas ref={ref} width={36} height={36} className="ly-thumb" />;
+  return (
+    <canvas
+      ref={ref}
+      width={36}
+      height={36}
+      className="ly-thumb"
+      title={`${zh.panel.channelLoad} · Ctrl+Click / Shift+ / Alt− / Shift+Alt∩`}
+      onClick={onLoadSelection}
+    />
+  );
 }
 
 /** 视频层的分帧缩略图条：取样首尾 + 当前帧，点哪帧跳哪帧。 */
@@ -2344,10 +2442,12 @@ function FrameTile({ surface, docW, docH }: { surface: HTMLCanvasElement; docW: 
 function MaskThumb({
   layer,
   doc,
+  onLoadSelection,
   onContextMenu,
 }: {
   layer: StrataLayer;
   doc: StrataDoc;
+  onLoadSelection?: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   onContextMenu?: (e: ReactMouseEvent, layerId: string) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -2379,7 +2479,8 @@ function MaskThumb({
       width={36}
       height={36}
       className={layer.maskActive ? "ly-mask-thumb is-on" : "ly-mask-thumb is-off"}
-      title={layer.maskActive ? zh.layers.maskOff : zh.layers.maskOn}
+      title={`${layer.maskActive ? zh.layers.maskOff : zh.layers.maskOn} · ${zh.panel.channelLoad} · Ctrl+Click`}
+      onClick={onLoadSelection}
       onContextMenu={(e) => onContextMenu?.(e, layer.id)}
     />
   );

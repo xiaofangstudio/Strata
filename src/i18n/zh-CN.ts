@@ -157,6 +157,7 @@ export const zhCN = {
     shapeLine: "直线",
     shapeStar: "星形",
     leafPen: "柳叶笔",
+    pen: "钢笔",
     text: "文字",
     ruler: "标尺",
     count: "计数",
@@ -466,6 +467,8 @@ export const zhCN = {
     smudgeAngle: "角度",
     smudgeAngleHint: "旋转椭圆笔尖；圆度为 100% 时看不出变化",
     smudgeHint: "涂抹是「推」：从画布上取色，沿轨迹把颜色带开做过渡；不是模糊滤镜",
+    penPathHint: "钢笔：逐点落锚，双击或右键描边路径；按住 Alt 点击删掉上一个锚点",
+    strokeSimulatePressure: "模拟压力（两端收尖）",
     font: "字体",
     fontSize: "字号",
     lineHeight: "行距",
@@ -712,6 +715,7 @@ export const zhCN = {
     up: "上移",
     down: "下移",
     opacity: "不透明度",
+    fillOpacity: "填充",
     blend: "混合模式",
     empty: "没有图层",
     onlyOne: "至少保留一个图层",
@@ -1184,6 +1188,8 @@ touchpadNaturalScrollHint: "两指滚动按系统方向平移画布；关闭后�
     strokeOpacity: "不透明度",
     strokeInvalid: "描边宽度必须是大于 0 的整数",
     strokeDone: "已描边",
+    strokePath: "描边路径（画笔）",
+    deletePath: "删除路径",
     fillTitle: "填充",
     fillHint: "填满选区；没有选区时填满整个图层。锁定透明像素时只填已有像素。",
     fillColor: "颜色",
@@ -1481,6 +1487,16 @@ touchpadNaturalScrollHint: "两指滚动按系统方向平移画布；关闭后�
     badAxis: "翻转方向只能是水平或垂直",
     noSmart: "当前图层不是智能对象，无法栅格化",
     noExport: "宿主没有提供导出回调",
+  },
+
+  /** 崩溃恢复 / 会话恢复：自动恢复稿保存在应用私有目录，不覆盖正式工程。 */
+  recovery: {
+    title: "检测到自动恢复稿",
+    hint: "上次可能因崩溃或强制退出中断。恢复稿保存在应用私有目录，不会覆盖你的正式工程。",
+    restore: "恢复最近一份",
+    ignore: "忽略并清空",
+    restored: "已恢复自动保存的文档",
+    failed: "恢复失败",
   },
 };
 

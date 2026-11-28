@@ -15,6 +15,7 @@ import {
 } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { zh } from "../i18n";
+import { useTuningState } from "./hooks/useTuningState";
 import { currentPrefs } from "../stores/prefs";
 import {
   IMAGE_EXTENSIONS,
@@ -25,6 +26,7 @@ import {
   readFileBytes,
   writeFileBytes,
 } from "../engine/image";
+import { deleteRecoverySession } from "../engine/sessionRecovery";
 import { alignLayersByFeatures } from "../core/featureAlign";
 import { mergeAndTone } from "../engine/algos/hdr";
 import { seamLabels, multiband, type RoiImage } from "../engine/algos/panoramaBlend";
@@ -142,6 +144,8 @@ import {
   rasterizeSmartObject,
   newSmartObjectViaCopy,
   convertSmartObjectToLayers,
+  replaceLayerSurface,
+  replaceLayerMask,
   type StrokePosition,
 } from "../core/layerOps";
 import {
@@ -336,6 +340,8 @@ import { composeForDisplay, shrinkSurfaceForDisplay } from "../engine/displayCom
 import { asRaster } from "../engine/raster";
 import { cloneSurface, createSurface, mustCtx, readPixels, writePixels } from "../engine/surface";
 import { gaussianBlur } from "../engine/filters/kernels";
+import { samplePenPath, type PenPoint } from "../core/penPath";
+import { drawPenStroke } from "../engine/penStroke";
 import { blendWithSelection, toBuffer } from "../core/filterOps";
 import {
   DEFAULT_BRUSH,
@@ -680,6 +686,9 @@ export default function EditorShell({
   onPeekHistory,
 }: Props) {
   const prefs = usePrefs();
+  /** 原生 wheel 监听挂在 mount 时，偏好必须经 ref 读，否则「自然滚动」永远停在旧值。 */
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   const [tool, setTool] = useState<ToolId>("move");
   const [workspace, setWorkspace] = useState<WorkspaceId>("photo");
   const [fg, setFg] = useState("#17171c");
@@ -688,23 +697,56 @@ export default function EditorShell({
   const [gradientStyle, setGradientStyle] = useState<GradientStyle>("linear");
   /** 渐变反向：把起点色与终点色对调（不动全局前景 / 背景色） */
   const [gradientReverse, setGradientReverse] = useState(false);
-  // 画笔参数沿用上次的取值（记在偏好设置里），颜色永远跟随前景色
-  const [brush, setBrush] = useState<BrushSettings>(() => ({
+  // 画笔参数沿用上次的取值（记在偏好设置里），颜色永远跟随前景色。
+  //
+  // 拖动选项栏滑杆时每一帧都 setBrush 会让整棵编辑壳（菜单树、图层面板、
+  // 直方图、画布合成）跟着重渲染，这就是「随便拖个滑块就卡」的元凶。
+  // 这里把实时值写在 ref 上，松手那一刻才提交 state；滑杆自己的拇指仍然跟手。
+  const [brush, setBrushState] = useState<BrushSettings>(() => ({
     ...DEFAULT_BRUSH,
     ...prefs.brushDefaults,
   }));
+  const brushRef = useRef(brush);
+  useEffect(() => {
+    brushRef.current = brush;
+  }, [brush]);
+  const setBrush = useCallback(
+    (patch: Partial<BrushSettings> | ((b: BrushSettings) => BrushSettings)) => {
+      const prev = brushRef.current;
+      const next =
+        typeof patch === "function"
+          ? patch(prev)
+          : { ...prev, ...patch };
+      brushRef.current = next;
+      // 滑杆按下期间 App 会给 body 打 is-tuning；此时只更新 ref。
+      // 键盘 / 按钮 / 预设这类离散改动不在 is-tuning 中，直接提交。
+      // 选项栏回调几乎都是函数式更新，函数式也必须延迟，否则等于没优化。
+      if (document.body.classList.contains("is-tuning")) return;
+      setBrushState(next);
+    },
+    [],
+  );
+  useEffect(() => {
+    const commit = () => setBrushState(brushRef.current);
+    window.addEventListener("strata:tuning-commit", commit);
+    return () => window.removeEventListener("strata:tuning-commit", commit);
+  }, []);
   /** 修饰工具参数（仿制 / 修复 / 模糊 / 锐化 / 减淡 / 加深 / 海绵共用一套） */
-  const [retouch, setRetouch] = useState<RetouchSettings>(DEFAULT_RETOUCH);
+  const [retouch, setRetouch] = useTuningState<RetouchSettings>(DEFAULT_RETOUCH);
   /** 涂抹力度 / 角度：和画笔参数分开记，画笔预设换了也不改用户的推挤手感。 */
-  const [smudgeStrength, setSmudgeStrength] = useState(60);
-  const [smudgeAngle, setSmudgeAngle] = useState(0);
+  const [smudgeStrength, setSmudgeStrength] = useTuningState(60);
+  const [smudgeAngle, setSmudgeAngle] = useTuningState(0);
+  /** 钢笔描边路径：模拟压力默认开，和 PS「描边路径」勾选一致。 */
+  const [penSimulatePressure, setPenSimulatePressure] = useState(true);
+  const penPathRef = useRef<PenPoint[]>([]);
+  const penPathCursorRef = useRef<Point | null>(null);
   /** 调整画笔：调整类型 / Add-Subtract / 蒙版叠加染色 */
-  const [adjustBrush, setAdjustBrush] = useState<AdjustBrushSettings>(DEFAULT_ADJUST_BRUSH);
+  const [adjustBrush, setAdjustBrush] = useTuningState<AdjustBrushSettings>(DEFAULT_ADJUST_BRUSH);
   /** 形状工具参数（填充 / 描边 / 线宽），矩形 / 椭圆 / 直线共用一套 */
-  const [shape, setShape] = useState<ShapeSettings>(DEFAULT_SHAPE);
+  const [shape, setShape] = useTuningState<ShapeSettings>(DEFAULT_SHAPE);
   /** 仿制 / 修复的取样点（Alt + 单击设定），null 表示还没取样 */
   const [anchor, setAnchor] = useState<Point | null>(null);
-  const [tolerance, setTolerance] = useState(32);
+  const [tolerance, setTolerance] = useTuningState(32);
   /** 魔棒「对所有图层取样」：开着时按合成结果取色，而不是只看当前层 */
   const [sampleAllLayers, setSampleAllLayers] = useState(false);
   /** 通用右键菜单（画布 / 图层面板共用一个浮层） */
@@ -843,7 +885,7 @@ export default function EditorShell({
   /** 对齐到网格（视图 > 对齐到 > 网格） */
   const [snapGrid, setSnapGrid] = useState(false);
   /** 透视绘图辅助：灭点导线只作视图提示，端点吸附由绘制管线执行 */
-  const [perspective, setPerspective] = useState<PerspectiveState>(() =>
+  const [perspective, setPerspective] = useTuningState<PerspectiveState>(() =>
     perspectiveFor("off", 1, 1),
   );
   /** 洋葱皮：纯视图状态，切帧 / 开关都不写进文档，也不进撤销历史 */
@@ -1199,7 +1241,7 @@ export default function EditorShell({
   /** 选区组合方式（选项条的四态：新建 / 添加 / 减去 / 交叉） */
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("new");
   /** 羽化半径（像素），矩形 / 椭圆 / 套索用 */
-  const [feather, setFeather] = useState(0);
+  const [feather, setFeather] = useTuningState(0);
   /** 魔棒是否只取与落点相连的一片 */
   const [contiguous, setContiguous] = useState(true);
   /** 是否正在拉选区 / 裁剪框（驱动蚂蚁线浮层的动画只在拖动时开动） */
@@ -1217,7 +1259,7 @@ export default function EditorShell({
   /** 是否正在拖绘形状（驱动形状浮层的动画只在拖动时开动） */
   const [shapeDragging, setShapeDragging] = useState(false);
   /** 文字工具参数（字体 / 字号 / 行距 / 对齐 / 加粗斜体） */
-  const [textSet, setTextSet] = useState<TextSettings>(() => ({
+  const [textSet, setTextSet] = useTuningState<TextSettings>(() => ({
     ...DEFAULT_TEXT,
     size: prefs.typeSize,
   }));
@@ -1269,6 +1311,10 @@ export default function EditorShell({
   const panLiveRef = useRef({ x: 0, y: 0 });
   const stageRef = useRef<HTMLDivElement | null>(null);
   const panRafRef = useRef(0);
+  /** 滚轮 / 双指连续手势结束后才把实时值同步回 React，避免每帧重渲染整棵编辑壳。 */
+  const panCommitRef = useRef(0);
+  const zoomCommitRef = useRef(0);
+  const scheduleRenderRef = useRef<() => void>(() => {});
 
   /**
    * 显示合成的缩放比例（与 render 里同一套算法）。
@@ -1384,6 +1430,7 @@ export default function EditorShell({
     from: { x: number; y: number };
     to: { x: number; y: number };
   } | null>(null);
+  const gradPreviewRafRef = useRef(0);
   const moveRef = useRef({ dx: 0, dy: 0 });
   /** 正在拖的选区框 / 裁剪框；抬笔前只画浮层，不动文档 */
   const selRef = useRef<{
@@ -1476,8 +1523,17 @@ export default function EditorShell({
     setPan({ x: 0, y: 0 });
   }, [docW, docH]);
 
+  /**
+   * 缩放的实时值走 ref + CSS 变量，连续滚轮 / 捏合期间一次 React 重渲染都不做。
+   * 停手 120ms 才提交 scale state，供状态栏、坐标换算与面板读取。
+   */
   const zoom = useCallback((next: number) => {
-    setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, next)));
+    const v = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+    zoomLiveRef.current = v;
+    stageRef.current?.style.setProperty("--zoom-scale", String(v));
+    scheduleRenderRef.current();
+    window.clearTimeout(zoomCommitRef.current);
+    zoomCommitRef.current = window.setTimeout(() => setScale(v), 120);
   }, []);
 
   /**
@@ -1592,7 +1648,11 @@ export default function EditorShell({
     // 拖图层期间用按下时锁定的档位，别让自适应降档把整条缓存链抖散
     const cap =
       moveCapRef.current ?? (interactingRef.current ? CAP_STEPS[capIdxRef.current] : 1);
-    const dispScale = Math.min(cap, Math.max(0.06, scale * (window.devicePixelRatio || 1)));
+    // 实时缩放读 ref：连续滚轮 / 捏合时 state 还没提交，但画面必须跟手。
+    const dispScale = Math.min(
+      cap,
+      Math.max(0.06, zoomLiveRef.current * (window.devicePixelRatio || 1)),
+    );
     const compW = Math.max(1, Math.round(docW * dispScale));
     const compH = Math.max(1, Math.round(docH * dispScale));
 
@@ -1617,8 +1677,8 @@ export default function EditorShell({
      */
     const present = () => {
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round(docW * scale * dpr));
-      const h = Math.max(1, Math.round(docH * scale * dpr));
+      const w = Math.max(1, Math.round(docW * zoomLiveRef.current * dpr));
+      const h = Math.max(1, Math.round(docH * zoomLiveRef.current * dpr));
       if (c.width !== w) c.width = w;
       if (c.height !== h) c.height = h;
       const cx = mustCtx(c);
@@ -1993,6 +2053,7 @@ export default function EditorShell({
     // 连带 previewDoc / 各面板的 onPreview 一起换引用，白白多一轮重渲染
   }, []);
   gpuSettleRef.current = scheduleRender;
+  scheduleRenderRef.current = scheduleRender;
 
   /**
    * 拖动预览：只排一次重绘，**不碰 React 状态**。
@@ -2040,6 +2101,30 @@ export default function EditorShell({
     [markInteracting, scheduleRender],
   );
 
+  /**
+   * 渐变拖动预览：整笔只在预览 ref 上换 surface，松手才落库。
+   *
+   * 这里必须 cloneSurface 并换掉 layers 里的引用：显示合成按 canvas 引用缓存
+   * 缩小图，就地改旧 surface 会让主画布一直显示渐变前的内容（缩略图却是新的）。
+   */
+  const flushGradientPreview = useCallback(() => {
+    gradPreviewRafRef.current = 0;
+    const g = gradRef.current;
+    const act = activeLayer(doc);
+    if (!g || !act) return;
+    const [a, b] = gradientReverse ? [bg, fg] : [fg, bg];
+    const next = cloneSurface(act.surface);
+    gradientFill(next, g.from, g.to, a, b, gradientStyle, doc.selection);
+    previewDocRef.current = replaceLayerSurface(doc, act.id, next);
+    markInteracting();
+    scheduleRender();
+  }, [doc, fg, bg, gradientReverse, gradientStyle, markInteracting, scheduleRender]);
+
+  const scheduleGradientPreview = useCallback(() => {
+    if (gradPreviewRafRef.current) return;
+    gradPreviewRafRef.current = requestAnimationFrame(flushGradientPreview);
+  }, [flushGradientPreview]);
+
   /** 文档真正更新后，预览作废（否则会一直画着已经落库之前的那一帧）。 */
   useEffect(() => {
     previewDocRef.current = null;
@@ -2069,6 +2154,7 @@ export default function EditorShell({
     el.style.setProperty("--pan-x", `${pan.x}px`);
     el.style.setProperty("--pan-y", `${pan.y}px`);
     el.style.setProperty("--view-rot", `${rotLiveRef.current}deg`);
+    el.style.setProperty("--zoom-scale", String(zoomLiveRef.current));
   }, [pan]);
 
   /** 只改 DOM 的平移（拖动过程中每帧调）。 */
@@ -2081,7 +2167,16 @@ export default function EditorShell({
       el.style.setProperty("--pan-x", `${panLiveRef.current.x}px`);
       el.style.setProperty("--pan-y", `${panLiveRef.current.y}px`);
       el.style.setProperty("--view-rot", `${rotLiveRef.current}deg`);
+      el.style.setProperty("--zoom-scale", String(zoomLiveRef.current));
     });
+  }, []);
+
+  /** 连续手势停手 120ms 后把 ref 里的实时值写回 state，供面板 / 坐标换算读取。 */
+  const commitGestureView = useCallback(() => {
+    window.clearTimeout(panCommitRef.current);
+    panCommitRef.current = window.setTimeout(() => {
+      setPan({ ...panLiveRef.current });
+    }, 120);
   }, []);
 
   // 切换文档时还原它自己的视图；首次打开则适应窗口。
@@ -2110,6 +2205,9 @@ export default function EditorShell({
   useEffect(
     () => () => {
       if (renderRafRef.current) cancelAnimationFrame(renderRafRef.current);
+      window.clearTimeout(panCommitRef.current);
+      window.clearTimeout(zoomCommitRef.current);
+      if (gradPreviewRafRef.current) cancelAnimationFrame(gradPreviewRafRef.current);
     },
     [],
   );
@@ -2602,7 +2700,9 @@ export default function EditorShell({
       !freeActive &&
       !polyPts &&
       !radial &&
-      !perspectiveActive
+      !perspectiveActive &&
+      (tool !== "pen" ||
+        (penPathRef.current.length === 0 && !penPathCursorRef.current))
     ) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, c.width, c.height);
@@ -2678,6 +2778,47 @@ export default function EditorShell({
         const k = dpr * scale;
         ctx.setTransform(k, 0, 0, k, 0, 0);
         drawShape(c, sp);
+        painted = true;
+        raf = requestAnimationFrame(paint);
+        return;
+      }
+
+      // 钢笔路径回显：平滑曲线 + 锚点 + 到光标的橡皮筋，全部只在浮层上
+      const penPts = penPathRef.current;
+      if (tool === "pen" && penPts.length > 0) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, c.width, c.height);
+        const k = dpr * scale;
+        ctx.setTransform(k, 0, 0, k, 0, 0);
+        const u = 1 / scale;
+        ctx.save();
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1.6 * u;
+        ctx.fillStyle = "#ffffff";
+        const curve = samplePenPath(penPts);
+        ctx.beginPath();
+        if (curve.length > 0) {
+          ctx.moveTo(curve[0].x, curve[0].y);
+          for (let i = 1; i < curve.length; i += 1) ctx.lineTo(curve[i].x, curve[i].y);
+        }
+        ctx.stroke();
+        for (const anchor of penPts) {
+          ctx.beginPath();
+          ctx.rect(anchor.x - 3 * u, anchor.y - 3 * u, 6 * u, 6 * u);
+          ctx.fill();
+          ctx.stroke();
+        }
+        const cursor = penPathCursorRef.current;
+        if (cursor) {
+          const tail = penPts[penPts.length - 1];
+          ctx.setLineDash([4 * u, 4 * u]);
+          ctx.globalAlpha = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(tail.x, tail.y);
+          ctx.lineTo(cursor.x, cursor.y);
+          ctx.stroke();
+        }
+        ctx.restore();
         painted = true;
         raf = requestAnimationFrame(paint);
         return;
@@ -3415,6 +3556,15 @@ export default function EditorShell({
         onCommit({ ...doc, layers, dirty: true }, zh.tools.magicEraser);
         return;
       }
+      if (tool === "pen") {
+        // 钢笔逐点落锚：不进文档、不入历史，双击 / 右键才描边落库。
+        const q = snapPoint(p.x, p.y);
+        if (e.altKey && penPathRef.current.length > 0) penPathRef.current.pop();
+        else penPathRef.current.push(q);
+        penPathCursorRef.current = q;
+        scheduleRender();
+        return;
+      }
       if (isShapeTool(tool)) {
         const leaf = tool === "leafPen";
         shapeRef.current = {
@@ -3540,10 +3690,10 @@ export default function EditorShell({
         return;
       }
       if (tool === "bucket") {
-        if (
-          floodFill(act.surface, p.x, p.y, fg, tolerance, paintingMask(doc, act), contiguous)
-        ) {
-          onCommit({ ...doc, dirty: true }, zh.tools.bucket);
+        // 与渐变同理：floodFill 就地改像素，必须换引用，否则主画布命中旧缩小缓存。
+        const next = cloneSurface(act.surface);
+        if (floodFill(next, p.x, p.y, fg, tolerance, paintingMask(doc, act), contiguous)) {
+          onCommit({ ...replaceLayerSurface(doc, act.id, next), dirty: true }, zh.tools.bucket);
         }
         return;
       }
@@ -3725,6 +3875,13 @@ export default function EditorShell({
         if (hex && hex.toLowerCase() !== fg.toLowerCase()) setFg(hex);
         return;
       }
+      // 钢笔：橡皮筋跟到光标，只改 ref + 重绘浮层
+      if (tool === "pen") {
+        const raw = docPoint(e);
+        penPathCursorRef.current = snapPoint(raw.x, raw.y);
+        scheduleRender();
+        return;
+      }
       // 选区 / 裁剪框：只更新 ref，由浮层那支 rAF 现读现画，不进历史也不重渲染
       const sel = selRef.current;
       if (sel) {
@@ -3855,6 +4012,7 @@ export default function EditorShell({
       const g = gradRef.current;
       if (g) {
         gradRef.current = { from: g.from, to: docPoint(e) };
+        scheduleGradientPreview();
         return;
       }
       const start = dragRef.current;
@@ -3864,7 +4022,7 @@ export default function EditorShell({
         scheduleRender();
       }
     },
-    [docPoint, docXY, doc, emitRecord, fg, brush.penPressure, scheduleRender, snapPoint, snapPerspective, syncCursor, tool],
+    [docPoint, docXY, doc, emitRecord, fg, brush.penPressure, scheduleRender, scheduleGradientPreview, snapPoint, snapPerspective, syncCursor, tool],
   );
 
   const onUp = useCallback((e?: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -3968,9 +4126,11 @@ export default function EditorShell({
     // 涂抹：整笔只用一张增量画布，抬笔时一次性盖回本层，保留一步可撤销
     const sm = smudgeRef.current;
     if (sm) {
-      sm.finish(act.surface);
+      // finish 就地改像素；换引用才能让显示合成重新缩图。
+      const next = cloneSurface(act.surface);
+      sm.finish(next);
       resetGesture();
-      onCommit({ ...doc, dirty: true }, zh.tools.smudge);
+      onCommit({ ...replaceLayerSurface(doc, act.id, next), dirty: true }, zh.tools.smudge);
       return;
     }
 
@@ -4079,15 +4239,20 @@ export default function EditorShell({
         render();
         return;
       }
-      // 蒙版涂抹只认蒙版，其余笔画被当前选区限制范围
-      s.finish(
-        maskEdit && act.mask ? act.mask : act.surface,
-        maskEdit ? null : paintingMask(doc, act),
-      );
+      // 蒙版涂抹只认蒙版，其余笔画被当前选区限制范围。
+      // finish() 就地改画布：必须 clone 并换引用，否则显示合成的按引用缩小缓存
+      // 会继续画落笔前的旧缩略图 —— 表现为「缩略图变了，主画布没变」。
+      const target = maskEdit && act.mask ? act.mask : act.surface;
+      const next = cloneSurface(target);
+      s.finish(next, maskEdit ? null : paintingMask(doc, act));
+      const updated =
+        maskEdit && act.mask
+          ? replaceLayerMask(doc, act.id, next)
+          : replaceLayerSurface(doc, act.id, next);
       // 解除 Shift 直线锁定（落点已在 onDown/onMove 记录）
       lineLockRef.current = false;
       resetGesture();
-      onCommit({ ...doc, dirty: true }, zh.tools[tool]);
+      onCommit({ ...updated, dirty: true }, zh.tools[tool]);
       return;
     }
 
@@ -4113,10 +4278,16 @@ export default function EditorShell({
 
     const g = gradRef.current;
     if (g) {
+      if (gradPreviewRafRef.current) {
+        cancelAnimationFrame(gradPreviewRafRef.current);
+        gradPreviewRafRef.current = 0;
+      }
       const [a, b] = gradientReverse ? [bg, fg] : [fg, bg];
-      gradientFill(act.surface, g.from, g.to, a, b, gradientStyle, doc.selection);
+      // 换 surface 引用，让显示合成的按引用缩小缓存必然失效。
+      const next = cloneSurface(act.surface);
+      gradientFill(next, g.from, g.to, a, b, gradientStyle, doc.selection);
       resetGesture();
-      onCommit({ ...doc, dirty: true }, zh.tools.gradient);
+      onCommit({ ...replaceLayerSurface(doc, act.id, next), dirty: true }, zh.tools.gradient);
       return;
     }
 
@@ -4313,7 +4484,11 @@ export default function EditorShell({
   // 早期是 `zoom(scale * ZOOM_STEP)` 一次性跳变；现在用 RAF 插值到目标倍率，
   // 连续滚轮会从「动画中的实时值」接着走，不会一顿一顿。
   const wheelZoomRef = useRef<(dir: number) => void>(() => {});
-  zoomLiveRef.current = scale;
+  // scale state 提交后才回写实时值：手势中不能让一次无关重渲染把倍率拽回去。
+  useEffect(() => {
+    zoomLiveRef.current = scale;
+    stageRef.current?.style.setProperty("--zoom-scale", String(scale));
+  }, [scale]);
   wheelZoomRef.current = (dir: number) => {
     const target = zoomSteps(zoomLiveRef.current, dir);
     if (motionMode() !== "full") {
@@ -4368,16 +4543,55 @@ export default function EditorShell({
       }
       // 触控板两指滚动（像素模式）原样映射；鼠标滚轮（行/页模式）按每行约 16px 换算。
       const unit = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? 1 : 16;
-      const dir = prefs.touchpadNaturalScroll === false ? -1 : 1;
-      setPan((p) => ({
-        x: p.x - dir * (e.shiftKey ? e.deltaY : e.deltaX) * unit,
-        y: p.y - dir * (e.shiftKey ? 0 : e.deltaY) * unit,
-      }));
+      const dir = prefsRef.current.touchpadNaturalScroll === false ? -1 : 1;
+      // 滚动时只改 ref + CSS：以前这里每帧 setPan，整棵编辑壳跟着重渲染，
+      // 触控板连续滚动就是一格一格地卡。松手 120ms 后再落 state。
+      panLiveRef.current = {
+        x: panLiveRef.current.x - dir * (e.shiftKey ? e.deltaY : e.deltaX) * unit,
+        y: panLiveRef.current.y - dir * (e.shiftKey ? 0 : e.deltaY) * unit,
+      };
+      applyPanDom();
+      commitGestureView();
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       vp.removeEventListener("wheel", onWheel);
       if (zoomRafRef.current !== null) cancelAnimationFrame(zoomRafRef.current);
+    };
+  }, [applyPanDom, commitGestureView]);
+
+  /**
+   * 交互期性能档：按下画布 / 触摸板滚动时临时关掉玻璃模糊与阴影，
+   * 让 WebView2 把每一帧都花在画布合成上，而不是重算十几块 backdrop-filter。
+   */
+  useEffect(() => {
+    let settle = 0;
+    const on = () => {
+      window.clearTimeout(settle);
+      document.body.classList.add("is-interacting");
+    };
+    const offSoon = () => {
+      window.clearTimeout(settle);
+      settle = window.setTimeout(
+        () => document.body.classList.remove("is-interacting"),
+        180,
+      );
+    };
+    const down = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".editor-canvas, .editor-viewport, .ly-row, .dock-panel")) on();
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", offSoon, true);
+    window.addEventListener("pointercancel", offSoon, true);
+    window.addEventListener("wheel", on, { passive: true });
+    return () => {
+      window.clearTimeout(settle);
+      document.body.classList.remove("is-interacting");
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", offSoon, true);
+      window.removeEventListener("pointercancel", offSoon, true);
+      window.removeEventListener("wheel", on);
     };
   }, []);
 
@@ -4411,7 +4625,12 @@ export default function EditorShell({
       const target = zoomLiveRef.current * d.scale;
       zoomLiveRef.current = target;
       zoom(target);
-      setPan((p) => ({ x: p.x + d.dx, y: p.y + d.dy }));
+      panLiveRef.current = {
+        x: panLiveRef.current.x + d.dx,
+        y: panLiveRef.current.y + d.dy,
+      };
+      applyPanDom();
+      commitGestureView();
       // 双指夹角变化 → 视图旋转（不改像素）；小于 0.3° 的抖动忽略。
       if (Math.abs(d.rotationDeg) > 0.3) {
         setViewRotation(rotLiveRef.current + d.rotationDeg);
@@ -4435,7 +4654,7 @@ export default function EditorShell({
       vp.removeEventListener("pointerup", onUp, true);
       vp.removeEventListener("pointercancel", onUp, true);
     };
-  }, [setViewRotation, zoom]);
+  }, [setViewRotation, zoom, applyPanDom, commitGestureView]);
 
   /* ---------------------------------------------------------------- 命令 */
 
@@ -4763,6 +4982,8 @@ export default function EditorShell({
       if (typeof target !== "string") return;
       const bytes = await encodeProject(doc);
       await writeFileBytes(target, bytes);
+      // 正式工程落盘成功：这一份恢复稿就没用了，清掉，别让下次启动误报。
+      void deleteRecoverySession(`sess-${doc.id}`);
       onPreview({ ...doc, sourcePath: target, dirty: false });
       setToast(zh.editor.projectSaved);
     } catch (e) {
@@ -6212,6 +6433,56 @@ export default function EditorShell({
     [doc, onCommit],
   );
 
+  /**
+   * 钢笔「描边路径」：按当前前景色与画笔大小把路径烙到活动像素层。
+   * 选区 / Alpha Lock 仍走 paintingMask，绝不绕开这一唯一入口。
+   */
+  const strokePenPath = useCallback(() => {
+    const pts = penPathRef.current;
+    if (pts.length < 2) {
+      setToast(zh.options.penPathHint);
+      return;
+    }
+    const act = activeLayer(doc);
+    if (!act || act.kind !== "pixel") {
+      setError(zh.selection.noPixelLayer);
+      return;
+    }
+    const tmp = createSurface(doc.width, doc.height);
+    drawPenStroke(tmp, pts, {
+      color: fg,
+      size: brush.size,
+      flow: brush.flow,
+      simulatePressure: penSimulatePressure,
+    });
+    const mask = paintingMask(doc, act);
+    if (mask) {
+      const tctx = mustCtx(tmp);
+      tctx.save();
+      tctx.globalCompositeOperation = "destination-in";
+      tctx.drawImage(mask, 0, 0);
+      tctx.restore();
+    }
+    const next = cloneSurface(act.surface);
+    mustCtx(next).drawImage(tmp, 0, 0);
+    penPathRef.current = [];
+    penPathCursorRef.current = null;
+    scheduleRender();
+    onCommit(
+      { ...replaceLayerSurface(doc, act.id, next), dirty: true },
+      zh.dialog.strokePath,
+    );
+  }, [
+    doc,
+    fg,
+    brush.size,
+    brush.flow,
+    penSimulatePressure,
+    paintingMask,
+    scheduleRender,
+    onCommit,
+  ]);
+
   /** 编辑 > 填充：确认对话框后落库；快捷键仍按 PS 习惯直接用前景 / 背景色满不透明填充。 */
   const submitFill = useCallback(() => {
     if (!fillDialog) return;
@@ -6601,13 +6872,64 @@ export default function EditorShell({
                 ["色彩范围…", "select.colorRange"],
               ] as MenuRow);
         }
-        // 其余工具：PhotoCraft 对画笔等工具不弹画布菜单
-        return null;
+        // 绘画工具在画布上右键也必须弹菜单：以前这里返回 null，
+        // 只剩 WebView2 的原生菜单，用户就以为「我们根本没有右键菜单」。
+        return [
+          ["撤销", "edit.undo"],
+          ["重做", "edit.redo"],
+          null,
+          ["拷贝", "edit.copy"],
+          ["剪切", "edit.cut"],
+          ["粘贴", "edit.paste"],
+          null,
+          ["全选", "select.all"],
+          ["取消选择", "select.deselect"],
+          null,
+          ["色阶…", "image.adjustments.levels"],
+          ["曲线…", "image.adjustments.curves"],
+          ["色相/饱和度…", "image.adjustments.hueSaturation"],
+          null,
+          ["适合屏幕", "view.fitOnScreen"],
+          ["100%", "view.actualPixels"],
+        ] as MenuRow;
       })();
       if (!rows) return;
-      setCtxMenu({ x: e.clientX, y: e.clientY, entries: entriesFromRows(rows) });
+      const entries = entriesFromRows(rows);
+      if (penPathRef.current.length >= 2) {
+        entries.unshift({
+          id: "pen.strokePath",
+          label: zh.dialog.strokePath,
+          onSelect: strokePenPath,
+        });
+        entries.push(
+          { kind: "sep" },
+          {
+            id: "pen.deletePath",
+            label: zh.dialog.deletePath,
+            onSelect: () => {
+              penPathRef.current = [];
+              penPathCursorRef.current = null;
+              scheduleRender();
+            },
+          },
+        );
+      }
+      setCtxMenu({ x: e.clientX, y: e.clientY, entries });
     },
-    [tool, hasSelection, freeActive, entriesFromRows, docXY, scale, extras, showGuides, guides, guidesLocked],
+    [
+      tool,
+      hasSelection,
+      freeActive,
+      entriesFromRows,
+      docXY,
+      scale,
+      extras,
+      showGuides,
+      guides,
+      guidesLocked,
+      strokePenPath,
+      scheduleRender,
+    ],
   );
 
   /**
@@ -10815,6 +11137,8 @@ export default function EditorShell({
             onRetouch={(patch) => setRetouch((r) => ({ ...r, ...patch }))}
             smudgeStrength={smudgeStrength}
             onSmudgeStrength={setSmudgeStrength}
+            penSimulatePressure={penSimulatePressure}
+            onPenSimulatePressure={setPenSimulatePressure}
             smudgeAngle={smudgeAngle}
             onSmudgeAngle={setSmudgeAngle}
             adjustBrush={adjustBrush}
@@ -10883,9 +11207,10 @@ export default function EditorShell({
               ref={stageRef}
               className="editor-stage"
               style={{
-                // 像素长宽比校正：横向拉伸显示（像素本身不变）
-                width: docW * scale * (aspectCorrection ? pixelAspect : 1),
-                height: docH * scale,
+                // 像素长宽比校正：横向拉伸显示（像素本身不变）。
+                // 缩放走 CSS 变量：手势中每帧只改变量，不重渲染整棵编辑壳。
+                width: `calc(${docW * (aspectCorrection ? pixelAspect : 1)}px * var(--zoom-scale, 1))`,
+                height: `calc(${docH}px * var(--zoom-scale, 1))`,
                 // 平移走 CSS 变量：拖动时只改变量、不重渲染；松手才同步回 state
                 transform: `translate(var(--pan-x, 0px), var(--pan-y, 0px)) rotate(var(--view-rot, 0deg))${
                   viewFlipped ? " scaleX(-1)" : ""
@@ -10911,6 +11236,12 @@ export default function EditorShell({
                 onPointerCancel={onUp}
                 onPointerLeave={hideCursor}
                 onDoubleClick={(e) => {
+                  // 钢笔：双击收尾并描边，和 PS 的「结束路径」手感一致
+                  if (tool === "pen" && penPathRef.current.length >= 2) {
+                    e.preventDefault();
+                    strokePenPath();
+                    return;
+                  }
                   // 双击文本层 → 进入该层的文字编辑（PS 的习惯）
                   const rect = e.currentTarget.getBoundingClientRect();
                   const x = (e.clientX - rect.left) / scale;
@@ -11351,6 +11682,11 @@ export default function EditorShell({
               doc={doc}
               onChange={onCommit}
               onPreview={previewDoc}
+              // 切换活动层必须写回文档状态，不能只写画布预览 ref。
+              // 用 props.onPreview（App.preview → setDocs）更新状态但不入撤销栈。
+              onSelectLayer={(id) => {
+                if (doc.activeLayerId !== id) onPreview(selectLayer(doc, id));
+              }}
               maskEdit={maskEdit}
               onMaskEdit={setMaskEdit}
               channelVis={channelVis}

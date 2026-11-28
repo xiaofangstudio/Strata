@@ -11,6 +11,7 @@ use tauri::{Emitter, Manager};
 
 mod exr;
 mod wia;
+mod session;
 // 移植自 ArtCraft PhotoCraft 的纯 Rust RAW 解码与 ICC 色彩管理模块。
 // 这两个库自带大量本应用暂未用到的公开 API，抑制移植副本的死代码告警。
 #[allow(dead_code, unused_imports)]
@@ -54,6 +55,56 @@ fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 fn write_file_bytes(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| format!("写入文件失败：{e}"))
+}
+
+/// 原子写用户选择的正式文件：先写同目录 tmp，再 rename 覆盖目标。
+///
+/// 工程 / 导出都走这里，避免「写到一半崩溃留下一份损坏文件」。
+#[tauri::command]
+fn write_file_bytes_atomic(path: String, data: Vec<u8>) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "目标路径没有父目录".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    let stem = target
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "strata".to_string());
+    let ext = target
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = parent.join(format!(
+        ".{stem}.tmp-{}-{}.{ext}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default()
+    ));
+    let finish = |result: Result<(), String>| -> Result<(), String> {
+        let _ = fs_extra_like_remove(&tmp);
+        result
+    };
+    if let Err(e) = std::fs::write(&tmp, &data) {
+        return finish(Err(format!("写入临时文件失败：{e}")));
+    }
+    if target.exists() {
+        if let Err(e) = std::fs::remove_file(target) {
+            return finish(Err(format!("移除旧文件失败：{e}")));
+        }
+    }
+    match std::fs::rename(&tmp, target) {
+        Ok(()) => Ok(()),
+        Err(e) => finish(Err(format!("落盘失败：{e}"))),
+    }
+}
+
+/// 兼容写法的小 helper：`std::fs::remove_file` 直接用即可，这里只是收拢错误类型。
+fn fs_extra_like_remove(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::remove_file(path)
 }
 
 /// 单个文件的属性。开始页面「最近文件」用它显示文件真实修改时间与体积。
@@ -263,6 +314,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
+            write_file_bytes_atomic,
             local_app_data,
             files_stat,
             quit_app,
@@ -270,6 +322,11 @@ pub fn run() {
             window_frost_acrylic,
             launch_intent,
             list_dir,
+            session::session_write,
+            session::session_list,
+            session::session_read,
+            session::session_delete,
+            session::session_clear,
             handoff::send_image_to_groma,
             exr::exr_part_info,
             exr::exr_read_all,

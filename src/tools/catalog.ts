@@ -25,6 +25,7 @@ export type ToolId =
   | "shapeLine"
   | "shapeStar"
   | "leafPen"
+  | "pen"
   | "text"
   | "crop"
   | "eyedropper"
@@ -98,6 +99,8 @@ export const TOOLS: ToolDef[] = [
   { id: "shapeStar", shortcut: "U", group: "shape", ready: true },
   // 柳叶笔：拖出弧线自动闭合成色块，大面积铺色用；与形状工具共用 U 循环
   { id: "leafPen", shortcut: "U", group: "shape", ready: true },
+  // 钢笔：逐点落锚，双击 / 右键描边路径，支持模拟压力
+  { id: "pen", shortcut: "P", group: "shape", ready: true },
 
   { id: "text", shortcut: "T", group: "text", ready: true },
 
@@ -177,6 +180,11 @@ export function usesBrush(id: ToolId): boolean {
 /** 涂抹工具：取样当前画布颜色沿轨迹推移，不是画笔也不是修饰工具。 */
 export function isSmudgeTool(id: ToolId): boolean {
   return id === "smudge";
+}
+
+/** 钢笔：逐点落锚、双击描边，不走形状拖拽也不走画笔连续笔迹。 */
+export function isPenTool(id: ToolId): boolean {
+  return id === "pen";
 }
 
 /** 调整画笔：笔迹进调整层蒙版，不碰图层像素。 */

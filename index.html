@@ -6,7 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <title>Strata</title>
   </head>
-  <body>
+  <!-- 从页面第一帧就禁掉网页原生右键；自定义右键菜单仍由 React 正常接管。 -->
+  <body oncontextmenu="return false">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

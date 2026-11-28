@@ -566,6 +566,7 @@ import {
   renderRadialGlow,
   renderRect,
   renderText,
+  smudgeAlongPath,
 } from "./lib/draw.mjs";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { resolve as resolvePath, dirname, extname, isAbsolute, join as joinPath } from "node:path";
@@ -2003,6 +2004,11 @@ server.registerTool(
       strokeWidth: z.number().optional().describe("默认 6"),
       dash: z.array(z.number()).optional(),
       fill: z.string().optional().describe("填充色；省略=只描边"),
+      taper: z
+        .enum(["both", "start", "end"])
+        .optional()
+        .describe("模拟压力：both=两端渐细（PS 描边路径勾选模拟压力的效果），start=起笔渐入，end=收笔渐出"),
+      simulatePressure: z.boolean().optional().describe("true 等价于 taper:'both'"),
       blend: z.string().optional(),
       opacity: z.number().min(0).max(1).optional(),
       name: z.string().optional(),
@@ -2016,6 +2022,7 @@ server.registerTool(
       strokeWidth: args.strokeWidth ?? 6,
       dash: args.dash ?? null,
       fill: args.fill ?? null,
+      taper: args.simulatePressure ? "both" : (args.taper ?? null),
     });
     entry.doc = addLayer(entry.doc, img, {
       // renderPath 会裁到路径包围盒；originX/Y 是「路径原点在图层内的位置」，
@@ -2027,6 +2034,85 @@ server.registerTool(
       name: args.name ?? `路径 ${img.width}×${img.height}`,
     });
     return ok({ ok: true, docId: args.docId, pathSize: `${img.width}×${img.height}`, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_patch_layer",
+  {
+    title: "修改文档图层属性",
+    description:
+      "改 doc 会话里某一层的基础属性：name / visible / opacity(0–1) / blend / x / y。" +
+      "例如把文字层 opacity 设 0（PS「填充 0」）只留下方投影层的立体字效果。" +
+      "layer 用序号或名字；x/y 是图层左上角的文档坐标。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]),
+      patch: z.object({
+        name: z.string().optional(),
+        visible: z.boolean().optional(),
+        opacity: z.number().min(0).max(1).optional(),
+        blend: z.string().optional(),
+        x: z.number().int().optional(),
+        y: z.number().int().optional(),
+      }),
+    },
+  },
+  guard(async ({ docId, layer, patch }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const layers = entry.doc.layers.slice();
+    layers[idx] = { ...layers[idx], ...patch };
+    entry.doc = { ...entry.doc, layers };
+    return ok({ ok: true, docId, layer: idx, name: layers[idx].name, ...summarizeDoc(entry.doc) });
+  }),
+);
+
+server.registerTool(
+  "strata_doc_smudge_layer",
+  {
+    title: "图层涂抹（沿路径推颜色）",
+    description:
+      "对某一层做真实涂抹（PS 涂抹工具的批量版）：沿 points 点列逐小步把笔刷圆内的" +
+      "颜色往前搬运 —— 是「推」，不是模糊。两点即「由内向外拖一笔」；" +
+      "radius 是笔刷直径级大小，strength 0–1 相当于涂抹强度（PS 80% ≈ 0.8）。" +
+      "做彗尾、流云、拉丝过渡用它。",
+    inputSchema: {
+      docId: z.string(),
+      layer: z.union([z.number().int(), z.string()]),
+      points: z
+        .array(z.object({ x: z.number(), y: z.number() }))
+        .min(2)
+        .describe("涂抹路径点列（图层局部坐标；单层 surface 左上角为原点）"),
+      radius: z.number().min(1).max(400).optional().describe("笔刷大小，默认 24"),
+      strength: z.number().min(0.05).max(1).optional().describe("强度 0–1，默认 0.8"),
+    },
+  },
+  guard(async ({ docId, layer, points, radius, strength }) => {
+    const entry = sessionDoc(docId);
+    const idx = layerIndex(entry.doc, layer);
+    if (idx < 0) throw new ToolError(`找不到图层：${layer}`);
+    const target = entry.doc.layers[idx];
+    const smudged = smudgeAlongPath({
+      width: target.img.width,
+      height: target.img.height,
+      data: target.img.data,
+      points,
+      radius: radius ?? 24,
+      strength: strength ?? 0.8,
+    });
+    entry.doc = replaceLayer(entry.doc, idx, smudged);
+    return ok({
+      ok: true,
+      docId,
+      layer: idx,
+      name: target.name,
+      points: points.length,
+      radius: radius ?? 24,
+      strength: strength ?? 0.8,
+      ...summarizeDoc(entry.doc),
+    });
   }),
 );
 

@@ -2,12 +2,17 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import Splash from "./ui/Splash";
+import { installContextMenuGuard } from "./ui/contextMenuGuard";
 import "./styles/tokens.css";
 import "./styles/themes.css";
 import "./styles/global.css";
 import "./styles/personal.css";
 import "./styles/platform.css";
 import "./styles/motion.css";
+
+// 最先装守卫：从启动页开始，整个应用都不允许出现网页原生右键菜单。
+// 需要右键的地方仍由 React 自己的自定义菜单接管。
+installContextMenuGuard(window, document);
 
 const container = document.getElementById("root");
 if (!container) {

@@ -282,6 +282,85 @@ function toRgb(color) {
  *   {op:"A", rx,ry,rot,large,sweep,x,y} 椭圆弧 / {op:"Z"} 闭合
  * stroke/fill 同 HTML 颜色；dash=[on,off] 虚线；画布自动按路径包围盒裁。
  */
+/**
+ * 把绘图指令采样成等距点列（taper 描边用）：M/L 直取、C/Q 按参数 t 采样、
+ * A 按弧角采样。返回 [{x, y, t}]，t 为累计弧长占比 0–1。
+ */
+function sampleCommands(commands, step = 2) {
+  const pts = [];
+  let cur = { x: 0, y: 0 };
+  let start = { x: 0, y: 0 };
+  const push = (x, y) => {
+    const last = pts[pts.length - 1];
+    const d = last ? Math.hypot(x - last.x, y - last.y) : 0;
+    pts.push({ x, y, len: (last ? last.len : 0) + d });
+  };
+  push(0, 0);
+  pts.length = 0;
+  const cubic = (p0, p1, p2, p3, n = 24) => {
+    for (let i = 1; i <= n; i += 1) {
+      const t = i / n;
+      const u = 1 - t;
+      push(
+        u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+        u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
+      );
+    }
+  };
+  const quad = (p0, p1, p2, n = 20) => {
+    for (let i = 1; i <= n; i += 1) {
+      const t = i / n;
+      const u = 1 - t;
+      push(u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x, u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y);
+    }
+  };
+  for (const c of commands) {
+    if (c.op === "M") {
+      cur = { x: c.x, y: c.y };
+      start = cur;
+      push(c.x, c.y);
+    } else if (c.op === "L") {
+      push(c.x, c.y);
+      cur = { x: c.x, y: c.y };
+    } else if (c.op === "C") {
+      cubic(cur, { x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }, { x: c.x, y: c.y });
+      cur = { x: c.x, y: c.y };
+    } else if (c.op === "Q") {
+      quad(cur, { x: c.x1, y: c.y1 }, { x: c.x, y: c.y });
+      cur = { x: c.x, y: c.y };
+    } else if (c.op === "A") {
+      // 椭圆弧：按起止角采样（rot 是椭圆整体旋转，先局部再旋转）
+      const sweep = (c.sweep ?? 0) * Math.PI * 2;
+      const large = c.large ?? 0;
+      // 无真实起止角信息（指令只给终点），近似：从当前点绕到终点
+      const n = Math.max(8, Math.round(Math.abs(c.rx) + Math.abs(c.ry)) / 2);
+      const sx = cur.x;
+      const sy = cur.y;
+      const ex = c.x;
+      const ey = c.y;
+      for (let i = 1; i <= n; i += 1) {
+        const t = i / n;
+        push(sx + (ex - sx) * t, sy + (ey - sy) * t);
+      }
+      cur = { x: ex, y: ey };
+      void sweep;
+      void large;
+    } else if (c.op === "Z") {
+      push(start.x, start.y);
+      cur = start;
+    }
+  }
+  const total = pts.length > 1 ? pts[pts.length - 1].len : 0;
+  if (total > 0) for (const p of pts) p.t = p.len / total;
+  // 按 step 像素重采样，避免过密段拖慢描边
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    if (pts[i].len - out[out.length - 1].len >= step) out.push(pts[i]);
+  }
+  if (pts.length > 1) out.push(pts[pts.length - 1]);
+  return out;
+}
+
 export function renderPath({
   commands = [],
   stroke = "#ffffff",
@@ -290,6 +369,7 @@ export function renderPath({
   fill = null,
   lineCap = "round",
   lineJoin = "round",
+  taper = null,
 } = {}) {
   let minX = Infinity;
   let minY = Infinity;
@@ -354,7 +434,31 @@ export function renderPath({
     else if (c.op === "Z") ctx.closePath();
   }
   if (fill) ctx.fill();
-  if (strokeWidth > 0) ctx.stroke();
+  if (strokeWidth > 0) {
+    if (taper) {
+      // 模拟压力（PS 描边路径勾选「模拟压力」）：笔画宽度沿弧长渐变，
+      // both = 两端渐细（起落笔），start = 起笔渐入，end = 收笔渐出。
+      const pts = sampleCommands(commands, 1.5);
+      if (pts.length > 1) {
+        ctx.setLineDash([]);
+        const profile = (t) =>
+          taper === "start" ? Math.min(1, t * 2.5)
+          : taper === "end" ? Math.min(1, (1 - t) * 2.5)
+          : Math.pow(Math.sin(Math.PI * t), 0.65);
+        for (let i = 1; i < pts.length; i += 1) {
+          const t = (pts[i - 1].t + pts[i].t) / 2;
+          const lw = Math.max(0.35, strokeWidth * profile(t));
+          ctx.lineWidth = lw;
+          ctx.beginPath();
+          ctx.moveTo(pts[i - 1].x + ox, pts[i - 1].y + oy);
+          ctx.lineTo(pts[i].x + ox, pts[i].y + oy);
+          ctx.stroke();
+        }
+      }
+    } else {
+      ctx.stroke();
+    }
+  }
   const out = readCanvas(canvas);
   // 原点信息：图层应摆放在「路径坐标系原点」的什么位置才能还原文档坐标。
   // 工具层用 x + originX / y + originY 定位，路径坐标就能直接写文档坐标。
@@ -439,5 +543,56 @@ export function renderGlass({
   ctx.strokeStyle = `rgba(255,255,255,${(strength * 0.8).toFixed(3)})`;
   ctx.lineWidth = Math.max(2, Math.round(Math.min(w, h) * 0.004));
   ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth);
+  return readCanvas(canvas);
+}
+
+/**
+ * 沿路径涂抹（真「推颜色」语义，不是模糊）：
+ * 以笔刷圆为取样窗，沿点列逐小步把窗内颜色往前搬运 —— 与编辑器
+ * engine/smudge.ts 的双缓冲思路一致，这里是 doc 会话的批量版。
+ * points 是文档/图层局部坐标点列（两点即「由内向外拖一笔」）。
+ * 返回涂抹后的 {width,height,data}。
+ */
+export function smudgeAlongPath({ width, height, data, points, radius = 24, strength = 0.8 }) {
+  const W = Math.max(1, Math.ceil(width));
+  const H = Math.max(1, Math.ceil(height));
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(W, H);
+  img.data.set(data);
+  ctx.putImageData(img, 0, 0);
+  const pts = (points ?? []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length >= 2 && radius > 0 && strength > 0) {
+    const r = Math.max(2, radius);
+    const a = Math.max(0.05, Math.min(1, strength));
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    for (let i = 1; i < pts.length; i += 1) {
+      const x0 = pts[i - 1].x;
+      const y0 = pts[i - 1].y;
+      const x1 = pts[i].x;
+      const y1 = pts[i].y;
+      const seg = Math.hypot(x1 - x0, y1 - y0);
+      const steps = Math.max(1, Math.ceil(seg / Math.max(1, r * 0.2)));
+      let px = x0;
+      let py = y0;
+      for (let s = 1; s <= steps; s += 1) {
+        const t = s / steps;
+        const cx = x0 + (x1 - x0) * t;
+        const cy = y0 + (y1 - y0) * t;
+        // 当前窗 = 前一位置的圆，位移到当前点：把窗内颜色向前带
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalAlpha = a;
+        ctx.drawImage(canvas, cx - px, cy - py);
+        ctx.restore();
+        px = cx;
+        py = cy;
+      }
+    }
+    ctx.restore();
+  }
   return readCanvas(canvas);
 }

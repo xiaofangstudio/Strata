@@ -442,3 +442,70 @@ html[data-window-frost="on"] .start-foot {
   background: #fef2f2;
   border-color: #fecaca;
 }
+
+/* 崩溃恢复提示条：固定在顶栏上方，不挡保存 / 打开入口 */
+.recovery-banner {
+  position: fixed;
+  z-index: 140;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(880px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-edge, rgba(255, 255, 255, 0.22));
+  background: var(--glass-bg, rgba(28, 32, 44, 0.9));
+  box-shadow: var(--glass-shadow, 0 12px 34px rgba(0, 0, 0, 0.28));
+  color: var(--text, #e8ecf5);
+  font-size: 12px;
+}
+.recovery-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.recovery-banner__text span {
+  opacity: 0.78;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * 交互性能档。
+ * 拖动 / 滚动 / 绘画时 WebView2 每帧都要合成画布，十几块玻璃卡再各自做
+ * 28px backdrop-filter 会把 GPU 时间吃光，手感就是「点哪儿都糊一下」。
+ * 这里只在真正交互的 180ms 内关掉模糊与昂贵阴影，停手立刻恢复原观感。
+ */
+body.is-interacting .editor-top,
+body.is-interacting .toolrail,
+body.is-interacting .dock,
+body.is-interacting .dock-panel,
+body.is-interacting .statusbar,
+body.is-interacting .menubar,
+body.is-interacting .modal,
+body.is-interacting .popover,
+body.is-interacting .card,
+body.is-interacting .optbar-pop,
+body.is-interacting .menu-pop,
+body.is-tuning .editor-top,
+body.is-tuning .toolrail,
+body.is-tuning .dock,
+body.is-tuning .dock-panel,
+body.is-tuning .statusbar,
+body.is-tuning .menubar,
+body.is-tuning .modal,
+body.is-tuning .popover,
+body.is-tuning .card,
+body.is-tuning .optbar-pop,
+body.is-tuning .menu-pop {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+  animation: none !important;
+}

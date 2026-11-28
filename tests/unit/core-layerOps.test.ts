@@ -17,14 +17,18 @@ import {
   fillStrokeOpacity,
   groupChildren,
   groupLayers,
+  layerToSelection,
   mergeDown,
   moveLayer,
   removeLayer,
   reorderLayer,
+  replaceLayerMask,
+  replaceLayerSurface,
   resizeCanvas,
   resizeDocument,
   selectLayer,
   setBlend,
+  setFillOpacity,
   setOpacity,
   toggleClip,
   translateLayer,
@@ -170,6 +174,16 @@ describe("属性修改的引用语义", () => {
     expect(setOpacity(doc, id, 150).layers[0].opacity).toBe(100);
     expect(setOpacity(doc, id, 49.6).layers[0].opacity).toBe(50);
     expect(setOpacity(doc, id, 33).layers[0].opacity).toBe(33);
+  });
+
+  it("setFillOpacity 夹到 0–100、取整，并且不改整体不透明度", () => {
+    const doc = threeLayers();
+    const id = doc.layers[0].id;
+    const next = setFillOpacity(doc, id, -8);
+    expect(next.layers[0].fillOpacity).toBe(0);
+    expect(next.layers[0].opacity).toBe(doc.layers[0].opacity);
+    expect(setFillOpacity(doc, id, 240).layers[0].fillOpacity).toBe(100);
+    expect(setFillOpacity(doc, id, 42.7).layers[0].fillOpacity).toBe(43);
   });
 
   it("setBlend 写入混合模式", () => {
@@ -504,6 +518,30 @@ describe("图层组（M3）", () => {
   });
 });
 
+describe("图层缩略图载入选区（PS Ctrl+点击）", () => {
+  it("像素层返回一张与文档同尺寸的选区画布", () => {
+    const doc = blank(64, 48);
+    const mask = layerToSelection(doc, doc.layers[0].id);
+    expect(mask).not.toBeNull();
+    expect(mask!.width).toBe(64);
+    expect(mask!.height).toBe(48);
+    // 纯函数替身里像素读回恒为 0，但必须真的写回选区画布，不能只做空壳
+    expect(mask!.getContext("2d")!.calls).toContain("putImageData");
+  });
+
+  it("调整层 / 图层组没有像素，返回 null 而不是假选区", () => {
+    const withAdjust = addAdjustLayer(blank(), newAdjustState("bc"));
+    expect(layerToSelection(withAdjust, withAdjust.layers[1].id)).toBeNull();
+
+    const grouped = groupLayers(threeLayers(), "组 A");
+    expect(layerToSelection(grouped, grouped.layers[3].id)).toBeNull();
+  });
+
+  it("未命中的 id 返回 null", () => {
+    expect(layerToSelection(blank(), "no-such-id")).toBeNull();
+  });
+});
+
 describe("填充 / 描边不透明度与透明锁定", () => {
   it("数值字段钳到 1–100，0 与非法值都给出告警标记", () => {
     expect(fillStrokeOpacity(0)).toEqual({ value: 1, clamped: true });
@@ -527,5 +565,25 @@ describe("填充 / 描边不透明度与透明锁定", () => {
     const locked = fillSelection(lockedDoc, "#00ff00", 50);
     expect(locked).not.toBe(lockedDoc);
     expect(drawCalls(surfaceOf(locked, 0)).length).toBeGreaterThan(1);
+  });
+});
+
+describe("落库换引用（显示合成缓存时效）", () => {
+  it("换 surface / mask 都返回新文档，且不改原图层引用", () => {
+    const doc = docFromBlank(4, 4, "cache", "transparent") as StrataDoc;
+    const id = doc.layers[0].id;
+    const oldSurface = doc.layers[0].surface;
+    const nextSurface = document.createElement("canvas") as unknown as HTMLCanvasElement;
+    const nextMask = document.createElement("canvas") as unknown as HTMLCanvasElement;
+
+    const withSurface = replaceLayerSurface(doc, id, nextSurface);
+    expect(withSurface).not.toBe(doc);
+    expect(withSurface.layers[0].surface).toBe(nextSurface);
+    expect(doc.layers[0].surface).toBe(oldSurface);
+
+    const withMask = replaceLayerMask(doc, id, nextMask);
+    expect(withMask.layers[0].mask).toBe(nextMask);
+    expect(withMask.layers[0].maskActive).toBe(doc.layers[0].maskActive);
+    expect(doc.layers[0].mask).toBeNull();
   });
 });
